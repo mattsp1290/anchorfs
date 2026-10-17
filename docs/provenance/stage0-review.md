@@ -1,6 +1,6 @@
 # Stage 0 implementation and review record
 
-Status: local implementation verification, architecture recheck and both gauntlet review/fix stages passed; final checkpoint CI and repository-owner sign-off pending. This is procedural engineering evidence, not legal clearance or proof of erased historical exposure.
+Status: Stage 0 accepted by the repository owner. Local implementation verification, architecture recheck, both gauntlet review/fix stages and all five final-code checkpoint CI jobs passed. This is procedural engineering evidence, not legal clearance or proof of erased historical exposure.
 
 ## Inputs and origin
 
@@ -19,15 +19,15 @@ Every direct dependency and CI action is recorded in dependencies.md. The full l
 - Conformance declares the existing axum pin directly as a dev dependency for HTTP request/body test types, omitted from the plan's dependency list. Workspace crate edges remain exactly as planned.
 - The deadline test is a service middleware unit test with a test-only slow route. The 11 original router integration tests plus this unit test cover the 12 planned router scenarios without exposing a test route in production; two additional router tests cover root selection and authority headers.
 - Body-boundary integration tests exercise the production 4 MiB write cap, 4 MiB+1 replacement allowance and 256 MiB+1 rejection. Axum's implicit 2 MiB limit is disabled. Limits::default derives maximum file size with checked multiplication.
-- Timers U2 remain proposed defaults pending owner acceptance. TLS U1 and backend readiness deviations are explicit in contracts.md. No authentication or native storage operation is implemented in Stage 0.
+- The repository owner accepted the U2 timer defaults on 2026-10-17. TLS U1 and backend readiness deviations are explicit in contracts.md. No authentication or native storage operation is implemented in Stage 0.
 
 ## Verification evidence
 
-Work-package commits and final revision are available in branch history. The initial workspace commit ca294cb passed all five CI jobs: https://github.com/mattsp1290/anchorfs/actions/runs/39054969761 . The standard-review checkpoint 05bd5abd89c5f78566e4189e54429b68b86e74cb also passed all five jobs: https://github.com/mattsp1290/anchorfs/actions/runs/39056801910 . Final second-checkpoint CI is still required.
+Work-package commits and final revision are available in branch history. The initial workspace commit ca294cb passed all five CI jobs: https://github.com/mattsp1290/anchorfs/actions/runs/39054969761 . The standard-review checkpoint 05bd5abd89c5f78566e4189e54429b68b86e74cb also passed all five jobs: https://github.com/mattsp1290/anchorfs/actions/runs/39056801910 . The thermonuclear checkpoint bcb09dcdb72852a43b15b90828c2fa298513d965 passed all five final checkpoint jobs: https://github.com/mattsp1290/anchorfs/actions/runs/39057396357 .
 
 Local environment: Rust 1.95.0; macOS development host; Docker Engine 29.2.1. Tests create disposable containers using the official multi-platform image postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3. Testcontainers' module fsync-off default is explicitly disabled; unsafe-setting tests override it intentionally. No existing infrastructure data is touched. Docker Engine is a host runtime rather than a container image; no engine image digest is applicable.
 
-Observed work-package checks: core 7 tests; persistence 14 tests; backend/mount 9 macOS tests; service 2 middleware/policy + 6 binary + 5 OpenAPI tests; conformance 13 router + 3 design + 2 provenance tests. The full local workspace suite passed 61 tests, with fmt, clippy, build, cargo-deny, no-run compilation and Docker-free platform tests passing. Tests run on macOS; Linux/arm64 evidence must come from final CI. Linux runtime tests and arm64 builds are CI responsibilities, not inferred from macOS success.
+Observed work-package checks: core 7 tests; persistence 14 tests; backend/mount 9 macOS tests; service 2 middleware/policy + 6 binary + 5 OpenAPI tests; conformance 13 router + 3 design + 2 provenance tests. The full local workspace suite passed 61 tests, with fmt, clippy, build, cargo-deny, no-run compilation and Docker-free platform tests passing. Local tests ran on macOS; final GitHub CI independently passed Linux tests/lint/deny, native Linux arm64 build, and the macOS build/lint/no-run/Docker-free test job. No kernel FUSE or provider runtime acceptance is inferred.
 
 ## Fresh architecture review
 
@@ -51,4 +51,6 @@ All local applicable gates passed: fmt, full Clippy with warnings denied, build,
 
 ## Repository owner sign-off
 
-Pending — the owner must accept the final Stage 0 architecture record and timer defaults. This line cannot be supplied by an implementation agent. Stage 1 planning is gated until sign-off.
+Accepted on 2026-10-17 by the repository owner through the explicit response **“Approve architecture and timer defaults”** to the final sign-off question. The question identified docs/design/contracts.md, the completed two-stage gauntlet, all 61 passing local tests and all five green final-code CI jobs. This acceptance covers the Stage 0 architecture record and U2 timer defaults at reviewed/pushed code checkpoint bcb09dcdb72852a43b15b90828c2fa298513d965, including the documented later-stage limitations. It is separate from the earlier approval to apply reviewed fixes. The implementation agent records the owner's response; it does not substitute its own sign-off or claim legal clearance.
+
+The Stage 0 sign-off prerequisite for later Stage 1 planning is satisfied. No Stage 1 implementation or deployment is authorized or claimed by this record. Current revision and checks are available from branch history and the draft PR.

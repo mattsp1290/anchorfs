@@ -23,7 +23,7 @@ Values are bytes or counts, with file size 4 TiB derived from checked chunk_size
 
 ## Timers
 
-Seconds. U2 defaults are proposed for owner acceptance at the Stage 0 review. All future operational timers must be configurable; Stage 0 only exposes the service deadlines.
+Seconds. The repository owner accepted the U2 defaults on 2026-10-17 at the Stage 0 sign-off. All future operational timers must be configurable; Stage 0 only exposes the service deadlines.
 
 | name | value | source | status |
 |---|---|---|---|
