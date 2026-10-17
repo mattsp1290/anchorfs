@@ -17,3 +17,11 @@ The imported files' original `spec/` wording means `docs/spec/` in this reposito
 Only the implementation-safe specifications were imported. Competitor research, pasted post prose, infrastructure inventory and historical research-facing reviews remain outside this repository. A new behavioral question goes to the requirements author for an approved independent specification.
 
 Use the [local milestone selector](../.agents/skills/anchorfs-next-milestone/SKILL.md) and [local planning skill](../.agents/skills/anchorfs-implementation-plan/SKILL.md). [Setup review evidence](provenance/setup-review.md) records workflow adaptation and validation; it is not a claim that runtime behavior has been tested.
+
+## Implementation artifacts
+
+- [Native API contract](api/openapi-v1.yaml), generated from service route annotations.
+- [Persistent state ownership](design/persistent-state.md) and [frozen contracts](design/contracts.md).
+- [Dependency provenance](provenance/dependencies.md) and [Stage 0 review evidence](provenance/stage0-review.md).
+
+Stage 0 implements build, schema and service-contract verification. Native storage operations return 501; backend persistence and Linux mount behavior remain later-stage work.
