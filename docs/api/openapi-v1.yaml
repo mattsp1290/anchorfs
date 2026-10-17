@@ -1,0 +1,2583 @@
+openapi: 3.1.0
+info:
+  title: AnchorFS API
+  description: ''
+  license:
+    name: MIT
+    identifier: MIT
+  version: 1.0.0-stage0
+paths:
+  /v1/workspaces:
+    post:
+      operationId: createWorkspace
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspace'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}:
+    get:
+      operationId: getWorkspace
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/credentials:
+    post:
+      operationId: createCredential
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCredential'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/credentials/{credential_id}/rotate:
+    post:
+      operationId: rotateCredential
+      parameters:
+      - name: credential_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/credentials/{credential_id}:
+    delete:
+      operationId: revokeCredential
+      parameters:
+      - name: credential_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/sessions:
+    post:
+      operationId: createSession
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSession'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/sessions/{session_id}/renew:
+    post:
+      operationId: renewSession
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/sessions/{session_id}/rebind:
+    post:
+      operationId: rebindSession
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RebindSession'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/sessions/{session_id}:
+    delete:
+      operationId: revokeSession
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/stat:
+    get:
+      operationId: statPath
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/directory:
+    get:
+      operationId: listDirectory
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/directories:
+    post:
+      operationId: createDirectory
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDirectory'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+    delete:
+      operationId: removeDirectory
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/files:
+    put:
+      operationId: replaceFile
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: expected_generation
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: payload_too_large or file_too_large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+    delete:
+      operationId: unlink
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/links:
+    post:
+      operationId: createLink
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLink'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/symlinks:
+    get:
+      operationId: readSymlink
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+    post:
+      operationId: createSymlink
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSymlink'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/rename:
+    post:
+      operationId: rename
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Rename'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/attributes:
+    patch:
+      operationId: setAttributes
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetAttributes'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/handles:
+    post:
+      operationId: openHandle
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenHandle'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/handles/{handle_id}/renew:
+    post:
+      operationId: renewHandle
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/handles/{handle_id}:
+    delete:
+      operationId: closeHandle
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/handles/{handle_id}/truncate:
+    post:
+      operationId: truncate
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Truncate'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/handles/{handle_id}/fsync:
+    post:
+      operationId: fsync
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/handles/{handle_id}/bytes:
+    get:
+      operationId: readRange
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: offset
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: length
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: read_pin
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+    put:
+      operationId: writeAt
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: offset
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: payload_too_large or file_too_large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/handles/{handle_id}/append:
+    post:
+      operationId: append
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: payload_too_large or file_too_large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/read-pins:
+    post:
+      operationId: createReadPin
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PathBody'
+        required: true
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/read-pins/{read_pin_id}:
+    delete:
+      operationId: releaseReadPin
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: read_pin_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/operations/{operation_id}:
+    get:
+      operationId: getOperation
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: operation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/operations:
+    get:
+      operationId: findOperation
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: idempotency_key
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/workflow-lease:
+    post:
+      operationId: acquireWorkflowLease
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+    delete:
+      operationId: releaseWorkflowLease
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/workflow-lease/renew:
+    post:
+      operationId: renewWorkflowLease
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/workflow-lease/takeover:
+    post:
+      operationId: takeoverWorkflowLease
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+components:
+  schemas:
+    CreateCredential:
+      type: object
+      required:
+      - kind
+      - role
+      - uid
+      - gid
+      - max_reservation_bytes
+      properties:
+        workspace_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/CredentialKind'
+        role:
+          $ref: '#/components/schemas/CredentialRole'
+        uid:
+          type: integer
+          format: int32
+          minimum: 0
+        gid:
+          type: integer
+          format: int32
+          minimum: 0
+        expires_at:
+          type:
+          - string
+          - 'null'
+        max_reservation_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+    CreateDirectory:
+      type: object
+      required:
+      - path
+      - mode
+      properties:
+        path:
+          type: string
+        mode:
+          type: integer
+          format: int32
+          minimum: 0
+    CreateLink:
+      type: object
+      required:
+      - existing_path
+      - new_path
+      properties:
+        existing_path:
+          type: string
+        new_path:
+          type: string
+    CreateSession:
+      type: object
+      required:
+      - credential_id
+      properties:
+        credential_id:
+          type: string
+          format: uuid
+        bind_to_workflow_lease:
+          type:
+          - string
+          - 'null'
+    CreateSymlink:
+      type: object
+      required:
+      - path
+      - target
+      properties:
+        path:
+          type: string
+        target:
+          type: string
+    CreateWorkspace:
+      type: object
+      required:
+      - logical_bytes_limit
+      - logical_inodes_limit
+      - physical_bytes_limit
+      - staging_bytes_limit
+      properties:
+        logical_bytes_limit:
+          type: integer
+          format: int64
+          minimum: 0
+        logical_inodes_limit:
+          type: integer
+          format: int64
+          minimum: 0
+        physical_bytes_limit:
+          type: integer
+          format: int64
+          minimum: 0
+        staging_bytes_limit:
+          type: integer
+          format: int64
+          minimum: 0
+    CredentialKind:
+      type: string
+      enum:
+      - administrator
+      - host
+      - worker
+    CredentialRole:
+      type: string
+      enum:
+      - read
+      - write
+      - admin
+    DirectoryEntry:
+      type: object
+      required:
+      - name
+      - attributes
+      properties:
+        name:
+          type: string
+        attributes:
+          $ref: '#/components/schemas/InodeAttributes'
+    DirectoryPage:
+      type: object
+      required:
+      - entries
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/DirectoryEntry'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+    ErrorBody:
+      type: object
+      required:
+      - code
+      - message
+      - trace_id
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCodeDto'
+        message:
+          type: string
+        trace_id:
+          type: string
+        operation_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        retry_after_ms:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    ErrorCodeDto:
+      type: string
+      enum:
+      - invalid_input
+      - name_too_long
+      - unauthenticated
+      - forbidden
+      - not_found
+      - method_not_allowed
+      - exists
+      - generation_conflict
+      - idempotency_mismatch
+      - workspace_busy
+      - fenced
+      - operation_indeterminate
+      - not_directory
+      - is_directory
+      - directory_not_empty
+      - stale_handle
+      - payload_too_large
+      - file_too_large
+      - unsupported_media_type
+      - rate_limited
+      - quota_exceeded
+      - capacity_exhausted
+      - unsupported
+      - not_implemented
+      - dependency_unavailable
+      - outcome_unknown
+      - unsafe_database_settings
+      - schema_version_mismatch
+    InodeAttributes:
+      type: object
+      required:
+      - inode_id
+      - generation
+      - kind
+      - size
+      - mode
+      - uid
+      - gid
+      - nlink
+      - atime
+      - mtime
+      - ctime
+      properties:
+        inode_id:
+          type: integer
+          format: int64
+        generation:
+          type: integer
+          format: int64
+        kind:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        mode:
+          type: integer
+          format: int32
+          minimum: 0
+        uid:
+          type: integer
+          format: int32
+          minimum: 0
+        gid:
+          type: integer
+          format: int32
+          minimum: 0
+        nlink:
+          type: integer
+          format: int32
+          minimum: 0
+        atime:
+          type: string
+        mtime:
+          type: string
+        ctime:
+          type: string
+    OpenHandle:
+      type: object
+      required:
+      - path
+      - read
+      - write
+      - create
+      - exclusive
+      - truncate
+      - mode
+      properties:
+        path:
+          type: string
+        read:
+          type: boolean
+        write:
+          type: boolean
+        create:
+          type: boolean
+        exclusive:
+          type: boolean
+        truncate:
+          type: boolean
+        mode:
+          type: integer
+          format: int32
+          minimum: 0
+    OperationStatus:
+      type: object
+      required:
+      - operation_id
+      - state
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        state:
+          type: string
+        result: {}
+    PathBody:
+      type: object
+      required:
+      - path
+      properties:
+        path:
+          type: string
+    RebindSession:
+      type: object
+      properties:
+        workflow_lease_token:
+          type:
+          - string
+          - 'null'
+    Rename:
+      type: object
+      required:
+      - from
+      - to
+      properties:
+        from:
+          type: string
+        to:
+          type: string
+    SetAttributes:
+      type: object
+      required:
+      - path
+      properties:
+        path:
+          type: string
+        mode:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          minimum: 0
+        uid:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          minimum: 0
+        gid:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          minimum: 0
+    Truncate:
+      type: object
+      required:
+      - size
+      properties:
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+  securitySchemes:
+    credential:
+      type: http
+      scheme: bearer
+      description: administrator-issued opaque credential scoped to workspace and role
