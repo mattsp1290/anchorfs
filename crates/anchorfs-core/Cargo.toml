@@ -1,0 +1,17 @@
+[package]
+name = "anchorfs-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+time.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+rand.workspace = true

@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mattsp1290/anchorfs"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[workspace.dependencies]
+anchorfs-core = { path = "crates/anchorfs-core" }
+anchorfs-persistence = { path = "crates/anchorfs-persistence" }
+anchorfs-backend = { path = "crates/anchorfs-backend" }
+anchorfs-service = { path = "crates/anchorfs-service" }
+anchorfs-mount = { path = "crates/anchorfs-mount" }
+anchorfs-conformance = { path = "crates/anchorfs-conformance" }
+async-trait = { version = "=0.1.92" }
+aws-config = { version = "=1.12.0", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
+aws-sdk-s3 = { version = "=1.152.0", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
+axum = { version = "=0.8.9" }
+bytes = { version = "=1.12.1" }
+cargo_metadata = { version = "=0.23.1" }
+clap = { version = "=4.6.7", features = ["derive", "env"] }
+fuser = { version = "=0.18.0" }
+nix = { version = "=0.31.3", features = ["signal", "process"] }
+rand = { version = "=0.9.5" }
+reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154" }
+sha2 = { version = "=0.11.1" }
+sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "uuid", "time", "migrate", "macros", "derive"] }
+testcontainers-modules = { version = "=0.15.0", features = ["postgres"] }
+testcontainers = { version = "=0.27.3" }
+thiserror = { version = "=2.0.21" }
+time = { version = "=0.3.55", features = ["serde", "formatting", "parsing"] }
+tokio = { version = "=1.53.3", features = ["macros", "rt-multi-thread", "signal", "net", "time", "sync"] }
+toml = { version = "=1.1.8" }
+tower-http = { version = "=0.6.11", features = ["limit", "timeout", "trace"] }
+tower = { version = "=0.5.3", features = ["util"] }
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
+tracing = { version = "=0.1.44" }
+url = { version = "=2.5.8" }
+utoipa-axum = { version = "=0.3.0" }
+utoipa = { version = "=6.0.0", features = ["axum_extras", "uuid", "yaml", "preserve_order", "preserve_path_order"] }
+uuid = { version = "=1.28.0", features = ["v4", "serde"] }

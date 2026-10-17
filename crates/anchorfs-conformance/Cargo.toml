@@ -1,0 +1,23 @@
+[package]
+name = "anchorfs-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+anchorfs-core.workspace = true
+anchorfs-persistence.workspace = true
+anchorfs-service.workspace = true
+tower.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+testcontainers.workspace = true
+testcontainers-modules.workspace = true
+toml.workspace = true
+cargo_metadata.workspace = true
