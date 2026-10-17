@@ -24,6 +24,12 @@ paths:
               $ref: '#/components/schemas/CreateWorkspace'
         required: true
       responses:
+        '201':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedWorkspace'
         '400':
           description: invalid_input
           content:
@@ -38,6 +44,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -60,6 +72,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}:
@@ -73,6 +91,12 @@ paths:
           type: string
           format: uuid
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceInfo'
         '400':
           description: invalid_input
           content:
@@ -87,6 +111,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -122,6 +152,12 @@ paths:
               $ref: '#/components/schemas/CreateCredential'
         required: true
       responses:
+        '201':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedCredential'
         '400':
           description: invalid_input
           content:
@@ -140,6 +176,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
           content:
@@ -154,6 +196,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '503':
           description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
           content:
             application/json:
               schema:
@@ -177,6 +225,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedCredential'
         '400':
           description: invalid_input
           content:
@@ -195,6 +249,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
           content:
@@ -209,6 +269,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '503':
           description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
           content:
             application/json:
               schema:
@@ -232,6 +298,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -250,6 +322,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
           content:
@@ -264,6 +342,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '503':
           description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
           content:
             application/json:
               schema:
@@ -293,6 +377,12 @@ paths:
               $ref: '#/components/schemas/CreateSession'
         required: true
       responses:
+        '201':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionGrant'
         '400':
           description: invalid_input
           content:
@@ -307,6 +397,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -335,12 +431,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/sessions/{session_id}/renew:
     post:
       operationId: renewSession
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -360,6 +492,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionGrant'
         '400':
           description: invalid_input
           content:
@@ -374,6 +512,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -402,12 +546,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/sessions/{session_id}/rebind:
     post:
       operationId: rebindSession
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -433,6 +613,12 @@ paths:
               $ref: '#/components/schemas/RebindSession'
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionGrant'
         '400':
           description: invalid_input
           content:
@@ -447,6 +633,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -475,12 +667,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/sessions/{session_id}:
     delete:
       operationId: revokeSession
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -500,6 +728,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -514,6 +748,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -542,12 +782,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/stat:
     get:
       operationId: statPath
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -556,10 +832,17 @@ paths:
           format: uuid
       - name: path
         in: query
-        required: true
+        description: Omit for workspace root; supplied paths must be nonempty and relative
+        required: false
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InodeAttributes'
         '400':
           description: invalid_input
           content:
@@ -574,6 +857,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -596,6 +885,36 @@ paths:
     get:
       operationId: listDirectory
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -604,7 +923,8 @@ paths:
           format: uuid
       - name: path
         in: query
-        required: true
+        description: Omit for workspace root; supplied paths must be nonempty and relative
+        required: false
         schema:
           type: string
       - name: cursor
@@ -620,6 +940,12 @@ paths:
           format: int32
           minimum: 0
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DirectoryPage'
         '400':
           description: invalid_input
           content:
@@ -634,6 +960,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -656,6 +988,36 @@ paths:
     post:
       operationId: createDirectory
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -675,6 +1037,12 @@ paths:
               $ref: '#/components/schemas/CreateDirectory'
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -689,6 +1057,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -711,11 +1085,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
     delete:
       operationId: removeDirectory
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -734,6 +1144,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -748,6 +1164,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -770,12 +1192,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/files:
     put:
       operationId: replaceFile
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -806,6 +1264,12 @@ paths:
               type: string
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -820,6 +1284,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -854,11 +1324,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
     delete:
       operationId: unlink
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -877,6 +1383,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -891,6 +1403,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -913,12 +1431,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/links:
     post:
       operationId: createLink
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -938,6 +1492,12 @@ paths:
               $ref: '#/components/schemas/CreateLink'
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -952,6 +1512,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -974,12 +1540,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/symlinks:
     get:
       operationId: readSymlink
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -992,6 +1594,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SymlinkContents'
         '400':
           description: invalid_input
           content:
@@ -1006,6 +1614,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1027,6 +1641,36 @@ paths:
     post:
       operationId: createSymlink
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1046,6 +1690,12 @@ paths:
               $ref: '#/components/schemas/CreateSymlink'
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -1060,6 +1710,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1082,12 +1738,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/rename:
     post:
       operationId: rename
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1107,6 +1799,12 @@ paths:
               $ref: '#/components/schemas/Rename'
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -1121,6 +1819,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1143,12 +1847,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/attributes:
     patch:
       operationId: setAttributes
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1168,6 +1908,12 @@ paths:
               $ref: '#/components/schemas/SetAttributes'
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -1182,6 +1928,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1204,12 +1956,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/handles:
     post:
       operationId: openHandle
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1229,6 +2017,12 @@ paths:
               $ref: '#/components/schemas/OpenHandle'
         required: true
       responses:
+        '201':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandleGrant'
         '400':
           description: invalid_input
           content:
@@ -1243,6 +2037,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1267,6 +2067,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '503':
           description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
           content:
             application/json:
               schema:
@@ -1277,6 +2083,36 @@ paths:
     post:
       operationId: renewHandle
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1296,6 +2132,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HandleGrant'
         '400':
           description: invalid_input
           content:
@@ -1310,6 +2152,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1334,6 +2182,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '503':
           description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
           content:
             application/json:
               schema:
@@ -1344,6 +2198,36 @@ paths:
     delete:
       operationId: closeHandle
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1363,6 +2247,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -1377,6 +2267,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1405,12 +2301,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/handles/{handle_id}/truncate:
     post:
       operationId: truncate
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1436,6 +2368,12 @@ paths:
               $ref: '#/components/schemas/Truncate'
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -1450,6 +2388,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1478,12 +2422,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/handles/{handle_id}/fsync:
     post:
       operationId: fsync
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1503,6 +2483,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -1517,6 +2503,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1545,12 +2537,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/handles/{handle_id}/bytes:
     get:
       operationId: readRange
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1584,6 +2612,18 @@ paths:
           type: string
           format: uuid
       responses:
+        '200':
+          description: 'Future success: one pinned committed generation; Stage 0 returns 501'
+          headers:
+            X-Anchorfs-Generation:
+              schema:
+                type: integer
+                format: int64
+              description: Committed inode generation
+          content:
+            application/octet-stream:
+              schema:
+                $ref: '#/components/schemas/BinaryContent'
         '400':
           description: invalid_input
           content:
@@ -1598,6 +2638,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1625,6 +2671,36 @@ paths:
     put:
       operationId: writeAt
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1657,6 +2733,12 @@ paths:
               type: string
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WriteResult'
         '400':
           description: invalid_input
           content:
@@ -1671,6 +2753,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1705,12 +2793,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/handles/{handle_id}/append:
     post:
       operationId: append
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1736,6 +2860,12 @@ paths:
               type: string
         required: true
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WriteResult'
         '400':
           description: invalid_input
           content:
@@ -1750,6 +2880,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1784,12 +2920,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/read-pins:
     post:
       operationId: createReadPin
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1809,6 +2981,12 @@ paths:
               $ref: '#/components/schemas/PathBody'
         required: true
       responses:
+        '201':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadPinGrant'
         '400':
           description: invalid_input
           content:
@@ -1823,6 +3001,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1851,12 +3035,48 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
   /v1/workspaces/{workspace_id}/read-pins/{read_pin_id}:
     delete:
       operationId: releaseReadPin
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -1876,6 +3096,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -1890,6 +3116,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1914,6 +3146,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '503':
           description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
           content:
             application/json:
               schema:
@@ -1937,6 +3175,12 @@ paths:
           type: string
           format: uuid
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatus'
         '400':
           description: invalid_input
           content:
@@ -1951,6 +3195,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -1985,6 +3235,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatus'
         '400':
           description: invalid_input
           content:
@@ -1999,6 +3255,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -2021,6 +3283,36 @@ paths:
     post:
       operationId: acquireWorkflowLease
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -2034,6 +3326,12 @@ paths:
         schema:
           type: string
       responses:
+        '201':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowGrant'
         '400':
           description: invalid_input
           content:
@@ -2052,6 +3350,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
           content:
@@ -2066,6 +3370,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '503':
           description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
           content:
             application/json:
               schema:
@@ -2075,6 +3385,32 @@ paths:
     delete:
       operationId: releaseWorkflowLease
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: true
+        schema:
+          type: string
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -2088,6 +3424,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
         '400':
           description: invalid_input
           content:
@@ -2106,6 +3448,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
           content:
@@ -2120,6 +3468,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '503':
           description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
           content:
             application/json:
               schema:
@@ -2130,6 +3484,32 @@ paths:
     post:
       operationId: renewWorkflowLease
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: true
+        schema:
+          type: string
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -2143,6 +3523,12 @@ paths:
         schema:
           type: string
       responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowGrant'
         '400':
           description: invalid_input
           content:
@@ -2161,6 +3547,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
           content:
@@ -2175,6 +3567,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '503':
           description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
           content:
             application/json:
               schema:
@@ -2185,6 +3583,36 @@ paths:
     post:
       operationId: takeoverWorkflowLease
       parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
       - name: workspace_id
         in: path
         required: true
@@ -2198,6 +3626,12 @@ paths:
         schema:
           type: string
       responses:
+        '201':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowGrant'
         '400':
           description: invalid_input
           content:
@@ -2212,6 +3646,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '403':
           description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
           content:
             application/json:
               schema:
@@ -2234,10 +3674,116 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/admin-operations/{operation_id}:
+    get:
+      operationId: getAdminOperation
+      parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Future credential-scoped receipt, including expired tombstone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatus'
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/admin-operations:
+    get:
+      operationId: findAdminOperation
+      parameters:
+      - name: idempotency_key
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Future credential-scoped receipt, including expired tombstone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatus'
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
 components:
   schemas:
+    BinaryContent:
+      type: string
+      format: binary
     CreateCredential:
       type: object
       required:
@@ -2340,6 +3886,17 @@ components:
           type: integer
           format: int64
           minimum: 0
+    CreatedWorkspace:
+      type: object
+      required:
+      - operation_id
+      - workspace
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        workspace:
+          $ref: '#/components/schemas/WorkspaceInfo'
     CredentialKind:
       type: string
       enum:
@@ -2430,6 +3987,30 @@ components:
       - outcome_unknown
       - unsafe_database_settings
       - schema_version_mismatch
+    HandleGrant:
+      type: object
+      required:
+      - operation_id
+      - handle_id
+      - attributes
+      - access_read
+      - access_write
+      - expires_at
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        handle_id:
+          type: string
+          format: uuid
+        attributes:
+          $ref: '#/components/schemas/InodeAttributes'
+        access_read:
+          type: boolean
+        access_write:
+          type: boolean
+        expires_at:
+          type: string
     InodeAttributes:
       type: object
       required:
@@ -2479,6 +4060,48 @@ components:
           type: string
         ctime:
           type: string
+    IssuedCredential:
+      type: object
+      description: Secret is returned only on issue/rotation; never on inspection or in logs.
+      required:
+      - operation_id
+      - credential_id
+      - secret
+      - credential_epoch
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        credential_id:
+          type: string
+          format: uuid
+        secret:
+          type: string
+        credential_epoch:
+          type: integer
+          format: int64
+        expires_at:
+          type:
+          - string
+          - 'null'
+    MutationResult:
+      type: object
+      required:
+      - operation_id
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        inode_id:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        generation:
+          type:
+          - integer
+          - 'null'
+          format: int64
     OpenHandle:
       type: object
       required:
@@ -2525,6 +4148,34 @@ components:
       properties:
         path:
           type: string
+    ReadPinGrant:
+      type: object
+      required:
+      - operation_id
+      - read_pin_id
+      - manifest_id
+      - generation
+      - size
+      - expires_at
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        read_pin_id:
+          type: string
+          format: uuid
+        manifest_id:
+          type: string
+          format: uuid
+        generation:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        expires_at:
+          type: string
     RebindSession:
       type: object
       properties:
@@ -2542,13 +4193,42 @@ components:
           type: string
         to:
           type: string
-    SetAttributes:
+    SessionGrant:
       type: object
       required:
-      - path
+      - operation_id
+      - session_id
+      - session_epoch
+      - credential_epoch
+      - expires_at
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        session_epoch:
+          type: integer
+          format: int64
+        credential_epoch:
+          type: integer
+          format: int64
+        bound_mutation_epoch:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        expires_at:
+          type: string
+    SetAttributes:
+      type: object
       properties:
         path:
-          type: string
+          type:
+          - string
+          - 'null'
+          description: Omit to select the workspace root.
         mode:
           type:
           - integer
@@ -2567,12 +4247,82 @@ components:
           - 'null'
           format: int32
           minimum: 0
+    SymlinkContents:
+      type: object
+      required:
+      - target
+      - generation
+      properties:
+        target:
+          type: string
+        generation:
+          type: integer
+          format: int64
     Truncate:
       type: object
       required:
       - size
       properties:
         size:
+          type: integer
+          format: int64
+          minimum: 0
+    WorkflowGrant:
+      type: object
+      required:
+      - operation_id
+      - token
+      - mutation_epoch
+      - expires_at
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        token:
+          type: string
+        mutation_epoch:
+          type: integer
+          format: int64
+        expires_at:
+          type: string
+    WorkspaceInfo:
+      type: object
+      required:
+      - workspace_id
+      - root
+      - authorization_epoch
+      - mutation_epoch
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        root:
+          $ref: '#/components/schemas/InodeAttributes'
+        authorization_epoch:
+          type: integer
+          format: int64
+        mutation_epoch:
+          type: integer
+          format: int64
+    WriteResult:
+      type: object
+      required:
+      - operation_id
+      - generation
+      - bytes_written
+      - offset
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        generation:
+          type: integer
+          format: int64
+        bytes_written:
+          type: integer
+          format: int64
+          minimum: 0
+        offset:
           type: integer
           format: int64
           minimum: 0

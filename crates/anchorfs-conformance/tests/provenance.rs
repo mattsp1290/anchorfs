@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
+};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -8,12 +12,22 @@ fn root() -> PathBuf {
 fn dependency_record_matches_workspace() {
     let manifest: toml::Value =
         toml::from_str(&fs::read_to_string(root().join("Cargo.toml")).unwrap()).unwrap();
-    let declared: BTreeSet<_> = manifest["workspace"]["dependencies"]
+    let declared: BTreeMap<_, _> = manifest["workspace"]["dependencies"]
         .as_table()
         .unwrap()
         .iter()
         .filter(|(_, value)| value.get("path").is_none())
-        .map(|(name, _)| name.clone())
+        .map(|(name, value)| {
+            (
+                name.clone(),
+                value["version"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix('=')
+                    .expect("exact direct pin")
+                    .to_owned(),
+            )
+        })
         .collect();
     let document = fs::read_to_string(root().join("docs/provenance/dependencies.md")).unwrap();
     let section = document
@@ -23,13 +37,45 @@ fn dependency_record_matches_workspace() {
         .split("\n## ")
         .next()
         .unwrap();
-    let recorded: BTreeSet<_> = section
+    let rows: Vec<_> = section
         .lines()
         .filter(|line| line.starts_with("| "))
         .skip(1)
-        .map(|line| line.split('|').nth(1).unwrap().trim().to_owned())
+        .map(|line| {
+            let cells: Vec<_> = line.split('|').map(str::trim).collect();
+            (cells[1].to_owned(), cells[2].to_owned())
+        })
         .collect();
-    assert_eq!(declared, recorded);
+    let recorded: BTreeMap<_, _> = rows.iter().cloned().collect();
+    assert_eq!(
+        rows.len(),
+        recorded.len(),
+        "duplicate dependency provenance row"
+    );
+    let normalized: BTreeMap<_, _> = recorded
+        .iter()
+        .map(|(name, version)| {
+            // Cargo ignores build metadata in requirements; provenance retains the full resolved identity.
+            (name.clone(), version.split('+').next().unwrap().to_owned())
+        })
+        .collect();
+    assert_eq!(declared, normalized);
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .current_dir(root())
+        .other_options(vec!["--locked".into()])
+        .exec()
+        .unwrap();
+    for (name, version) in recorded {
+        assert!(
+            metadata
+                .packages
+                .iter()
+                .any(|package| package.name.as_str() == name
+                    && package.version.to_string() == version
+                    && package.source.is_some()),
+            "recorded {name} {version} missing from resolved registry graph"
+        );
+    }
 }
 
 #[test]

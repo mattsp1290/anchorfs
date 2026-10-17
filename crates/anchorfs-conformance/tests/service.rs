@@ -20,7 +20,14 @@ async fn call(
     let mut builder = Request::builder()
         .method(method)
         .uri(uri)
-        .header("content-type", content_type);
+        .header("content-type", content_type)
+        .header(
+            "X-Anchorfs-Session-Id",
+            "00000000-0000-4000-8000-000000000001",
+        )
+        .header("X-Anchorfs-Session-Epoch", "1")
+        .header("X-Anchorfs-Workflow-Token", "ab".repeat(32))
+        .header("X-Anchorfs-Workflow-Epoch", "1");
     if key {
         builder = builder.header("Idempotency-Key", "synthetic-key");
     }
@@ -268,7 +275,7 @@ async fn every_v1_route_returns_not_implemented() {
             count += 1;
         }
     }
-    assert_eq!(count, 36);
+    assert_eq!(count, 38);
 }
 #[tokio::test]
 async fn invalid_body_returns_400_not_501() {
@@ -320,26 +327,24 @@ async fn invalid_body_returns_400_not_501() {
 }
 #[tokio::test]
 async fn body_limits_exact() {
-    let mut state = common::unavailable();
-    let mut config = (*state.config).clone();
-    config.max_request_bytes = 32;
-    config.max_replace_bytes = 64;
-    state.config = Arc::new(config);
+    let state = common::unavailable();
+    let write = state.config.max_request_bytes;
+    let replace = state.config.max_replace_bytes;
     let app = build_router(state);
     let prefix = "/v1/workspaces/00000000-0000-4000-8000-000000000001";
     for (suffix, length, status) in [
         (
             "/handles/00000000-0000-4000-8000-000000000001/bytes?offset=0",
-            32,
+            write,
             501,
         ),
         (
             "/handles/00000000-0000-4000-8000-000000000001/bytes?offset=0",
-            33,
+            write + 1,
             413,
         ),
-        ("/files?path=file&expected_generation=1", 33, 501),
-        ("/files?path=file&expected_generation=1", 65, 413),
+        ("/files?path=file&expected_generation=1", write + 1, 501),
+        ("/files?path=file&expected_generation=1", replace + 1, 413),
     ] {
         let (s, v) = call(
             app.clone(),
@@ -367,4 +372,171 @@ async fn unknown_route_and_method() {
         assert_eq!(s, status);
         assert_eq!(v["code"], code);
     }
+}
+
+#[tokio::test]
+async fn root_selection_preserves_relative_path_rules() {
+    let app = build_router(common::unavailable());
+    let prefix = "/v1/workspaces/00000000-0000-4000-8000-000000000001";
+    for suffix in [
+        "/stat",
+        "/directory",
+        "/stat?path=file",
+        "/directory?path=dir",
+    ] {
+        assert_eq!(
+            call(
+                app.clone(),
+                "GET",
+                &format!("{prefix}{suffix}"),
+                vec![],
+                "",
+                true
+            )
+            .await
+            .0,
+            501
+        );
+    }
+    assert_eq!(
+        call(
+            app.clone(),
+            "PATCH",
+            &format!("{prefix}/attributes"),
+            br#"{"mode":493}"#.to_vec(),
+            "application/json",
+            true
+        )
+        .await
+        .0,
+        501
+    );
+    for path in ["", "%2F", "..", "a%2F..%2Fb", "%FF", "%ZZ"] {
+        let (status, v) = call(
+            app.clone(),
+            "GET",
+            &format!("{prefix}/stat?path={path}"),
+            vec![],
+            "",
+            true,
+        )
+        .await;
+        assert_eq!(status, 400);
+        assert_eq!(v["code"], "invalid_input");
+    }
+}
+#[tokio::test]
+async fn session_and_workflow_wire_bindings_are_validated() {
+    let app = build_router(common::unavailable());
+    let doc: Value = serde_json::from_str(&api_doc::document().to_json().unwrap()).unwrap();
+    let mut covered = 0;
+    for (path, methods) in doc["paths"].as_object().unwrap() {
+        for (method, op) in methods.as_object().unwrap() {
+            let parameters = op["parameters"].as_array();
+            if !parameters.is_some_and(|ps| ps.iter().any(|p| p["name"] == "X-Anchorfs-Session-Id"))
+            {
+                continue;
+            }
+            covered += 1;
+            let id = op["operationId"].as_str().unwrap();
+            let binary = op["requestBody"]["content"]
+                .get("application/octet-stream")
+                .is_some();
+            let body = if binary {
+                vec![0]
+            } else if op.get("requestBody").is_some() {
+                serde_json::to_vec(&fixture(id)).unwrap()
+            } else {
+                vec![]
+            };
+            for (session, epoch, token, workflow_epoch) in [
+                (None, Some("1"), Some("ab".repeat(32)), Some("1")),
+                (Some("bad-id"), Some("1"), None, None),
+                (
+                    Some("00000000-0000-4000-8000-000000000001"),
+                    None,
+                    None,
+                    None,
+                ),
+                (
+                    Some("00000000-0000-4000-8000-000000000001"),
+                    Some("0"),
+                    None,
+                    None,
+                ),
+                (
+                    Some("00000000-0000-4000-8000-000000000001"),
+                    Some("1"),
+                    Some("bad-token".into()),
+                    Some("1"),
+                ),
+            ] {
+                let mut req = Request::builder()
+                    .method(method.to_uppercase().as_str())
+                    .uri(uri(path, op))
+                    .header("Idempotency-Key", "wire-test")
+                    .header(
+                        "content-type",
+                        if binary {
+                            "application/octet-stream"
+                        } else {
+                            "application/json"
+                        },
+                    );
+                if let Some(v) = session {
+                    req = req.header("X-Anchorfs-Session-Id", v);
+                }
+                if let Some(v) = epoch {
+                    req = req.header("X-Anchorfs-Session-Epoch", v);
+                }
+                if let Some(v) = token {
+                    req = req.header("X-Anchorfs-Workflow-Token", v);
+                }
+                if let Some(v) = workflow_epoch {
+                    req = req.header("X-Anchorfs-Workflow-Epoch", v);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(req.body(Body::from(body.clone())).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), 400, "{id}");
+                let value: Value =
+                    serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
+                        .unwrap();
+                assert_eq!(value["code"], "invalid_input");
+            }
+            // Ordinary session authority needs no workflow proof; renew/release specifically require one.
+            let request = Request::builder()
+                .method(method.to_uppercase().as_str())
+                .uri(uri(path, op))
+                .header("Idempotency-Key", "wire-test")
+                .header(
+                    "X-Anchorfs-Session-Id",
+                    "00000000-0000-4000-8000-000000000001",
+                )
+                .header("X-Anchorfs-Session-Epoch", "1")
+                .header(
+                    "content-type",
+                    if binary {
+                        "application/octet-stream"
+                    } else {
+                        "application/json"
+                    },
+                )
+                .body(Body::from(body))
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(
+                response.status(),
+                if ["renewWorkflowLease", "releaseWorkflowLease"].contains(&id) {
+                    400
+                } else {
+                    501
+                },
+                "{id}"
+            );
+        }
+    }
+    assert_eq!(covered, 28);
 }

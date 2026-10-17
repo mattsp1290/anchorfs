@@ -55,6 +55,8 @@ pub const REQUIRED_OPERATIONS: &[&str] = &[
     "setAttributes",
     "getOperation",
     "findOperation",
+    "getAdminOperation",
+    "findAdminOperation",
     "acquireWorkflowLease",
     "renewWorkflowLease",
     "releaseWorkflowLease",

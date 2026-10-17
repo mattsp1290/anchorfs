@@ -8,12 +8,13 @@ CREATE TABLE credentials (
 );
 CREATE FUNCTION check_credentials_issuer_scope() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+ -- Identity/scope never transfers. This removes the MVCC race between issuer rescoping
+ -- and child issuance without depending on snapshot reads to enforce the relationship.
+ IF TG_OP='UPDATE' AND (NEW.id IS DISTINCT FROM OLD.id OR NEW.kind IS DISTINCT FROM OLD.kind OR NEW.workspace_id IS DISTINCT FROM OLD.workspace_id OR NEW.issued_by_credential_id IS DISTINCT FROM OLD.issued_by_credential_id) THEN
+ RAISE EXCEPTION 'credential identity, scope and issuer are immutable' USING ERRCODE='23514', CONSTRAINT='credentials_identity_immutable';
+ END IF;
  IF EXISTS (SELECT 1 FROM credentials WHERE id=NEW.issued_by_credential_id AND workspace_id IS NOT NULL AND workspace_id IS DISTINCT FROM NEW.workspace_id) THEN
  RAISE EXCEPTION 'issuer belongs to another workspace' USING ERRCODE='23514', CONSTRAINT='credentials_issuer_scope';
- END IF;
- -- Also prevent an issuer workspace change from invalidating existing issued credentials.
- IF TG_OP='UPDATE' AND NEW.workspace_id IS NOT NULL AND EXISTS (SELECT 1 FROM credentials WHERE issued_by_credential_id=NEW.id AND workspace_id IS DISTINCT FROM NEW.workspace_id) THEN
- RAISE EXCEPTION 'issuer workspace conflicts with issued credentials' USING ERRCODE='23514', CONSTRAINT='credentials_issuer_scope';
  END IF;
  RETURN NEW;
 END $$;

@@ -192,7 +192,8 @@ pub struct Rename {
 }
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetAttributes {
-    pub path: String,
+    /// Omit to select the workspace root.
+    pub path: Option<String>,
     pub mode: Option<u32>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
@@ -204,7 +205,7 @@ pub struct PathQuery {
 }
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
-    pub path: String,
+    pub path: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
@@ -227,3 +228,96 @@ pub struct ReplaceQuery {
 pub struct OperationQuery {
     pub idempotency_key: String,
 }
+
+/// Absent path selects the workspace root. A supplied path must remain nonempty and relative.
+#[derive(Debug, Deserialize)]
+pub struct LookupQuery {
+    pub path: Option<String>,
+}
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct WorkspaceInfo {
+    pub workspace_id: Uuid,
+    pub root: InodeAttributes,
+    pub authorization_epoch: i64,
+    pub mutation_epoch: i64,
+}
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CreatedWorkspace {
+    pub operation_id: Uuid,
+    pub workspace: WorkspaceInfo,
+}
+/// Secret is returned only on issue/rotation; never on inspection or in logs.
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct IssuedCredential {
+    pub operation_id: Uuid,
+    pub credential_id: Uuid,
+    pub secret: String,
+    pub credential_epoch: i64,
+    pub expires_at: Option<String>,
+}
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SessionGrant {
+    pub operation_id: Uuid,
+    pub session_id: Uuid,
+    pub session_epoch: i64,
+    pub credential_epoch: i64,
+    pub bound_mutation_epoch: Option<i64>,
+    pub expires_at: String,
+}
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct HandleGrant {
+    pub operation_id: Uuid,
+    pub handle_id: Uuid,
+    pub attributes: InodeAttributes,
+    pub access_read: bool,
+    pub access_write: bool,
+    pub expires_at: String,
+}
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ReadPinGrant {
+    pub operation_id: Uuid,
+    pub read_pin_id: Uuid,
+    pub manifest_id: Uuid,
+    pub generation: i64,
+    pub size: u64,
+    pub expires_at: String,
+}
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct WorkflowGrant {
+    pub operation_id: Uuid,
+    pub token: String,
+    pub mutation_epoch: i64,
+    pub expires_at: String,
+}
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct MutationResult {
+    pub operation_id: Uuid,
+    pub inode_id: Option<i64>,
+    pub generation: Option<i64>,
+}
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct WriteResult {
+    pub operation_id: Uuid,
+    pub generation: i64,
+    pub bytes_written: u64,
+    pub offset: u64,
+}
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SymlinkContents {
+    pub target: String,
+    pub generation: i64,
+}
+
+/// Raw bytes on the wire, rather than a JSON array of integers.
+pub struct BinaryContent;
+impl utoipa::PartialSchema for BinaryContent {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{KnownFormat, ObjectBuilder, SchemaFormat, Type};
+        ObjectBuilder::new()
+            .schema_type(Type::String)
+            .format(Some(SchemaFormat::KnownFormat(KnownFormat::Binary)))
+            .build()
+            .into()
+    }
+}
+impl ToSchema for BinaryContent {}

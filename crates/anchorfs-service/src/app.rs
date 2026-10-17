@@ -170,6 +170,16 @@ pub fn contract_router(config: &Config) -> utoipa_axum::router::OpenApiRouter<Ap
             tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
         ),
     );
+    router = router.routes(
+        utoipa_axum::routes!(crate::v1::operations::get_admin_operation).layer(
+            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
+        ),
+    );
+    router = router.routes(
+        utoipa_axum::routes!(crate::v1::operations::find_admin_operation).layer(
+            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
+        ),
+    );
     router
 }
 pub fn build_router(state: AppState) -> Router {

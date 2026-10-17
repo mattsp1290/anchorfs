@@ -21,7 +21,8 @@ impl Default for Limits {
             max_api_write: 4194304,
             max_replace_bytes: 268435456,
             max_chunks_per_file: 1048576,
-            max_file_size: 4398046511104,
+            max_file_size: checked_file_size(4194304, 1048576)
+                .expect("default chunk capacity fits bigint"),
             max_name_bytes: 255,
             max_path_bytes: 4096,
             max_list_page: 1000,

@@ -340,7 +340,7 @@ async fn constraints_enforced() {
             "manifest_chunks_logical_length_check",
         ),
         (
-            "UPDATE credentials SET workspace_id=NULL WHERE kind='host'",
+            "INSERT INTO credentials(id,kind,role,uid,gid,secret_hash,max_reservation_bytes,created_at) VALUES(gen_random_uuid(),'host','write',1000,1000,decode(repeat('ab',32),'hex'),4096,now())",
             "23514",
             "credentials_scope_check",
         ),
@@ -356,9 +356,9 @@ async fn constraints_enforced() {
             name,
         );
     }
-    let error = sqlx::query("UPDATE credentials SET issued_by_credential_id=$1 WHERE id=$2")
+    let error = sqlx::query("INSERT INTO credentials(id,workspace_id,kind,role,issued_by_credential_id,uid,gid,secret_hash,max_reservation_bytes,created_at) VALUES(gen_random_uuid(),$2,'worker','write',$1,1000,1000,decode(repeat('ab',32),'hex'),4096,now())")
         .bind(other.host)
-        .bind(f.worker)
+        .bind(f.workspace)
         .execute(&db.pool)
         .await
         .unwrap_err();
@@ -487,4 +487,63 @@ async fn database_newer_detected() {
     assert!(!migrate::database_is_newer(&db.pool).await.unwrap());
     sqlx::query("INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES (9999,'synthetic future',true,decode('aa','hex'),0)").execute(&db.pool).await.unwrap();
     assert!(migrate::database_is_newer(&db.pool).await.unwrap());
+}
+
+#[tokio::test]
+async fn credential_scope_cannot_transfer_during_worker_issuance() {
+    let db = Database::migrated().await;
+    let a = fixture(&db.pool).await;
+    let b = fixture(&db.pool).await;
+    let issuer: Uuid =
+        sqlx::query_scalar("SELECT issued_by_credential_id FROM credentials WHERE id=$1")
+            .bind(a.host)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    let mut transfer = db.pool.begin().await.unwrap();
+    // Reproduce the two-connection schedule: the issuer's UPDATE remains in flight while
+    // a child is issued in another workspace. The transfer must fail before either can commit.
+    let error =
+        sqlx::query("UPDATE credentials SET kind='host',workspace_id=$2,role='write' WHERE id=$1")
+            .bind(issuer)
+            .bind(a.workspace)
+            .execute(&mut *transfer)
+            .await
+            .unwrap_err();
+    assert_db(error, "23514", "credentials_identity_immutable");
+    let mut issuance = db.pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO credentials(id,workspace_id,kind,role,issued_by_credential_id,uid,gid,secret_hash,max_reservation_bytes,created_at) VALUES($1,$2,'worker','write',$3,1000,1000,decode(repeat('ab',32),'hex'),4096,now())").bind(Uuid::new_v4()).bind(b.workspace).bind(issuer).execute(&mut *issuance).await.unwrap();
+    issuance.commit().await.unwrap();
+    transfer.rollback().await.unwrap();
+    let invalid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM credentials child JOIN credentials issuer ON issuer.id=child.issued_by_credential_id WHERE issuer.workspace_id IS NOT NULL AND child.workspace_id IS DISTINCT FROM issuer.workspace_id)").fetch_one(&db.pool).await.unwrap();
+    assert!(!invalid);
+}
+
+#[tokio::test]
+async fn expired_receipts_retain_identity_and_referenced_state() {
+    let db = Database::migrated().await;
+    let f = fixture(&db.pool).await;
+    let mut tx = db.pool.begin().await.unwrap();
+    // Structural demonstration of conceptual receipt_expire, not a production expiry worker.
+    sqlx::query("UPDATE operations SET expires_at=now()-interval '1 second',state='indeterminate',result=NULL WHERE workspace_id=$1").bind(f.workspace).execute(&mut *tx).await.unwrap();
+    sqlx::query("UPDATE admin_operations SET expires_at=now()-interval '1 second',state='indeterminate',result=NULL").execute(&mut *tx).await.unwrap();
+    sqlx::query(
+        "UPDATE client_sessions SET revoked_at=now(),session_epoch=session_epoch+1 WHERE id=$1",
+    )
+    .bind(f.session)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let retained:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inodes i JOIN manifests m ON (m.workspace_id,m.id)=(i.workspace_id,i.current_manifest_id) JOIN operations o ON (o.workspace_id,o.id)=(m.workspace_id,m.created_by_operation_id) JOIN upload_reservations r ON (r.workspace_id,r.operation_id)=(o.workspace_id,o.id) JOIN objects b ON (b.workspace_id,b.reservation_id)=(r.workspace_id,r.id) WHERE i.workspace_id=$1 AND o.state='indeterminate' AND o.result IS NULL)").bind(f.workspace).fetch_one(&db.pool).await.unwrap();
+    assert!(retained);
+    assert_db(sqlx::query("INSERT INTO operations SELECT workspace_id,$2,credential_id,client_session_id,session_epoch,credential_epoch_at_start,authorization_epoch_at_start,mutation_epoch_at_start,owner_token,heartbeat_at,idempotency_key,op_type,request_digest,state,result,created_at,committed_at,expires_at FROM operations WHERE workspace_id=$1").bind(f.workspace).bind(Uuid::new_v4()).execute(&db.pool).await.unwrap_err(),"23505","operations_receipt_key");
+    let admin_key: Option<String> = sqlx::query_scalar(
+        "SELECT idempotency_key FROM admin_operations WHERE state='indeterminate' LIMIT 1",
+    )
+    .fetch_optional(&db.pool)
+    .await
+    .unwrap();
+    assert!(admin_key.is_some());
+    assert_db(sqlx::query("INSERT INTO admin_operations SELECT $1,credential_id,credential_epoch_at_start,idempotency_key,op_type,request_digest,owner_token,heartbeat_at,state,result,created_at,committed_at,expires_at FROM admin_operations LIMIT 1").bind(Uuid::new_v4()).execute(&db.pool).await.unwrap_err(),"23505","admin_operations_credential_id_idempotency_key_key");
 }
