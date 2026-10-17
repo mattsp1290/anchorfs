@@ -1,190 +1,108 @@
 use crate::{config::Config, error::ApiError};
 use axum::{Router, extract::DefaultBodyLimit, middleware, response::IntoResponse};
-use std::sync::Arc;
-use utoipa_axum::router::UtoipaMethodRouterExt;
+use std::{sync::Arc, time::Duration};
+use utoipa_axum::router::OpenApiRouter;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: anchorfs_persistence::pool::PgPool,
     pub config: Arc<Config>,
 }
-/// Register each handler and its documentation together.
-pub fn contract_router(config: &Config) -> utoipa_axum::router::OpenApiRouter<AppState> {
-    let mut router = utoipa_axum::router::OpenApiRouter::new();
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::workspaces::create_workspace).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::workspaces::get_workspace).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::credentials::create_credential).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::credentials::rotate_credential).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::credentials::revoke_credential).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::sessions::create_session).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::sessions::renew_session).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::sessions::rebind_session).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::sessions::revoke_session).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(utoipa_axum::routes!(crate::v1::namespace::stat_path).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-    ));
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::namespace::list_directory).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::namespace::create_directory).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::namespace::remove_directory).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(utoipa_axum::routes!(crate::v1::namespace::unlink).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-    ));
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::namespace::create_link).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::namespace::create_symlink).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::namespace::read_symlink).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(utoipa_axum::routes!(crate::v1::namespace::rename).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-    ));
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::namespace::set_attributes).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(utoipa_axum::routes!(crate::v1::handles::open_handle).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-    ));
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::handles::renew_handle).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::handles::close_handle).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(utoipa_axum::routes!(crate::v1::handles::truncate).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-    ));
-    router = router.routes(utoipa_axum::routes!(crate::v1::handles::fsync).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-    ));
-    router = router.routes(utoipa_axum::routes!(crate::v1::bytes::read_range).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-    ));
-    router = router.routes(utoipa_axum::routes!(crate::v1::bytes::write_at).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-    ));
-    router = router.routes(utoipa_axum::routes!(crate::v1::bytes::append).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-    ));
-    router = router.routes(utoipa_axum::routes!(crate::v1::bytes::replace_file).layer(
-        tower_http::limit::RequestBodyLimitLayer::new(config.max_replace_bytes),
-    ));
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::pins::create_read_pin).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::pins::release_read_pin).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::operations::get_operation).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::operations::find_operation).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::workflows::acquire_workflow_lease).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::workflows::renew_workflow_lease).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::workflows::release_workflow_lease).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::workflows::takeover_workflow_lease).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::operations::get_admin_operation).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
-    router = router.routes(
-        utoipa_axum::routes!(crate::v1::operations::find_admin_operation).layer(
-            tower_http::limit::RequestBodyLimitLayer::new(config.max_request_bytes),
-        ),
-    );
+
+/// Policies belong to the route groups, independently of URL spelling or handler order.
+fn with_policy(
+    router: OpenApiRouter<AppState>,
+    limit: usize,
+    deadline: Duration,
+) -> OpenApiRouter<AppState> {
+    #[cfg(test)]
+    let router = router.layer(middleware::from_fn(tests::delay_request));
     router
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(limit))
+        .layer(middleware::from_fn_with_state(
+            deadline,
+            crate::middleware::deadline,
+        ))
+}
+
+/// Register each handler and its document together, applying each shared policy once.
+pub fn contract_router(config: &Config) -> OpenApiRouter<AppState> {
+    let metadata = OpenApiRouter::new()
+        .routes(utoipa_axum::routes!(
+            crate::v1::workspaces::create_workspace
+        ))
+        .routes(utoipa_axum::routes!(crate::v1::workspaces::get_workspace))
+        .routes(utoipa_axum::routes!(
+            crate::v1::credentials::create_credential
+        ))
+        .routes(utoipa_axum::routes!(
+            crate::v1::credentials::rotate_credential
+        ))
+        .routes(utoipa_axum::routes!(
+            crate::v1::credentials::revoke_credential
+        ))
+        .routes(utoipa_axum::routes!(crate::v1::sessions::create_session))
+        .routes(utoipa_axum::routes!(crate::v1::sessions::renew_session))
+        .routes(utoipa_axum::routes!(crate::v1::sessions::rebind_session))
+        .routes(utoipa_axum::routes!(crate::v1::sessions::revoke_session))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::stat_path))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::list_directory))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::create_directory))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::remove_directory))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::create_link))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::create_symlink))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::read_symlink))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::rename))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::set_attributes))
+        .routes(utoipa_axum::routes!(crate::v1::handles::open_handle))
+        .routes(utoipa_axum::routes!(crate::v1::handles::renew_handle))
+        .routes(utoipa_axum::routes!(crate::v1::handles::close_handle))
+        .routes(utoipa_axum::routes!(crate::v1::handles::truncate))
+        .routes(utoipa_axum::routes!(crate::v1::handles::fsync))
+        .routes(utoipa_axum::routes!(crate::v1::pins::create_read_pin))
+        .routes(utoipa_axum::routes!(crate::v1::pins::release_read_pin))
+        .routes(utoipa_axum::routes!(crate::v1::operations::get_operation))
+        .routes(utoipa_axum::routes!(crate::v1::operations::find_operation))
+        .routes(utoipa_axum::routes!(
+            crate::v1::workflows::acquire_workflow_lease
+        ))
+        .routes(utoipa_axum::routes!(
+            crate::v1::workflows::renew_workflow_lease
+        ))
+        .routes(utoipa_axum::routes!(
+            crate::v1::workflows::release_workflow_lease
+        ))
+        .routes(utoipa_axum::routes!(
+            crate::v1::workflows::takeover_workflow_lease
+        ))
+        .routes(utoipa_axum::routes!(
+            crate::v1::operations::get_admin_operation
+        ))
+        .routes(utoipa_axum::routes!(
+            crate::v1::operations::find_admin_operation
+        ));
+    let metadata = with_policy(
+        metadata,
+        config.max_request_bytes,
+        config.metadata_call_deadline,
+    );
+    let data = OpenApiRouter::new()
+        .routes(utoipa_axum::routes!(crate::v1::namespace::unlink))
+        .routes(utoipa_axum::routes!(crate::v1::bytes::read_range))
+        .routes(utoipa_axum::routes!(crate::v1::bytes::write_at))
+        .routes(utoipa_axum::routes!(crate::v1::bytes::append));
+    let data = with_policy(data, config.max_request_bytes, config.data_call_deadline);
+    let replacement =
+        OpenApiRouter::new().routes(utoipa_axum::routes!(crate::v1::bytes::replace_file));
+    let replacement = with_policy(
+        replacement,
+        config.max_replace_bytes,
+        config.data_call_deadline,
+    );
+    metadata.merge(data).merge(replacement)
 }
 pub fn build_router(state: AppState) -> Router {
     let (router, _) = contract_router(&state.config).split_for_parts();
-    router
+    let auxiliary = Router::new()
         .route("/healthz", axum::routing::get(crate::health::healthz))
         .route("/readyz", axum::routing::get(crate::health::readyz))
         .route(
@@ -202,6 +120,12 @@ pub fn build_router(state: AppState) -> Router {
                 )
             }),
         )
+        .layer(middleware::from_fn_with_state(
+            state.config.metadata_call_deadline,
+            crate::middleware::deadline,
+        ));
+    router
+        .merge(auxiliary)
         .fallback(
             |axum::Extension(trace): axum::Extension<crate::middleware::TraceId>| async move {
                 ApiError::new(anchorfs_core::ErrorCode::NotFound, trace.0).into_response()
@@ -213,9 +137,107 @@ pub fn build_router(state: AppState) -> Router {
             },
         )
         .layer(DefaultBodyLimit::disable())
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::middleware::request,
-        ))
+        .layer(middleware::from_fn(crate::middleware::request))
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        extract::Request,
+        http::StatusCode,
+        middleware::Next,
+        response::Response,
+    };
+    use tower::ServiceExt;
+    // Test-only delay inside each real policy group; no production header or route is added.
+    pub(super) async fn delay_request(req: Request, next: Next) -> Response {
+        if req.headers().contains_key("X-Anchorfs-Test-Delay") {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+        }
+        next.run(req).await
+    }
+    #[tokio::test]
+    async fn deadline_policy_groups_include_shared_file_methods() {
+        let id = "00000000-0000-4000-8000-000000000001";
+        for (metadata, data) in [(10, 1000), (1000, 10)] {
+            let mut config = Config::contract_defaults();
+            config.metadata_call_deadline = Duration::from_millis(metadata);
+            config.data_call_deadline = Duration::from_millis(data);
+            let state = AppState {
+                pool: anchorfs_persistence::pool::PgPool::connect_lazy(
+                    "postgres://unused:unused@127.0.0.1:1/unused",
+                )
+                .unwrap(),
+                config: config.shared(),
+            };
+            let app = build_router(state);
+            for (method, path, is_data) in [
+                ("GET", format!("/v1/workspaces/{id}"), false),
+                (
+                    "PUT",
+                    format!("/v1/workspaces/{id}/handles/{id}/bytes?offset=0"),
+                    true,
+                ),
+                (
+                    "POST",
+                    format!("/v1/workspaces/{id}/handles/{id}/append"),
+                    true,
+                ),
+                (
+                    "PUT",
+                    format!("/v1/workspaces/{id}/files?path=file&expected_generation=1"),
+                    true,
+                ),
+                (
+                    "DELETE",
+                    format!("/v1/workspaces/{id}/files?path=file"),
+                    true,
+                ),
+            ] {
+                let request = Request::builder()
+                    .method(method)
+                    .uri(path.clone())
+                    .header("X-Anchorfs-Test-Delay", "true")
+                    .header("Idempotency-Key", "deadline-test")
+                    .header("X-Anchorfs-Session-Id", id)
+                    .header("X-Anchorfs-Session-Epoch", "1")
+                    .header("content-type", "application/octet-stream")
+                    .body(Body::from(vec![0]))
+                    .unwrap();
+                let response = app.clone().oneshot(request).await.unwrap();
+                let short = if is_data { data } else { metadata } < 60;
+                assert_eq!(
+                    response.status(),
+                    if short {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        StatusCode::NOT_IMPLEMENTED
+                    },
+                    "{method} {path}"
+                );
+                let trace = response.headers()["X-Anchorfs-Trace-Id"]
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                let error: serde_json::Value =
+                    serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
+                        .unwrap();
+                assert_eq!(error["trace_id"], trace);
+                assert_eq!(
+                    error["code"],
+                    if short {
+                        "dependency_unavailable"
+                    } else {
+                        "not_implemented"
+                    }
+                );
+                if short {
+                    assert_eq!(error["retry_after_ms"], 100);
+                }
+            }
+        }
+    }
 }

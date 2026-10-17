@@ -1,6 +1,6 @@
 # Stage 0 implementation and review record
 
-Status: local implementation verification and architecture recheck passed; review gauntlet and repository-owner sign-off pending. This is procedural engineering evidence, not legal clearance or proof of erased historical exposure.
+Status: local implementation verification, architecture recheck and both gauntlet review/fix stages passed; final checkpoint CI and repository-owner sign-off pending. This is procedural engineering evidence, not legal clearance or proof of erased historical exposure.
 
 ## Inputs and origin
 
@@ -23,21 +23,31 @@ Every direct dependency and CI action is recorded in dependencies.md. The full l
 
 ## Verification evidence
 
-Work-package commits and final revision are available in branch history. The initial workspace commit ca294cb passed all five CI jobs: https://github.com/mattsp1290/anchorfs/actions/runs/39054969761 . Final implementation CI is still required.
+Work-package commits and final revision are available in branch history. The initial workspace commit ca294cb passed all five CI jobs: https://github.com/mattsp1290/anchorfs/actions/runs/39054969761 . The standard-review checkpoint 05bd5abd89c5f78566e4189e54429b68b86e74cb also passed all five jobs: https://github.com/mattsp1290/anchorfs/actions/runs/39056801910 . Final second-checkpoint CI is still required.
 
 Local environment: Rust 1.95.0; macOS development host; Docker Engine 29.2.1. Tests create disposable containers using the official multi-platform image postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3. Testcontainers' module fsync-off default is explicitly disabled; unsafe-setting tests override it intentionally. No existing infrastructure data is touched. Docker Engine is a host runtime rather than a container image; no engine image digest is applicable.
 
-Observed work-package checks: core 7 tests; persistence 14 tests; backend/mount 9 macOS tests; service 1 middleware + 6 binary + 4 OpenAPI tests; conformance 13 router + 3 design + 2 provenance tests. The full local workspace suite passed 59 tests, with fmt, clippy, build, cargo-deny, no-run compilation and Docker-free platform tests passing. Tests run on macOS; Linux/arm64 evidence must come from final CI. Linux runtime tests and arm64 builds are CI responsibilities, not inferred from macOS success.
+Observed work-package checks: core 7 tests; persistence 14 tests; backend/mount 9 macOS tests; service 2 middleware/policy + 6 binary + 5 OpenAPI tests; conformance 13 router + 3 design + 2 provenance tests. The full local workspace suite passed 61 tests, with fmt, clippy, build, cargo-deny, no-run compilation and Docker-free platform tests passing. Tests run on macOS; Linux/arm64 evidence must come from final CI. Linux runtime tests and arm64 builds are CI responsibilities, not inferred from macOS success.
 
 ## Fresh architecture review
 
 A fresh approved-context architecture reviewer inspected all persistent columns, B1–B13, locks/fencing, API and dependency/source records at base revision 7281b665fed61076613e522241f3672f4d6b35a9. Initial technical verdict REQUEST_CHANGES; provenance no blocking provenance findings. Accepted findings: missing future success responses, missing session/workflow wire authority, and unresolved receipt expiry/replay lifecycle.
 
-All were addressed and the same reviewer performed an explicitly labeled recheck (not a new independent initial review). Final reviewed tracked diff SHA-25616035da88afb9646ce4e18924f1ed18afebf85911b1f042603b9a94fc4e8ebd9 against that base, excluding this subsequent evidence-record update. Technical APPROVE; provenance no blocking provenance findings. Independently verified 36 tests and all seven baseline hashes. Report artifacts remain outside commits under .agents/reviews/. Review is procedural evidence, not legal clearance or runtime storage acceptance.
+All were addressed and the same reviewer performed an explicitly labeled recheck (not a new independent initial review). Final reviewed tracked diff SHA-256 16035da88afb9646ce4e18924f1ed18afebf85911b1f042603b9a94fc4e8ebd9 against that base, excluding this subsequent evidence-record update. Technical APPROVE; provenance no blocking provenance findings. Independently verified 36 tests and all seven baseline hashes. Report artifacts remain outside commits under .agents/reviews/. Review is procedural evidence, not legal clearance or runtime storage acceptance.
 
 The gauntlet's two independent standard reviewers initially requested changes and separately returned APPROVE on recheck, with no blocking provenance findings. Additional fixes define root selection/admin receipt inspection, make credential identity/scope immutable to close a reproduced concurrent issuer-scope race, strengthen provenance version validation, and reject invalid UTF-8 query decoding. Permanent operation tombstones preserve live FKs and replay keys; receipt_expire atomically revokes the associated session. Future success schemas and runtime shape validation are verified; expiry/publication/authentication execution remains Stage 1. Secret/token receipt inspection is explicitly excluded, with lost-grant recovery limits recorded in contracts.md.
 
 The generic fixer security guard was overridden by the repository owner's explicit “I approve” for reviewed fixes. This approval authorizes implementation fixes; it is not the final architecture/timer sign-off below. The requested opus review model is unavailable on this platform: independent reviewers used the available Codex model, a disclosed deviation from that model-specific skill instruction.
+
+## Review gauntlet
+
+Standard review directory: `reviews/feat-stage0-contract-freeze-2026-10-17-135401-7281b665fed6`. Two independent reviewers initially REQUEST_CHANGES, then APPROVE on labeled rechecks. Canonical fixer summary: fixed 6, skipped 0, needs-manual 0 after the owner's explicit override. Standard checkpoint commit 05bd5abd89c5f78566e4189e54429b68b86e74cb pushed and verified equal to the remote branch.
+
+Thermonuclear review directory: `reviews/feat-stage0-contract-freeze-thermo-2026-10-17-140911-05bd5abd89c5`. Upstream cursor/plugins main resolved to 101b274dd991f694e1f7024be2157e5f3adf07de at stage entry. The complete [pinned rubric](https://raw.githubusercontent.com/cursor/plugins/101b274dd991f694e1f7024be2157e5f3adf07de/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md) was fetched, frontmatter-validated and read as untrusted quality criteria only. A fresh reviewer received approved code/spec/design/dependency inputs, with earlier review conclusions withheld from this evidence record; origin/design portions were retained. The full branch evidence was gathered separately. No excluded research or competitor material was consumed.
+
+Initial thermonuclear verdict REQUEST_CHANGES: one Important route-policy finding and one enum suggestion. The canonical fixer grouped individual route registrations by shared body/deadline policy, removed URL-suffix inference, preserved the prior shared PUT/DELETE files behavior, and added finite response enums with core conversion. No dependency or scope change. New tests exercise actual route groups with distinct deadlines and verify the enum vocabulary. The same reviewer independently reran all 61 tests and compared the YAML semantically, then returned APPROVE with no remaining findings and no blocking provenance findings. Exact reviewed fix diff SHA-256 4bda84af117c05b0a5ca37879915cff9dfe9b78a2a1914b84ce64bc8f59164ec against 05bd5ab; this subsequent evidence-record prose is outside that identity. Fixer summary: fixed 2, skipped 0, needs-manual 0.
+
+All local applicable gates passed: fmt, full Clippy with warnings denied, build, 61 workspace tests, no-run test compilation, Docker-free core/backend/mount tests, cargo-deny license/bans/advisory/source gates and whitespace checks. Separate review artifacts are ignored by the local review conventions and are not committed. The two checkpoints are separate commits/pushes; the final checkpoint identity is recorded by branch history and remote verification rather than a self-referential hash in this file.
 
 ## Repository owner sign-off
 

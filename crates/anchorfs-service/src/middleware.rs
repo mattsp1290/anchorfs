@@ -1,4 +1,4 @@
-use crate::{app::AppState, error::ApiError};
+use crate::error::ApiError;
 use axum::{
     extract::{MatchedPath, Request, State},
     http::{HeaderValue, StatusCode},
@@ -7,7 +7,7 @@ use axum::{
 };
 #[derive(Clone)]
 pub struct TraceId(pub String);
-pub async fn request(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+pub async fn request(mut req: Request, next: Next) -> Response {
     let trace = uuid::Uuid::new_v4().to_string();
     req.extensions_mut().insert(TraceId(trace.clone()));
     let route = req
@@ -16,20 +16,7 @@ pub async fn request(State(state): State<AppState>, mut req: Request, next: Next
         .map(|p| p.as_str().to_owned())
         .unwrap_or_else(|| "unmatched".into());
     let method = req.method().clone();
-    let deadline =
-        if route.ends_with("/bytes") || route.ends_with("/append") || route.ends_with("/files") {
-            state.config.data_call_deadline
-        } else {
-            state.config.metadata_call_deadline
-        };
-    let mut response = match tokio::time::timeout(deadline, next.run(req)).await {
-        Ok(response) => response,
-        Err(_) => {
-            let mut error = ApiError::new(anchorfs_core::ErrorCode::DependencyUnavailable, &trace);
-            error.retry_after_ms = Some(100);
-            error.into_response()
-        }
-    };
+    let mut response = next.run(req).await;
     if response.status() == StatusCode::PAYLOAD_TOO_LARGE {
         response = ApiError::new(anchorfs_core::ErrorCode::PayloadTooLarge, &trace).into_response();
     }
@@ -39,6 +26,27 @@ pub async fn request(State(state): State<AppState>, mut req: Request, next: Next
     );
     tracing::info!(method=%method,route=%route,status=response.status().as_u16(),"request completed");
     response
+}
+/// Route-group deadline; the outer request layer supplies the trace identity.
+pub async fn deadline(
+    State(deadline): State<std::time::Duration>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let trace = req
+        .extensions()
+        .get::<TraceId>()
+        .expect("trace middleware")
+        .0
+        .clone();
+    match tokio::time::timeout(deadline, next.run(req)).await {
+        Ok(response) => response,
+        Err(_) => {
+            let mut error = ApiError::new(anchorfs_core::ErrorCode::DependencyUnavailable, trace);
+            error.retry_after_ms = Some(100);
+            error.into_response()
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -51,15 +59,6 @@ mod tests {
     use tower::ServiceExt;
     #[tokio::test]
     async fn deadline_maps_to_503() {
-        let mut config = crate::config::Config::contract_defaults();
-        config.metadata_call_deadline = std::time::Duration::from_millis(10);
-        let state = AppState {
-            pool: anchorfs_persistence::pool::PgPool::connect_lazy(
-                "postgres://unused:unused@127.0.0.1:1/unused",
-            )
-            .unwrap(),
-            config: config.shared(),
-        };
         let app = Router::new()
             .route(
                 "/slow",
@@ -67,7 +66,11 @@ mod tests {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }),
             )
-            .layer(axum::middleware::from_fn_with_state(state, request));
+            .layer(axum::middleware::from_fn_with_state(
+                std::time::Duration::from_millis(10),
+                deadline,
+            ))
+            .layer(axum::middleware::from_fn(request));
         let response = app
             .oneshot(Request::builder().uri("/slow").body(Body::empty()).unwrap())
             .await

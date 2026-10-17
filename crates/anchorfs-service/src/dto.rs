@@ -82,7 +82,7 @@ impl From<anchorfs_core::ErrorCode> for ErrorCodeDto {
 pub struct InodeAttributes {
     pub inode_id: i64,
     pub generation: i64,
-    pub kind: String,
+    pub kind: InodeKindDto,
     pub size: u64,
     pub mode: u32,
     pub uid: u32,
@@ -105,7 +105,7 @@ pub struct DirectoryPage {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OperationStatus {
     pub operation_id: Uuid,
-    pub state: String,
+    pub state: OperationStateDto,
     pub result: Option<serde_json::Value>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
@@ -321,3 +321,28 @@ impl utoipa::PartialSchema for BinaryContent {
     }
 }
 impl ToSchema for BinaryContent {}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InodeKindDto {
+    File,
+    Directory,
+    Symlink,
+}
+impl From<anchorfs_core::InodeKind> for InodeKindDto {
+    fn from(kind: anchorfs_core::InodeKind) -> Self {
+        match kind {
+            anchorfs_core::InodeKind::File => Self::File,
+            anchorfs_core::InodeKind::Directory => Self::Directory,
+            anchorfs_core::InodeKind::Symlink => Self::Symlink,
+        }
+    }
+}
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationStateDto {
+    Pending,
+    Committed,
+    Failed,
+    Indeterminate,
+}

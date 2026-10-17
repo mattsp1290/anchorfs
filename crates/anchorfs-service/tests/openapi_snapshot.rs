@@ -156,3 +156,24 @@ fn future_success_contracts_and_authority_are_explicit() {
             .any(|p| p["name"] == "path" && p["required"] == false)
     );
 }
+
+#[test]
+fn response_vocabularies_are_finite() {
+    let doc: serde_json::Value = serde_json::from_str(&document().to_json().unwrap()).unwrap();
+    assert_eq!(
+        doc["components"]["schemas"]["InodeKindDto"]["enum"],
+        serde_json::json!(["file", "directory", "symlink"])
+    );
+    assert_eq!(
+        doc["components"]["schemas"]["OperationStateDto"]["enum"],
+        serde_json::json!(["pending", "committed", "failed", "indeterminate"])
+    );
+    assert_eq!(
+        doc["components"]["schemas"]["InodeAttributes"]["properties"]["kind"]["$ref"],
+        "#/components/schemas/InodeKindDto"
+    );
+    assert_eq!(
+        doc["components"]["schemas"]["OperationStatus"]["properties"]["state"]["$ref"],
+        "#/components/schemas/OperationStateDto"
+    );
+}

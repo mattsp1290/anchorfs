@@ -1200,245 +1200,6 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
-  /v1/workspaces/{workspace_id}/files:
-    put:
-      operationId: replaceFile
-      parameters:
-      - name: X-Anchorfs-Session-Id
-        in: header
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: X-Anchorfs-Session-Epoch
-        in: header
-        required: true
-        schema:
-          type: integer
-          format: int64
-          minimum: 1
-      - name: X-Anchorfs-Workflow-Token
-        in: header
-        description: 64 hex characters; required with active workflow authority
-        required: false
-        schema:
-          type:
-          - string
-          - 'null'
-      - name: X-Anchorfs-Workflow-Epoch
-        in: header
-        required: false
-        schema:
-          type:
-          - integer
-          - 'null'
-          format: int64
-          minimum: 1
-      - name: workspace_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: path
-        in: query
-        required: true
-        schema:
-          type: string
-      - name: expected_generation
-        in: query
-        required: true
-        schema:
-          type: integer
-          format: int64
-      - name: Idempotency-Key
-        in: header
-        description: Required retry key, 1–256 visible ASCII bytes
-        required: true
-        schema:
-          type: string
-      requestBody:
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-        required: true
-      responses:
-        '200':
-          description: Future success contract; Stage 0 returns 501
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MutationResult'
-        '400':
-          description: invalid_input
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          description: unauthenticated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: not_found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '410':
-          description: stale_handle
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '413':
-          description: payload_too_large or file_too_large
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '501':
-          description: Stage 0 declared operation
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '503':
-          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '507':
-          description: quota_exceeded or capacity_exhausted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - credential: []
-    delete:
-      operationId: unlink
-      parameters:
-      - name: X-Anchorfs-Session-Id
-        in: header
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: X-Anchorfs-Session-Epoch
-        in: header
-        required: true
-        schema:
-          type: integer
-          format: int64
-          minimum: 1
-      - name: X-Anchorfs-Workflow-Token
-        in: header
-        description: 64 hex characters; required with active workflow authority
-        required: false
-        schema:
-          type:
-          - string
-          - 'null'
-      - name: X-Anchorfs-Workflow-Epoch
-        in: header
-        required: false
-        schema:
-          type:
-          - integer
-          - 'null'
-          format: int64
-          minimum: 1
-      - name: workspace_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: path
-        in: query
-        required: true
-        schema:
-          type: string
-      - name: Idempotency-Key
-        in: header
-        description: Required retry key, 1–256 visible ASCII bytes
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Future success contract; Stage 0 returns 501
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MutationResult'
-        '400':
-          description: invalid_input
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          description: unauthenticated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: not_found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '501':
-          description: Stage 0 declared operation
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '503':
-          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '507':
-          description: quota_exceeded or capacity_exhausted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - credential: []
   /v1/workspaces/{workspace_id}/links:
     post:
       operationId: createLink
@@ -2545,389 +2306,6 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
-  /v1/workspaces/{workspace_id}/handles/{handle_id}/bytes:
-    get:
-      operationId: readRange
-      parameters:
-      - name: X-Anchorfs-Session-Id
-        in: header
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: X-Anchorfs-Session-Epoch
-        in: header
-        required: true
-        schema:
-          type: integer
-          format: int64
-          minimum: 1
-      - name: X-Anchorfs-Workflow-Token
-        in: header
-        description: 64 hex characters; required with active workflow authority
-        required: false
-        schema:
-          type:
-          - string
-          - 'null'
-      - name: X-Anchorfs-Workflow-Epoch
-        in: header
-        required: false
-        schema:
-          type:
-          - integer
-          - 'null'
-          format: int64
-          minimum: 1
-      - name: workspace_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: handle_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: offset
-        in: query
-        required: true
-        schema:
-          type: integer
-          format: int64
-          minimum: 0
-      - name: length
-        in: query
-        required: true
-        schema:
-          type: integer
-          format: int32
-          minimum: 0
-      - name: read_pin
-        in: query
-        required: false
-        schema:
-          type: string
-          format: uuid
-      responses:
-        '200':
-          description: 'Future success: one pinned committed generation; Stage 0 returns 501'
-          headers:
-            X-Anchorfs-Generation:
-              schema:
-                type: integer
-                format: int64
-              description: Committed inode generation
-          content:
-            application/octet-stream:
-              schema:
-                $ref: '#/components/schemas/BinaryContent'
-        '400':
-          description: invalid_input
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          description: unauthenticated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: not_found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '410':
-          description: stale_handle
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '501':
-          description: Stage 0 declared operation
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '503':
-          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - credential: []
-    put:
-      operationId: writeAt
-      parameters:
-      - name: X-Anchorfs-Session-Id
-        in: header
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: X-Anchorfs-Session-Epoch
-        in: header
-        required: true
-        schema:
-          type: integer
-          format: int64
-          minimum: 1
-      - name: X-Anchorfs-Workflow-Token
-        in: header
-        description: 64 hex characters; required with active workflow authority
-        required: false
-        schema:
-          type:
-          - string
-          - 'null'
-      - name: X-Anchorfs-Workflow-Epoch
-        in: header
-        required: false
-        schema:
-          type:
-          - integer
-          - 'null'
-          format: int64
-          minimum: 1
-      - name: workspace_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: handle_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: offset
-        in: query
-        required: true
-        schema:
-          type: integer
-          format: int64
-          minimum: 0
-      - name: Idempotency-Key
-        in: header
-        description: Required retry key, 1–256 visible ASCII bytes
-        required: true
-        schema:
-          type: string
-      requestBody:
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-        required: true
-      responses:
-        '200':
-          description: Future success contract; Stage 0 returns 501
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WriteResult'
-        '400':
-          description: invalid_input
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          description: unauthenticated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: not_found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '410':
-          description: stale_handle
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '413':
-          description: payload_too_large or file_too_large
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '501':
-          description: Stage 0 declared operation
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '503':
-          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '507':
-          description: quota_exceeded or capacity_exhausted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - credential: []
-  /v1/workspaces/{workspace_id}/handles/{handle_id}/append:
-    post:
-      operationId: append
-      parameters:
-      - name: X-Anchorfs-Session-Id
-        in: header
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: X-Anchorfs-Session-Epoch
-        in: header
-        required: true
-        schema:
-          type: integer
-          format: int64
-          minimum: 1
-      - name: X-Anchorfs-Workflow-Token
-        in: header
-        description: 64 hex characters; required with active workflow authority
-        required: false
-        schema:
-          type:
-          - string
-          - 'null'
-      - name: X-Anchorfs-Workflow-Epoch
-        in: header
-        required: false
-        schema:
-          type:
-          - integer
-          - 'null'
-          format: int64
-          minimum: 1
-      - name: workspace_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: handle_id
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - name: Idempotency-Key
-        in: header
-        description: Required retry key, 1–256 visible ASCII bytes
-        required: true
-        schema:
-          type: string
-      requestBody:
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-        required: true
-      responses:
-        '200':
-          description: Future success contract; Stage 0 returns 501
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WriteResult'
-        '400':
-          description: invalid_input
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          description: unauthenticated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: forbidden
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: not_found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '410':
-          description: stale_handle
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '413':
-          description: payload_too_large or file_too_large
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '501':
-          description: Stage 0 declared operation
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '503':
-          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '507':
-          description: quota_exceeded or capacity_exhausted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - credential: []
   /v1/workspaces/{workspace_id}/read-pins:
     post:
       operationId: createReadPin
@@ -3779,6 +3157,628 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
       security:
       - credential: []
+  /v1/workspaces/{workspace_id}/files:
+    put:
+      operationId: replaceFile
+      parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: expected_generation
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+        required: true
+      responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: payload_too_large or file_too_large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+    delete:
+      operationId: unlink
+      parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: path
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MutationResult'
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/handles/{handle_id}/bytes:
+    get:
+      operationId: readRange
+      parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: offset
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: length
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: read_pin
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: 'Future success: one pinned committed generation; Stage 0 returns 501'
+          headers:
+            X-Anchorfs-Generation:
+              schema:
+                type: integer
+                format: int64
+              description: Committed inode generation
+          content:
+            application/octet-stream:
+              schema:
+                $ref: '#/components/schemas/BinaryContent'
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+    put:
+      operationId: writeAt
+      parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: offset
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+        required: true
+      responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WriteResult'
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: payload_too_large or file_too_large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
+  /v1/workspaces/{workspace_id}/handles/{handle_id}/append:
+    post:
+      operationId: append
+      parameters:
+      - name: X-Anchorfs-Session-Id
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: X-Anchorfs-Session-Epoch
+        in: header
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+      - name: X-Anchorfs-Workflow-Token
+        in: header
+        description: 64 hex characters; required with active workflow authority
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: X-Anchorfs-Workflow-Epoch
+        in: header
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 1
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: handle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        description: Required retry key, 1–256 visible ASCII bytes
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+        required: true
+      responses:
+        '200':
+          description: Future success contract; Stage 0 returns 501
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WriteResult'
+        '400':
+          description: invalid_input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          description: unauthenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '410':
+          description: stale_handle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: payload_too_large or file_too_large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '501':
+          description: Stage 0 declared operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: dependency_unavailable; outcome_unknown after mutation begins (Stage 1)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '507':
+          description: quota_exceeded or capacity_exhausted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - credential: []
 components:
   schemas:
     BinaryContent:
@@ -4033,7 +4033,7 @@ components:
           type: integer
           format: int64
         kind:
-          type: string
+          $ref: '#/components/schemas/InodeKindDto'
         size:
           type: integer
           format: int64
@@ -4060,6 +4060,12 @@ components:
           type: string
         ctime:
           type: string
+    InodeKindDto:
+      type: string
+      enum:
+      - file
+      - directory
+      - symlink
     IssuedCredential:
       type: object
       description: Secret is returned only on issue/rotation; never on inspection or in logs.
@@ -4129,6 +4135,13 @@ components:
           type: integer
           format: int32
           minimum: 0
+    OperationStateDto:
+      type: string
+      enum:
+      - pending
+      - committed
+      - failed
+      - indeterminate
     OperationStatus:
       type: object
       required:
@@ -4139,7 +4152,7 @@ components:
           type: string
           format: uuid
         state:
-          type: string
+          $ref: '#/components/schemas/OperationStateDto'
         result: {}
     PathBody:
       type: object
