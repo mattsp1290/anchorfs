@@ -18,3 +18,5 @@ url.workspace = true
 async-trait.workspace = true
 sha2.workspace = true
 bytes.workspace = true
+aws-credential-types.workspace = true
+aws-smithy-http-client.workspace = true

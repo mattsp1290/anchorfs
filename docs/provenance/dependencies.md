@@ -7,6 +7,8 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | Crate | Version | License | Repository | Role |
 |---|---|---|---|---|
 | async-trait | 0.1.92 | MIT OR Apache-2.0 | https://github.com/dtolnay/async-trait | object-safe asynchronous backend |
+| aws-credential-types | 1.3.0 | Apache-2.0 | https://github.com/smithy-lang/smithy-rs | lazy credential provider future for synchronous network-free construction |
+| aws-smithy-http-client | 1.5.0 | Apache-2.0 | https://github.com/smithy-lang/smithy-rs | explicit CA trust bundle with TLS verification |
 | aws-config | 1.12.0 | Apache-2.0 | https://github.com/smithy-lang/smithy-rs | official AWS configuration |
 | aws-sdk-s3 | 1.152.0 | Apache-2.0 | https://github.com/awslabs/aws-sdk-rust | official S3 client |
 | axum | 0.8.9 | MIT | https://github.com/tokio-rs/axum | HTTP server |
@@ -60,3 +62,9 @@ A new direct dependency or CI action requires a row with version, license, repos
 ## Pending owner decision
 
 None recorded.
+
+## WP5 SDK boundary additions
+
+On 2026-10-17, `cargo info` verified aws-credential-types 1.3.0 and aws-smithy-http-client 1.5.0 as Apache-2.0 from the official Smithy repository. These were already resolved transitive dependencies; explicit direct declarations support a lazy chain provider without blocking an async runtime and custom CA configuration without disabling certificate verification. Registry dependency API sources were consulted for signatures only; AnchorFS adapter logic and synthetic tests are independently authored from approved spec 02/spec 04 and WP5. No competitor source or research archive was used. Enabling rustls-aws-lc and rt-tokio matches the existing official SDK TLS/runtime stack.
+
+Conformance uses the already reviewed axum pin as a direct dev dependency to construct HTTP requests and decode router responses. This corrects the plan’s omitted HTTP test types; it adds no new package to the graph.

@@ -22,6 +22,8 @@ anchorfs-service = { path = "crates/anchorfs-service" }
 anchorfs-mount = { path = "crates/anchorfs-mount" }
 anchorfs-conformance = { path = "crates/anchorfs-conformance" }
 async-trait = { version = "=0.1.92" }
+aws-credential-types = { version = "=1.3.0" }
+aws-smithy-http-client = { version = "=1.5.0", default-features = false, features = ["rustls-aws-lc", "rt-tokio"] }
 aws-config = { version = "=1.12.0", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
 aws-sdk-s3 = { version = "=1.152.0", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
 axum = { version = "=0.8.9" }
