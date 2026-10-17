@@ -1,1 +1,19 @@
-//! AnchorFS core boundary; Stage 0 contracts.
+//! Shared AnchorFS vocabulary without persistence or wire-framework coupling.
+pub mod digest;
+pub mod error;
+pub mod ids;
+pub mod inode;
+pub mod limits;
+pub mod path;
+pub mod secret;
+pub mod timers;
+pub mod version;
+pub use digest::*;
+pub use error::*;
+pub use ids::*;
+pub use inode::*;
+pub use limits::*;
+pub use path::*;
+pub use secret::*;
+pub use timers::*;
+pub use version::*;
