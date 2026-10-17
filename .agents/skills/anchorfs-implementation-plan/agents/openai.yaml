@@ -1,0 +1,4 @@
+interface:
+  display_name: "AnchorFS Implementation Plan"
+  short_description: "Plan AnchorFS with technical and provenance reviews"
+  default_prompt: "Use $anchorfs-implementation-plan to create a reviewed AnchorFS plan from approved requirements."

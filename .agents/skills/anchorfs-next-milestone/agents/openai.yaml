@@ -1,0 +1,4 @@
+interface:
+  display_name: "AnchorFS Next Milestone"
+  short_description: "Select a milestone from approved AnchorFS evidence"
+  default_prompt: "Use $anchorfs-next-milestone and $anchorfs-implementation-plan to select and plan one bounded AnchorFS milestone."

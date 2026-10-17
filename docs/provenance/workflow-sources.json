@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "adapted_at": "2026-10-17",
+  "source_kind": "user-owned personal workflow skills",
+  "source_root_hint": "${HOME}/.agents/skills",
+  "sources": [
+    {
+      "source": "implementation-plan/SKILL.md",
+      "sha256": "0230a0efe72d080c3782702ed0232aa70f5def0991988f557d17f60f79ca9d2d"
+    },
+    {
+      "source": "implementation-plan/agents/openai.yaml",
+      "sha256": "3e7a97baf6e4d1f8d97c36673e8cf9fa24c3358a59c0f3a658ab62e503ef967b"
+    },
+    {
+      "source": "implementation-plan/references/cross-repository-requests.md",
+      "sha256": "7e5f09468f7df03bee708504f473c8f6ce23dc99d28f6cf6ff6bbb5fc79aeadf"
+    },
+    {
+      "source": "implementation-plan/references/plan-format.md",
+      "sha256": "e842dd5f262b61f1da280088be33416a4b4203ab240e352be7953351585c678f"
+    },
+    {
+      "source": "implementation-plan/references/review-protocol.md",
+      "sha256": "b5ade9d6028429801f40a62be931c1bdaae519751ede90f54f902d6b0dfb3801"
+    },
+    {
+      "source": "implementation-plan/references/summary-style.md",
+      "sha256": "edef4c801d36678648f09ec948aaf6a70244ed63bcae9276895676d969a8cdfa"
+    },
+    {
+      "source": "select-next-milestone/SKILL.md",
+      "sha256": "5cc0e79b81c4b5037c28710ae8558548d73034e37186bc7f48df6cc81d0694ce"
+    },
+    {
+      "source": "select-next-milestone/agents/openai.yaml",
+      "sha256": "1eca7ba6fe8453cd382dcdb39c46d31b53e34de6c4ce0d9d4c09fc935a5ce2f0"
+    },
+    {
+      "source": "select-next-milestone/references/frontier-rubric.md",
+      "sha256": "f869326367b58ff3fd17c76421bae18179c82b185b358cd2dc7e720a3915a050"
+    },
+    {
+      "source": "select-next-milestone/references/implementation-plan-handoff.md",
+      "sha256": "79820ee1ccacaa55fdd3d228700c5b9dbbd908720b4c1fd38c0a14072050926f"
+    },
+    {
+      "source": "select-next-milestone/references/project-metadata.md",
+      "sha256": "5d5c7fab107deb1374686b6870b956c0ec9dd758cb3c5fd00f44e3bf9fb12565"
+    },
+    {
+      "source": "select-next-milestone/references/research-playbook.md",
+      "sha256": "4d9495c6fb6780fe963152d23020b26b9a0a37e389949d01d00a3503673deff7"
+    }
+  ],
+  "adaptations": {
+    "implementation-plan": "anchorfs-implementation-plan; local cleanroom input rules, fresh-context technical/provenance reviews",
+    "select-next-milestone": "anchorfs-next-milestone; approved spec and product evidence replace mandatory live comparator research and metadata bootstrap"
+  },
+  "note": "This records workflow origins, not competitor implementation provenance. The only copied supporting reference is implementation-plan/references/plan-format.md with a local wording adjustment; other local skill text is adapted for this repository."
+}

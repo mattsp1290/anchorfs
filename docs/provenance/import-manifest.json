@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "approval_id": "archil-spec-post-cleanroom-2026-10-16",
+  "approval_date": "2026-10-16",
+  "imported_at": "2026-10-17",
+  "source_bundle": "authorized requirements handoff (external research archive)",
+  "scope": "Reviewed specification text; engineering review, not legal certification",
+  "files": [
+    {
+      "source": "spec/01-requirements.md",
+      "destination": "docs/spec/01-requirements.md",
+      "sha256": "f4dc90a20d6ad901468f316d9fb95fe3d1556df9361d02a10a00a0c01ed15b46"
+    },
+    {
+      "source": "spec/02-storage.md",
+      "destination": "docs/spec/02-storage.md",
+      "sha256": "4633eca9c37aac6f48e98e4750b6b4740259084e75a47f63757963181ebbd8af"
+    },
+    {
+      "source": "spec/03-interfaces.md",
+      "destination": "docs/spec/03-interfaces.md",
+      "sha256": "152fd1ccf7f27c91e8bdd080b5fe13eff964013346a593d92237e9e1b35a4943"
+    },
+    {
+      "source": "spec/04-deployment.md",
+      "destination": "docs/spec/04-deployment.md",
+      "sha256": "eafdeafe8937f9c1ee4b633711727711310ee1918d18986ee9d85a296e08d0f6"
+    },
+    {
+      "source": "spec/05-delivery.md",
+      "destination": "docs/spec/05-delivery.md",
+      "sha256": "6a0ebdea4412ca8749f22b4cfec7e34efa2edd6148be68dfe44176726aa7b59f"
+    },
+    {
+      "source": "spec/06-provenance.md",
+      "destination": "docs/spec/06-provenance.md",
+      "sha256": "bb77da16f2147391a6e50d7fd3e13ae010d5abd6d2d26accb4fd2ececb4ef828"
+    },
+    {
+      "source": "spec/07-tool-lifecycle.md",
+      "destination": "docs/spec/07-tool-lifecycle.md",
+      "sha256": "b2e0dc089ce187a8bb29e43228ab8b974ab635912771b233b1e818dbef46c49e"
+    }
+  ]
+}
