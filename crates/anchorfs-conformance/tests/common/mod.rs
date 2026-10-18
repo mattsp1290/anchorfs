@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+pub mod client;
+pub mod fake_backend;
 pub mod minio;
 pub mod proxy;
 use anchorfs_core::{DeploymentId, Secret};
@@ -75,6 +77,9 @@ pub fn state_with(pool: PgPool, s3: anchorfs_backend::config::S3Config) -> AppSt
     config.deployment_id = s3.deployment_id.clone();
     config.s3 = s3;
     AppState {
+        control_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(
+            config.db_max_connections.saturating_sub(2).max(1) as usize,
+        )),
         pool,
         backend: Arc::new(anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap()),
         probe_cache: Default::default(),
@@ -83,4 +88,17 @@ pub fn state_with(pool: PgPool, s3: anchorfs_backend::config::S3Config) -> AppSt
 }
 pub fn unavailable() -> AppState {
     state(PgPool::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused").unwrap())
+}
+
+/// Counting in-memory stub; control-plane tests assert every backend entry remains unused.
+pub fn state_fake(pool: PgPool) -> (AppState, Arc<fake_backend::FakeBackend>) {
+    let backend = Arc::new(fake_backend::FakeBackend::default());
+    let state = AppState {
+        pool,
+        config: Arc::new(Config::contract_defaults()),
+        backend: backend.clone(),
+        probe_cache: Default::default(),
+        control_permits: Arc::new(tokio::sync::Semaphore::new(2)),
+    };
+    (state, backend)
 }

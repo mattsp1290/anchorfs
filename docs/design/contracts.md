@@ -42,13 +42,13 @@ Seconds. The repository owner accepted the U2 defaults on 2026-10-17 at the Stag
 
 ## Transaction model
 
-READ COMMITTED, explicit locks and the complete order/modes in [persistent-state.md](persistent-state.md). PostgreSQL clock_timestamp() is the expiry authority, transaction_timestamp() supplies recorded times, and each pool connection sets synchronous_commit=on. The commit phase from Stage 1 runs in a spawned non-cancellable task: disconnect/deadline cannot undo publication; uncertain waiting yields outcome_unknown with operation ID. Stage 0 stubs never begin mutations; a deadline returns dependency_unavailable with bounded retry guidance. Locking/publication remain unverified until Stage 1.
+READ COMMITTED, explicit locks and the complete order/modes in [persistent-state.md](persistent-state.md). PostgreSQL clock_timestamp() is the expiry authority, transaction_timestamp() supplies recorded times, and each pool connection sets synchronous_commit=on. The commit phase from Stage 1 runs in a spawned non-cancellable task: disconnect/deadline cannot undo publication; uncertain waiting yields outcome_unknown; clients resolve by idempotency key when no operation ID is known. Stage 0 stubs never begin mutations; a deadline returns dependency_unavailable with bounded retry guidance. Control-plane transaction behavior is verified by `control_plane` CP4, CP5 and CP13; file publication remains later work.
 
 ## Credential epochs and sessions
 
-Credential rotation/revocation increments that credential's epoch; role/permission-policy changes increment workspace authorization_epoch. Capture both at operation start and recheck at publication. admin_operations stores credential_epoch_at_start; operations additionally stores workspace and session epochs. New read/handle operations check current authority. Issuer revocation cascades to issued credentials and their sessions. Read/write/admin roles retain server permission checks; only owner or workspace administrator may chmod, ownership changes require administrator. Workers cannot issue replacement sessions or acquire leases. Unverified until Stage 1.
+Credential rotation/revocation increments that credential's epoch; role/permission-policy changes increment workspace authorization_epoch. Capture both at operation start and recheck at publication. admin_operations stores credential_epoch_at_start; operations additionally stores workspace and session epochs. New read/handle operations check current authority. Issuer revocation cascades to issued credentials and their sessions. Read/write/admin roles retain server permission checks; only owner or workspace administrator may chmod, ownership changes require administrator. Workers cannot issue replacement sessions or acquire leases. Credential/session behavior is verified by `control_plane` CP7–CP12; role changes, filesystem permissions and leases remain later work.
 
-Receipt keys are workspace + authenticated credential + idempotency key, with digest binding and 24-hour retention; deployment/session-minting routes use admin_operations. An expired ambiguous operation returns operation_indeterminate; it must not be automatically replayed under a new key/session. max_retry_attempts bounds retries. Client sessions are bounded and receipt replay cannot grant a new mutation. Unverified until Stage 1.
+Receipt keys are workspace + authenticated credential + idempotency key, with digest binding and 24-hour retention; deployment/session-minting routes use admin_operations. An expired ambiguous operation returns operation_indeterminate; it must not be automatically replayed under a new key/session. max_retry_attempts bounds retries. Client sessions are bounded and receipt replay cannot grant a new mutation. Control-plane receipts are verified by CP4, CP5 and CP12.
 
 ## Exclusive workflows
 
@@ -94,7 +94,7 @@ No object-store durability, FUSE runtime, provider compatibility or performance 
 
 ## Reviewed wire decisions
 
-These are independent requirements/design clarifications from the Stage 0 code reviews; imported baselines remain unchanged. Future success responses are declared per operation, but every Stage 0 operation still returns 501 after shape validation. Grant expiry strings are RFC3339 UTC timestamps. MutationResult carries operation_id and, when relevant, the affected inode/generation; WriteResult requires offset, bytes_written and committed generation (including the original offset on append retry). OperationStatus.result contains the original success metadata while retained, with secret/token fields omitted; an expired tombstone has state=indeterminate and result=null. Credential secrets and newly issued workflow tokens are returned by the initial grant response, never stored as plaintext in a receipt or returned by inspection. Successful workflow renewal may echo its currently supplied token without rotating it. A retry that would require replaying discarded grant material returns operation_indeterminate plus the operation ID; inspection still proves the committed metadata. A lost issued-credential secret is recovered by authorized rotation after inspection, and a lost workflow token requires waiting for expiry and authorized takeover (up to workflow_lease_ttl); neither case repeats the original mutation. Stage 1 must test these recovery paths before implementing grants.
+These are independent requirements/design clarifications from the Stage 0 code reviews; imported baselines remain unchanged. Future success responses are declared per operation, and Stage 0 initially returned 501 after shape validation. Stage 1a implements the thirteen control-plane routes listed below. Grant expiry strings are RFC3339 UTC timestamps. MutationResult carries operation_id and, when relevant, the affected inode/generation; WriteResult requires offset, bytes_written and committed generation (including the original offset on append retry). OperationStatus.result contains the original success metadata while retained, with secret/token fields omitted; an expired tombstone has state=indeterminate and result=null. Credential secrets and newly issued workflow tokens are returned by the initial grant response, never stored as plaintext in a receipt or returned by inspection. Successful workflow renewal may echo its currently supplied token without rotating it. A retry that would require replaying discarded grant material returns operation_indeterminate plus the operation ID; inspection still proves the committed metadata. A lost issued-credential secret is recovered by authorized rotation after inspection, and a lost workflow token requires waiting for expiry and authorized takeover (up to workflow_lease_ttl); neither case repeats the original mutation. Stage 1 must test these recovery paths before implementing grants.
 
 For stat/list, an omitted query path selects the workspace root; for setAttributes an omitted JSON path selects root. Any supplied path remains nonempty and relative: empty, absolute, dot/traversal and invalid UTF-8 paths are rejected. Creation/removal targets still require a child path.
 
@@ -108,4 +108,128 @@ GET /v1/admin-operations/{operation_id} and GET /v1/admin-operations?idempotency
 
 PUT verifies the local SHA-256 before uploading a nonempty object of at most the default chunk size. The default `checksum_mode=sha256` sends a signed SHA-256 checksum header: a matching provider echo confirms it, an absent echo triggers verified read-back, and a wrong echo is an integrity error. Mode `none` relies on transport integrity for successful uploads. SDK response checksum validation is disabled; AnchorFS verifies digest and length in `get_verified`. `get_range` verifies Content-Range and Content-Length framing only, and surfaces absent or clamped ranges rather than zero-filling. Both read forms share one configured request deadline across response headers and complete body consumption, including verified GETs used by upload read-back.
 
-Ambiguous uploads reconcile through HEAD and, when needed, verified GET, repeating the same immutable bytes only after observed absence. The bound is two PUT, two HEAD and two GET calls, each with bounded SDK retries. `Unavailable` after reconciliation means not observed stored after the repeat and final HEAD; a delayed request may still land. Failed observation yields `UncertainOutcome`. Native metadata publication and file operations remain unimplemented. No Spaces/AWS compatibility or performance claim follows from local provider tests.
+Ambiguous uploads reconcile through HEAD and, when needed, verified GET, repeating the same immutable bytes only after observed absence. The bound is two PUT, two HEAD and two GET calls, each with bounded SDK retries. `Unavailable` after reconciliation means not observed stored after the repeat and final HEAD; a delayed request may still land. Failed observation yields `UncertainOutcome`. Control-plane metadata publication is implemented; file publication and operations remain unimplemented. No Spaces/AWS compatibility or performance claim follows from local provider tests.
+
+## Control plane authority
+
+Stage 1a, 2026-10-18: independent implementation from approved specs 02, 03 and
+07 and the reviewed local plan. This amendment changes local design records;
+imported specification baselines remain unchanged. Bearers are
+`<credential UUID>.<64 lowercase hex secret>` with a case-insensitive `Bearer`
+scheme. The stored value is SHA-256 of the secret's UTF-8 bytes. Authentication
+checks the digest, revocation and expiry before locking, then checks again under
+a row lock. Missing/malformed/unknown/expired/revoked credentials return 401;
+`WWW-Authenticate` is bare `Bearer` when absent and `Bearer error="invalid_token"`
+when a token was presented. Invalid path/body/key shapes fail before database
+authentication; the bearer grammar extractor precedes JSON bodies.
+
+A = deployment administrator, H = workspace host, K = worker; W is the actor's
+workspace. Missing/out-of-scope targets return 404 after authentication.
+
+| Operation | A | H | K |
+|---|---|---|---|
+| `bootstrap-admin` | CLI only; not an HTTP route | — | — |
+| `createWorkspace` | allowed | 403 | 403 |
+| `getWorkspace(W)` | allowed | allowed; other → 404 | allowed; other → 404 |
+| `createCredential` kind=administrator | allowed (`workspace_id` must be null and role admin, else 400) | 403 | 403 |
+| `createCredential` kind=host | allowed (`workspace_id` required, else 400) | 403 | 403 |
+| `createCredential` kind=worker | allowed, any uid/gid, role read/write, any lifetime and allowance | allowed only when body `workspace_id` equals H's workspace (null → 400; other → 404), `uid`/`gid` equal H's, role ≤ H's role (read ≤ write), `max_reservation_bytes` ≤ H's, and `expires_at` ≤ H's `expires_at` (a `null` `expires_at` is allowed only when H's is `null`); otherwise 403 (D13) | 403 |
+| `rotateCredential(X)` | allowed | X == H (self), or `X.issued_by == H` and X in W; X not in W or unknown → 404; in W but not issued by H → 403 | 403 |
+| `revokeCredential(X)` | allowed for any X, including A's ancestors and A itself (the response commits; A's later requests → 401; recovery is another administrator or `bootstrap-admin` once no unrevoked administrator remains) | `X.issued_by == H` and X in W; H itself → 403; not in W or unknown → 404 | 403 |
+| `getAdminOperation`, `findAdminOperation` | own receipts only | own receipts only | own receipts only (workers can hold none) |
+
+| Operation | A | H (actor session in W) | K (actor session in W) |
+|---|---|---|---|
+| `createSession(W, target T)` | T in W, `T.kind ∈ {host, worker}`, not revoked/expired; other workspace, unknown or revoked → 404 | same; T may be H itself | 403 |
+| `renewSession(W, S)` | — | any S in W | S == actor session only; otherwise 403 |
+| `rebindSession(W, S)` | — | any S in W, body `workflow_lease_token` null | 403 |
+| `revokeSession(W, S)` | — | any S in W | S == actor session only; otherwise 403 |
+| `getOperation(W, id)` | `same_workspace` (A always) and (`operation.credential_id == actor` or actor is H of W); else 404 | same | own receipts only |
+| `findOperation(W, key)` | by `(W, actor credential, key)`; A has none → 404 | own | own |
+
+`bootstrap-admin --uid <uid> --gid <gid>` serializes first-administrator creation
+and refuses while any unrevoked administrator exists. It needs only metadata
+configuration. Operators who lose the sole unrevoked administrator secret must
+explicitly revoke that row through an authorized database maintenance session
+before bootstrapping again; bootstrap never resets a live administrator.
+
+CreateWorkspace requires `root_uid` and `root_gid`; `root_mode` defaults to
+0755 and rejects special bits. Root generation is 1 and link count is 2. Limits
+must be positive and fit PostgreSQL bigint. IssuedCredential.secret is optional
+and serialized as null on replay. Fresh issuance/rotation responses alone carry
+the secret and `Cache-Control: no-store`. Receipts never store plaintext secrets.
+A lost self-rotation response needs a new rotation by an administrator or issuing
+host; the stale proof cannot inspect or replay. Rotation increments credential
+epoch and revokes sessions, releasing their active slots. Host-issued worker
+identity, role, allowance and lifetime cannot exceed the host's grant.
+
+Administrators and hosts mint sessions; workers cannot. Session limits count
+unrevoked/unexpired sessions and serialize under a per-target transaction advisory
+lock. Rebinding an expired session consumes a slot under the same lock; an
+already active target can rebind at capacity without consuming another slot. Every session mutation checks the actor's credential, session ownership,
+workspace, expiry and both epochs. Workers renew/revoke only their actor session;
+hosts manage any session in W. Rebind is host-only, permits expired targets,
+increments the session epoch and clears binding. Revoked sessions stay terminal.
+Workflow-lease request fields remain 501 before database access.
+
+Receipts bind the operation, path IDs and recursively sorted canonical JSON using
+SHA-256 over `anchorfs-request-v1\0<op>\0<path IDs joined by '/'>\0<body or null>`.
+Administrative receipts scope by actor credential/key; workspace receipts also
+scope by workspace. Receipt insertion uses ON CONFLICT DO NOTHING, waits for the
+owner within the remaining budget, then reselects its result. Same digest replays
+committed metadata; different digest returns 409 idempotency_mismatch with the
+operation ID. Business errors roll back the receipt and mutation together.
+Self-fencing mutations may reject a replay at authentication/session verification;
+the client needs current authority or a replacement session.
+
+Expired receipts become permanent indeterminate/result-null tombstones, including
+through inspection, which commits that transition before responding. Retry returns
+409 operation_indeterminate with the operation ID. Session revocation at receipt
+expiry is deferred by the dated B11 amendment in persistent-state.md. Find-by-key
+is always actor-scoped; hosts can inspect workspace receipts by ID, administrators
+cannot inspect another credential's workspace receipt. Inspection never grants
+authority.
+
+The request budget begins in trace middleware. The runner reserves 200 ms,
+refuses when at most 100 ms remains, acquires an owned concurrency permit, then
+spawns a transaction that keeps its permit until completion. Client abandonment
+cannot cancel publication. Mutation budget exhaustion, task panic or any COMMIT
+error returns 503 outcome_unknown; clients resolve by key. Reads and admission
+failures return dependency_unavailable. A 30-second configurable lock timeout
+bounds each ordinary lock wait; receipt insertion temporarily lowers it to the
+remaining budget. 40P01/40001/55P03/57014 before commit map to retryable 503
+with 100 ms guidance; session limit returns 507 quota_exceeded. The service does
+not retry internally. No rate limiting or background expiry sweeper exists.
+
+Stage 1a review correction (2026-10-18): row locks preserve authority fields but
+cannot freeze time. Every implemented mutation checks its originally admitted
+credential and required actor-session expiry again at the final publication
+boundary after receipt, target and admission waits. Captured original expiry is
+used even for self-renew/rebind/revoke; reloading the mutated epochs would wrongly
+reject legitimate self-fencing results. Minting also rechecks target-credential
+expiry after admission/insert waits. Expiry rejects and rolls back state plus
+fresh receipt (401 credential, 409 actor-session fence, 404 expired mint target).
+Receipt replays and inspection recheck current admitted credential time before
+returning metadata. This adds enforcement of the existing spec 02 predicate;
+it does not change the imported baseline.
+
+Stage 1a admission recheck (2026-10-18): renew also holds the same per-credential
+admission lock through COMMIT. Without this, another transaction could count an
+old committed expiry after it lapses while a renewal's extension is uncommitted,
+admitting a replacement before the renewal becomes visible. Target expiry is
+checked after acquiring admission, so renew still fences an expired target;
+rebind remains the explicit reactivation path. The lock covers create, renew and
+rebind, and a blocked-minter regression verifies the MVCC interval.
+
+
+Stage 1a service-boundary consolidation (2026-10-18): success responses are
+constructed from the declared wire DTOs, including explicit persistence enum and
+numeric conversions. Heterogeneous durable receipt payloads remain JSON. The
+service's `receipt::execute` owns receipt dispatch, the final original-authority
+time check and fresh receipt storage. `Published::credential` derives a secret-free
+stored DTO and a fresh response from the typed optional secret, which also selects
+no-store; no response-shape probing is used. Route callbacks keep their authority
+predicates, required locks and business mutation explicit. Persistence helpers
+still check their own publication work for direct callers; callers adding further
+waits must guard their final publication point. Receipt lookup is an Id/Key enum,
+with by-key lookup always actor-scoped and host by-ID visibility unchanged.

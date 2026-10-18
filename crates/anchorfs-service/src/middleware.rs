@@ -5,9 +5,13 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+#[derive(Clone, Copy)]
+pub struct RequestStart(pub std::time::Instant);
 #[derive(Clone)]
 pub struct TraceId(pub String);
 pub async fn request(mut req: Request, next: Next) -> Response {
+    req.extensions_mut()
+        .insert(RequestStart(std::time::Instant::now()));
     let trace = uuid::Uuid::new_v4().to_string();
     req.extensions_mut().insert(TraceId(trace.clone()));
     let route = req

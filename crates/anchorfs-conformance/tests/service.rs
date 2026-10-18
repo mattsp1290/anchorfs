@@ -51,7 +51,7 @@ fn fixture(op: &str) -> Value {
     let id = "00000000-0000-4000-8000-000000000001";
     match op {
         "createWorkspace" => {
-            json!({"logical_bytes_limit":1024,"logical_inodes_limit":64,"physical_bytes_limit":1024,"staging_bytes_limit":512})
+            json!({"root_uid":1000,"root_gid":1000,"logical_bytes_limit":1024,"logical_inodes_limit":64,"physical_bytes_limit":1024,"staging_bytes_limit":512})
         }
         "createCredential" => {
             json!({"kind":"host","role":"write","uid":1000,"gid":1000,"workspace_id":id,"max_reservation_bytes":1024})
@@ -243,9 +243,25 @@ async fn openapi_served() {
     assert_eq!(bytes, api_doc::document().to_yaml().unwrap());
 }
 #[tokio::test]
-async fn every_v1_route_returns_not_implemented() {
+async fn implemented_routes_demand_bearer_and_others_return_501() {
     let app = build_router(common::unavailable());
     let doc: Value = serde_json::from_str(&api_doc::document().to_json().unwrap()).unwrap();
+    let implemented = [
+        "createWorkspace",
+        "getWorkspace",
+        "createCredential",
+        "rotateCredential",
+        "revokeCredential",
+        "createSession",
+        "renewSession",
+        "rebindSession",
+        "revokeSession",
+        "getAdminOperation",
+        "findAdminOperation",
+        "getOperation",
+        "findOperation",
+    ];
+    let mut implemented_count = 0;
     let mut count = 0;
     for (path, methods) in doc["paths"].as_object().unwrap() {
         for (method, op) in methods.as_object().unwrap() {
@@ -273,16 +289,36 @@ async fn every_v1_route_returns_not_implemented() {
                 true,
             )
             .await;
-            assert_eq!(status, 501, "{id}: {v}");
-            assert_eq!(v["code"], "not_implemented");
+            let implemented = implemented.contains(&id);
+            assert_eq!(status, if implemented { 401 } else { 501 }, "{id}: {v}");
+            assert_eq!(
+                v["code"],
+                if implemented {
+                    "unauthenticated"
+                } else {
+                    "not_implemented"
+                }
+            );
+            implemented_count += usize::from(implemented);
             count += 1;
         }
     }
     assert_eq!(count, 38);
+    assert_eq!(implemented_count, 13);
 }
 #[tokio::test]
 async fn invalid_body_returns_400_not_501() {
-    let app = build_router(common::unavailable());
+    let app = build_router(common::unavailable()).layer(axum::middleware::from_fn(
+        async |mut req: axum::extract::Request, next: axum::middleware::Next| {
+            req.headers_mut().insert(
+                "Authorization",
+                format!("Bearer {}.{}", uuid::Uuid::new_v4(), "a".repeat(64))
+                    .parse()
+                    .unwrap(),
+            );
+            next.run(req).await
+        },
+    ));
     let doc: Value = serde_json::from_str(&api_doc::document().to_json().unwrap()).unwrap();
     let mut json_count = 0;
     let mut key_count = 0;
@@ -477,6 +513,10 @@ async fn session_and_workflow_wire_bindings_are_validated() {
                 let mut req = Request::builder()
                     .method(method.to_uppercase().as_str())
                     .uri(uri(path, op))
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}.{}", uuid::Uuid::new_v4(), "a".repeat(64)),
+                    )
                     .header("Idempotency-Key", "wire-test")
                     .header(
                         "content-type",
@@ -534,6 +574,8 @@ async fn session_and_workflow_wire_bindings_are_validated() {
                 response.status(),
                 if ["renewWorkflowLease", "releaseWorkflowLease"].contains(&id) {
                     400
+                } else if ["renewSession", "rebindSession", "revokeSession"].contains(&id) {
+                    401
                 } else {
                     501
                 },

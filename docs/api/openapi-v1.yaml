@@ -5,7 +5,7 @@ info:
   license:
     name: MIT
     identifier: MIT
-  version: 1.0.0-stage0
+  version: 1.0.0-stage1a
 paths:
   /v1/workspaces:
     post:
@@ -25,7 +25,7 @@ paths:
         required: true
       responses:
         '201':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workspace metadata
           content:
             application/json:
               schema:
@@ -92,7 +92,7 @@ paths:
           format: uuid
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workspace metadata
           content:
             application/json:
               schema:
@@ -153,7 +153,7 @@ paths:
         required: true
       responses:
         '201':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed credential authority change
           content:
             application/json:
               schema:
@@ -226,7 +226,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed credential authority change
           content:
             application/json:
               schema:
@@ -299,7 +299,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed credential authority change
           content:
             application/json:
               schema:
@@ -378,7 +378,7 @@ paths:
         required: true
       responses:
         '201':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed session authority change
           content:
             application/json:
               schema:
@@ -493,7 +493,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed session authority change
           content:
             application/json:
               schema:
@@ -614,7 +614,7 @@ paths:
         required: true
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed session authority change
           content:
             application/json:
               schema:
@@ -729,7 +729,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed session authority change
           content:
             application/json:
               schema:
@@ -2554,7 +2554,7 @@ paths:
           format: uuid
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workspace receipt or expired tombstone
           content:
             application/json:
               schema:
@@ -2614,7 +2614,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workspace receipt or expired tombstone
           content:
             application/json:
               schema:
@@ -3072,7 +3072,7 @@ paths:
           format: uuid
       responses:
         '200':
-          description: Future credential-scoped receipt, including expired tombstone
+          description: Credential-scoped receipt, including expired tombstone
           content:
             application/json:
               schema:
@@ -3120,7 +3120,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future credential-scoped receipt, including expired tombstone
+          description: Credential-scoped receipt, including expired tombstone
           content:
             application/json:
               schema:
@@ -3865,11 +3865,27 @@ components:
     CreateWorkspace:
       type: object
       required:
+      - root_uid
+      - root_gid
       - logical_bytes_limit
       - logical_inodes_limit
       - physical_bytes_limit
       - staging_bytes_limit
       properties:
+        root_uid:
+          type: integer
+          format: int32
+          minimum: 0
+        root_gid:
+          type: integer
+          format: int32
+          minimum: 0
+        root_mode:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          minimum: 0
         logical_bytes_limit:
           type: integer
           format: int64
@@ -4072,7 +4088,6 @@ components:
       required:
       - operation_id
       - credential_id
-      - secret
       - credential_epoch
       properties:
         operation_id:
@@ -4082,7 +4097,10 @@ components:
           type: string
           format: uuid
         secret:
-          type: string
+          type:
+          - string
+          - 'null'
+          description: Present on the initial response; receipt replays return null.
         credential_epoch:
           type: integer
           format: int64

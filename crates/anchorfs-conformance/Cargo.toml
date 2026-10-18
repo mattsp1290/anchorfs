@@ -30,3 +30,7 @@ bytes.workspace = true
 rand.workspace = true
 uuid.workspace = true
 futures-core.workspace = true
+
+async-trait.workspace = true
+sqlx.workspace = true
+time.workspace = true

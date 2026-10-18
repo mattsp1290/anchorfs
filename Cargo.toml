@@ -38,7 +38,7 @@ reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.154" }
 sha2 = { version = "=0.11.1" }
-sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "uuid", "time", "migrate", "macros", "derive"] }
+sqlx = { version = "=0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "uuid", "time", "migrate", "macros", "derive", "json"] }
 testcontainers-modules = { version = "=0.15.0", features = ["postgres"] }
 testcontainers = { version = "=0.27.3" }
 thiserror = { version = "=2.0.21" }

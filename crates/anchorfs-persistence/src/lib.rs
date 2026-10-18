@@ -4,3 +4,9 @@ pub mod migrate;
 pub mod pool;
 pub mod rows;
 pub mod settings;
+
+pub mod authority;
+pub mod credentials;
+pub mod receipts;
+pub mod sessions;
+pub mod workspaces;

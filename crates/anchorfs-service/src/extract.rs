@@ -179,3 +179,85 @@ fn query_is_utf8(query: &str) -> bool {
     }
     std::str::from_utf8(&decoded).is_ok()
 }
+
+/// Parse the bearer grammar only; transactions verify the proof under a row lock.
+pub struct Bearer(pub anchorfs_core::CredentialProof);
+impl<S: Send + Sync> FromRequestParts<S> for Bearer {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        let presented = parts
+            .headers
+            .contains_key(axum::http::header::AUTHORIZATION);
+        let proof = parts
+            .headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split_once(' '))
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+            .and_then(|(_, value)| value.parse().ok());
+        proof.map(Self).ok_or_else(|| {
+            let mut error = ApiError::new(anchorfs_core::ErrorCode::Unauthenticated, trace(parts));
+            error.token_presented = presented;
+            error
+        })
+    }
+}
+
+/// Request timing and trace travel together through control-plane handlers.
+pub struct RequestContext {
+    pub trace: TraceId,
+    pub start: crate::middleware::RequestStart,
+}
+impl<S: Send + Sync> FromRequestParts<S> for RequestContext {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self {
+            trace: parts
+                .extensions
+                .get::<TraceId>()
+                .expect("trace middleware")
+                .clone(),
+            start: *parts
+                .extensions
+                .get::<crate::middleware::RequestStart>()
+                .expect("timing middleware"),
+        })
+    }
+}
+
+#[cfg(test)]
+mod bearer_tests {
+    use super::*;
+    #[tokio::test]
+    async fn bearer_grammar_and_challenges() {
+        use axum::{
+            http::{Request, StatusCode},
+            response::IntoResponse,
+        };
+        let valid = format!("bearer {}.{}", uuid::Uuid::new_v4(), "a".repeat(64));
+        for (header, accepted, challenge) in [
+            (None, false, "Bearer"),
+            (Some("Basic abc"), false, "Bearer error=\"invalid_token\""),
+            (
+                Some("Bearer missing-dot"),
+                false,
+                "Bearer error=\"invalid_token\"",
+            ),
+            (Some(valid.as_str()), true, ""),
+        ] {
+            let mut request = Request::builder();
+            if let Some(header) = header {
+                request = request.header("Authorization", header);
+            }
+            let (mut parts, _) = request.body(()).unwrap().into_parts();
+            parts.extensions.insert(TraceId("synthetic".into()));
+            let result = Bearer::from_request_parts(&mut parts, &()).await;
+            assert_eq!(result.is_ok(), accepted);
+            if let Err(error) = result {
+                let response = error.into_response();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                assert_eq!(response.headers()["WWW-Authenticate"], challenge);
+            }
+        }
+    }
+}
