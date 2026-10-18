@@ -5,6 +5,7 @@ use utoipa_axum::router::OpenApiRouter;
 pub type ProbeCache = Arc<tokio::sync::Mutex<Option<(std::time::Instant, Result<(), String>)>>>;
 #[derive(Clone)]
 pub struct AppState {
+    pub control_permits: Arc<tokio::sync::Semaphore>,
     pub pool: anchorfs_persistence::pool::PgPool,
     pub config: Arc<Config>,
     pub backend: Arc<dyn anchorfs_backend::traits::ObjectBackend>,
@@ -170,6 +171,7 @@ mod tests {
             config.metadata_call_deadline = Duration::from_millis(metadata);
             config.data_call_deadline = Duration::from_millis(data);
             let state = AppState {
+                control_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(6)),
                 pool: anchorfs_persistence::pool::PgPool::connect_lazy(
                     "postgres://unused:unused@127.0.0.1:1/unused",
                 )

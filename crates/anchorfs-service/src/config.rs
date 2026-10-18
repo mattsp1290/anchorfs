@@ -12,6 +12,10 @@ pub struct Config {
     pub listen_addr: SocketAddr,
     pub durability_profile: DurabilityProfile,
     pub db_max_connections: u32,
+    pub client_session_ttl: Duration,
+    pub receipt_retention: Duration,
+    pub db_lock_timeout: Duration,
+    pub max_sessions_per_credential: u32,
     pub metadata_call_deadline: Duration,
     pub data_call_deadline: Duration,
     pub shutdown_drain: Duration,
@@ -61,6 +65,10 @@ impl Config {
             listen_addr: "127.0.0.1:8080".parse().expect("static address"),
             durability_profile: DurabilityProfile::Durable,
             db_max_connections: 8,
+            client_session_ttl: timers.client_session_ttl,
+            receipt_retention: timers.receipt_retention,
+            db_lock_timeout: Duration::from_secs(30),
+            max_sessions_per_credential: limits.max_sessions_per_credential,
             metadata_call_deadline: timers.metadata_call_deadline,
             data_call_deadline: timers.data_call_deadline,
             shutdown_drain: timers.shutdown_drain,
@@ -125,6 +133,18 @@ impl Config {
             "METADATA_CALL_DEADLINE_MS",
             c.metadata_call_deadline.as_millis() as u64,
         )?);
+        c.client_session_ttl = Duration::from_millis(parse(
+            "CLIENT_SESSION_TTL_MS",
+            c.client_session_ttl.as_millis() as u64,
+        )?);
+        c.receipt_retention = Duration::from_millis(parse(
+            "RECEIPT_RETENTION_MS",
+            c.receipt_retention.as_millis() as u64,
+        )?);
+        c.db_lock_timeout = Duration::from_millis(parse(
+            "DB_LOCK_TIMEOUT_MS",
+            c.db_lock_timeout.as_millis() as u64,
+        )?);
         c.data_call_deadline = Duration::from_millis(parse(
             "DATA_CALL_DEADLINE_MS",
             c.data_call_deadline.as_millis() as u64,
@@ -139,7 +159,10 @@ impl Config {
             "DEPLOYMENT_STAGING_BYTES_LIMIT",
             c.deployment_staging_bytes_limit,
         )?;
-        if c.db_max_connections == 0
+        if c.client_session_ttl.is_zero()
+            || c.receipt_retention.is_zero()
+            || c.db_lock_timeout.is_zero()
+            || c.db_max_connections == 0
             || c.metadata_call_deadline.is_zero()
             || c.data_call_deadline.is_zero()
             || c.max_request_bytes == 0
@@ -206,6 +229,35 @@ impl Config {
             _ => return Err(invalid("S3_CREDENTIAL_SOURCE")),
         };
         c.s3.validate().map_err(|_| invalid("S3_CONFIG"))?;
+        Ok(c)
+    }
+    /// Bootstrap needs metadata configuration only, without listener or backend credentials.
+    pub fn bootstrap_from_env() -> Result<Self, ConfigError> {
+        let mut c = Self::contract_defaults();
+        c.database_url = Secret::new(value("DATABASE_URL").ok_or_else(|| invalid("DATABASE_URL"))?);
+        c.deployment_id =
+            DeploymentId::parse(value("DEPLOYMENT_ID").ok_or_else(|| invalid("DEPLOYMENT_ID"))?)
+                .map_err(|_| invalid("DEPLOYMENT_ID"))?;
+        c.durability_profile = match value("DURABILITY_PROFILE").as_deref().unwrap_or("durable") {
+            "durable" => DurabilityProfile::Durable,
+            "development" => DurabilityProfile::Development,
+            _ => return Err(invalid("DURABILITY_PROFILE")),
+        };
+        c.db_max_connections = parse("DB_MAX_CONNECTIONS", c.db_max_connections)?;
+        c.deployment_physical_bytes_limit = parse(
+            "DEPLOYMENT_PHYSICAL_BYTES_LIMIT",
+            c.deployment_physical_bytes_limit,
+        )?;
+        c.deployment_staging_bytes_limit = parse(
+            "DEPLOYMENT_STAGING_BYTES_LIMIT",
+            c.deployment_staging_bytes_limit,
+        )?;
+        if c.db_max_connections == 0
+            || c.deployment_physical_bytes_limit <= 0
+            || c.deployment_staging_bytes_limit <= 0
+        {
+            return Err(invalid("LIMITS"));
+        }
         Ok(c)
     }
     pub fn pool_config(&self) -> PoolConfig {

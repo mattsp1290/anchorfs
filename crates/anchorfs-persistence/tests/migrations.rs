@@ -547,3 +547,203 @@ async fn expired_receipts_retain_identity_and_referenced_state() {
     assert!(admin_key.is_some());
     assert_db(sqlx::query("INSERT INTO admin_operations SELECT $1,credential_id,credential_epoch_at_start,idempotency_key,op_type,request_digest,owner_token,heartbeat_at,state,result,created_at,committed_at,expires_at FROM admin_operations LIMIT 1").bind(Uuid::new_v4()).execute(&db.pool).await.unwrap_err(),"23505","admin_operations_credential_id_idempotency_key_key");
 }
+
+#[tokio::test]
+async fn authority_load_rejects_wrong_secret_revoked_and_expired() {
+    use anchorfs_core::{CredentialId, CredentialProof, random_token, secret_hash};
+    use anchorfs_persistence::authority::{self, AuthorityError, LockMode};
+    let db = Database::migrated().await;
+    let id = CredentialId::new();
+    let secret = random_token();
+    sqlx::query("INSERT INTO credentials (id,kind,role,uid,gid,secret_hash,max_reservation_bytes,created_at) VALUES ($1,'administrator','admin',1,2,$2,4096,now())")
+        .bind(id.0).bind(secret_hash(secret.expose()).0.as_slice()).execute(&db.pool).await.unwrap();
+    let proof = CredentialProof { id, secret };
+    let mut tx = db.pool.begin().await.unwrap();
+    assert_eq!(
+        authority::load_actor(&mut tx, &proof, LockMode::Share)
+            .await
+            .unwrap()
+            .uid,
+        1
+    );
+    let wrong = CredentialProof {
+        id,
+        secret: random_token(),
+    };
+    assert!(matches!(
+        authority::load_actor(&mut tx, &wrong, LockMode::Share).await,
+        Err(AuthorityError::Unauthenticated)
+    ));
+    tx.rollback().await.unwrap();
+    for assignment in [
+        "expires_at=clock_timestamp()-interval '1 second'",
+        "expires_at=NULL,revoked_at=clock_timestamp()",
+    ] {
+        // Fixed synthetic assignments; no request-derived SQL fragments.
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE credentials SET {assignment} WHERE id=$1"
+        )))
+        .bind(id.0)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let mut tx = db.pool.begin().await.unwrap();
+        assert!(matches!(
+            authority::load_actor(&mut tx, &proof, LockMode::Share).await,
+            Err(AuthorityError::Unauthenticated)
+        ));
+        tx.rollback().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn receipt_begin_replays_mismatches_and_tombstones() {
+    use anchorfs_core::CredentialId;
+    use anchorfs_persistence::receipts::{
+        self, ReceiptEntry, ReceiptFilter, ReceiptRequest, ReceiptScope,
+    };
+    let db = Database::migrated().await;
+    let fixture = fixture(&db.pool).await;
+    let scope = ReceiptScope::Admin {
+        credential: CredentialId(fixture.host),
+    };
+    let request = |digest| ReceiptRequest {
+        key: "new-key",
+        op_type: "session_create",
+        digest,
+        credential_epoch: 1,
+        retention: Duration::from_secs(3600),
+        wait_bound: Duration::from_secs(1),
+    };
+    let mut tx = db.pool.begin().await.unwrap();
+    let ReceiptEntry::Fresh(id) = receipts::begin(&mut tx, scope, request([1; 32]))
+        .await
+        .unwrap()
+    else {
+        panic!("fresh receipt expected");
+    };
+    let result = serde_json::json!({"published": true});
+    receipts::commit_result(&mut tx, scope, id, &result)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let mut tx = db.pool.begin().await.unwrap();
+    assert!(
+        matches!(receipts::begin(&mut tx, scope, request([1;32])).await.unwrap(), ReceiptEntry::Replay { operation_id, result: r } if operation_id == id && r == result)
+    );
+    assert!(
+        matches!(receipts::begin(&mut tx, scope, request([2;32])).await.unwrap(), ReceiptEntry::Mismatch { operation_id } if operation_id == id)
+    );
+    tx.commit().await.unwrap();
+    sqlx::query(
+        "UPDATE admin_operations SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",
+    )
+    .bind(id.0)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let mut tx = db.pool.begin().await.unwrap();
+    let filter = ReceiptFilter {
+        workspace: None,
+        credential: CredentialId(fixture.host),
+        allow_workspace_actors: false,
+    };
+    let view = receipts::read_by_key(&mut tx, filter, "new-key")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(view.state, "indeterminate");
+    assert_eq!(view.result, None);
+    tx.commit().await.unwrap();
+    let persisted: (String, Option<serde_json::Value>, Uuid, String) = sqlx::query_as(
+        "SELECT state,result,credential_id,idempotency_key FROM admin_operations WHERE id=$1",
+    )
+    .bind(id.0)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        persisted,
+        ("indeterminate".into(), None, fixture.host, "new-key".into())
+    );
+    let mut tx = db.pool.begin().await.unwrap();
+    assert!(
+        matches!(receipts::begin(&mut tx, scope, request([1;32])).await.unwrap(), ReceiptEntry::Expired { operation_id } if operation_id == id)
+    );
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn receipt_duplicate_insert_waits_for_owner() {
+    use anchorfs_core::CredentialId;
+    use anchorfs_persistence::receipts::{
+        self, ReceiptEntry, ReceiptError, ReceiptRequest, ReceiptScope,
+    };
+    let db = Database::migrated().await;
+    let fixture = fixture(&db.pool).await;
+    let scope = ReceiptScope::Admin {
+        credential: CredentialId(fixture.host),
+    };
+    for outcome in ["commit", "rollback", "timeout"] {
+        let request = |wait_bound| ReceiptRequest {
+            key: outcome,
+            op_type: "session_create",
+            digest: [3; 32],
+            credential_epoch: 1,
+            retention: Duration::from_secs(3600),
+            wait_bound,
+        };
+        let mut owner = db.pool.begin().await.unwrap();
+        let ReceiptEntry::Fresh(id) =
+            receipts::begin(&mut owner, scope, request(Duration::from_secs(5)))
+                .await
+                .unwrap()
+        else {
+            panic!("fresh receipt expected");
+        };
+        receipts::commit_result(&mut owner, scope, id, &serde_json::json!({"ok":true}))
+            .await
+            .unwrap();
+        let mut waiter = db.pool.begin().await.unwrap();
+        if outcome == "timeout" {
+            let start = std::time::Instant::now();
+            assert!(matches!(
+                receipts::begin(&mut waiter, scope, request(Duration::from_millis(200))).await,
+                Err(ReceiptError::PendingOwner)
+            ));
+            assert!(start.elapsed() < Duration::from_millis(1200));
+            let error = sqlx::query("SELECT 1")
+                .execute(&mut *waiter)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.as_database_error().unwrap().code().as_deref(),
+                Some("25P02")
+            );
+            waiter.rollback().await.unwrap();
+            owner.rollback().await.unwrap();
+            continue;
+        }
+        let future = receipts::begin(&mut waiter, scope, request(Duration::from_secs(5)));
+        tokio::pin!(future);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), &mut future)
+                .await
+                .is_err()
+        );
+        if outcome == "commit" {
+            owner.commit().await.unwrap();
+        } else {
+            owner.rollback().await.unwrap();
+        }
+        let entry = future.await.unwrap();
+        if outcome == "commit" {
+            assert!(
+                matches!(entry, ReceiptEntry::Replay { operation_id, .. } if operation_id == id)
+            );
+        } else {
+            assert!(matches!(entry, ReceiptEntry::Fresh(_)));
+        }
+        // waiter rolls back when dropped, after the borrowed future is dropped.
+    }
+}

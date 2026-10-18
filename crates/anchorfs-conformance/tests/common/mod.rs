@@ -75,6 +75,9 @@ pub fn state_with(pool: PgPool, s3: anchorfs_backend::config::S3Config) -> AppSt
     config.deployment_id = s3.deployment_id.clone();
     config.s3 = s3;
     AppState {
+        control_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(
+            config.db_max_connections.saturating_sub(2).max(1) as usize,
+        )),
         pool,
         backend: Arc::new(anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap()),
         probe_cache: Default::default(),

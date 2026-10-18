@@ -1,0 +1,2 @@
+DROP INDEX client_sessions_credential_active_idx;
+DROP INDEX credentials_issued_by_idx;

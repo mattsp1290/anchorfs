@@ -4,3 +4,6 @@ pub mod migrate;
 pub mod pool;
 pub mod rows;
 pub mod settings;
+
+pub mod authority;
+pub mod receipts;

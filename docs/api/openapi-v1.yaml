@@ -5,7 +5,7 @@ info:
   license:
     name: MIT
     identifier: MIT
-  version: 1.0.0-stage0
+  version: 1.0.0-stage1a
 paths:
   /v1/workspaces:
     post:

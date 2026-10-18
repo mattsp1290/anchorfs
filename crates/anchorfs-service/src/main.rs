@@ -94,6 +94,9 @@ async fn serve() -> Result<(), (i32, String)> {
     );
     let drain = config.shutdown_drain;
     let state = AppState {
+        control_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(
+            config.db_max_connections.saturating_sub(2).max(1) as usize,
+        )),
         pool: pool.clone(),
         backend: std::sync::Arc::new(backend),
         probe_cache: Default::default(),

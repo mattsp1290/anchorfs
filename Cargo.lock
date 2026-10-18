@@ -90,6 +90,7 @@ name = "anchorfs-persistence"
 version = "0.1.0"
 dependencies = [
  "anchorfs-core",
+ "serde_json",
  "sqlx",
  "testcontainers",
  "testcontainers-modules",
@@ -115,6 +116,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sqlx",
  "testcontainers",
  "testcontainers-modules",
  "time",
