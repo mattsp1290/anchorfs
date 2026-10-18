@@ -47,6 +47,7 @@ pub struct S3Backend {
     prefix: String,
     checksum_mode: ChecksumMode,
     max_object_bytes: u64,
+    request_timeout: std::time::Duration,
 }
 /// Delay chain construction and credential resolution until an actual request.
 #[derive(Debug)]
@@ -152,6 +153,7 @@ impl S3Backend {
             prefix: ObjectKey::deployment_prefix(&config.deployment_id),
             checksum_mode: config.checksum_mode,
             max_object_bytes: u64::from(Limits::default().chunk_size),
+            request_timeout: config.request_timeout,
         })
     }
     pub fn client(&self) -> &aws_sdk_s3::Client {
@@ -288,6 +290,7 @@ impl ObjectBackend for S3Backend {
             return Err(BackendError::InvalidRange);
         }
         let size = range.end - range.start;
+        let deadline = tokio::time::Instant::now() + self.request_timeout;
         let r = self
             .client
             .get_object()
@@ -311,7 +314,9 @@ impl ObjectBackend for S3Backend {
         {
             return Err(BackendError::IntegrityMismatch);
         }
-        let body = collect_bounded(r.body, size).await?;
+        let body = tokio::time::timeout_at(deadline, collect_bounded(r.body, size))
+            .await
+            .map_err(|_| BackendError::Timeout)??;
         if body.len() as u64 != size {
             return Err(BackendError::IntegrityMismatch);
         }
@@ -330,6 +335,7 @@ impl ObjectBackend for S3Backend {
         if expected_length > self.max_object_bytes {
             return Err(BackendError::ObjectTooLarge);
         }
+        let deadline = tokio::time::Instant::now() + self.request_timeout;
         let r = self
             .client
             .get_object()
@@ -343,7 +349,9 @@ impl ObjectBackend for S3Backend {
         {
             return Err(BackendError::IntegrityMismatch);
         }
-        let body = collect_bounded(r.body, expected_length).await?;
+        let body = tokio::time::timeout_at(deadline, collect_bounded(r.body, expected_length))
+            .await
+            .map_err(|_| BackendError::Timeout)??;
         if body.len() as u64 != expected_length || sha256(&body) != expected_sha256 {
             return Err(BackendError::IntegrityMismatch);
         }

@@ -588,16 +588,51 @@ async fn readyz_probe_result_is_memoized() {
     let proxy = common::proxy::Proxy::start(&minio.endpoint).await;
     let mut config = common::minio_s3(&minio);
     config.endpoint = proxy.endpoint.clone();
-    let app = build_router(common::state_with(pool, config));
+    let app = build_router(common::state_with(pool.clone(), config));
+    proxy.script_for(
+        common::proxy::is_list,
+        [common::proxy::Fault::Delay(
+            std::time::Duration::from_millis(100),
+        )],
+    );
+    let (first, second) = tokio::join!(
+        call(app.clone(), "GET", "/readyz", vec![], "", false),
+        call(app.clone(), "GET", "/readyz", vec![], "", false),
+    );
+    assert_eq!(first.0, 200);
+    assert_eq!(second.0, 200);
+    assert_eq!(call(app, "GET", "/readyz", vec![], "", false).await.0, 200);
+    assert_eq!(proxy.count(common::proxy::is_list), 1);
+    // A separate scripted proxy isolates failure caching from the success window.
+    let proxy = common::proxy::Proxy::start(&minio.endpoint).await;
+    proxy.script_for(
+        common::proxy::is_list,
+        [
+            common::proxy::Fault::Status {
+                status: 503,
+                code: "ServiceUnavailable",
+            },
+            common::proxy::Fault::Pass,
+        ],
+    );
+    let mut config = common::minio_s3(&minio);
+    config.endpoint = proxy.endpoint.clone();
+    let state = common::state_with(pool, config);
+    let app = build_router(state.clone());
     for _ in 0..2 {
         assert_eq!(
             call(app.clone(), "GET", "/readyz", vec![], "", false)
                 .await
                 .0,
-            200
+            503
         );
     }
     assert_eq!(proxy.count(common::proxy::is_list), 1);
+    // Age the memo directly so this test controls expiry without a wall-clock race.
+    state.probe_cache.lock().await.as_mut().unwrap().0 =
+        std::time::Instant::now() - std::time::Duration::from_secs(2);
+    assert_eq!(call(app, "GET", "/readyz", vec![], "", false).await.0, 200);
+    assert_eq!(proxy.count(common::proxy::is_list), 2);
 }
 #[tokio::test]
 async fn readyz_backend_probe_deadline() {

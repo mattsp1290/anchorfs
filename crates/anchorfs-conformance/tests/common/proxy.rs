@@ -34,6 +34,11 @@ pub enum Fault {
     },
     Delay(Duration),
     DelayForward(Duration),
+    /// Flush a first chunk, then pause between subsequent chunks.
+    ThrottleBody {
+        chunk_size: usize,
+        interval: Duration,
+    },
     SwallowResponse,
     DropRequest,
     TruncateBody {
@@ -295,6 +300,18 @@ async fn handler(State(state): State<ProxyState>, request: Request<Body>) -> Res
                                     delay: Box::pin(tokio::time::sleep(Duration::from_millis(50))),
                                 })
                             }
+                            Fault::ThrottleBody {
+                                chunk_size,
+                                interval,
+                            } => {
+                                assert!(chunk_size > 0);
+                                Body::from_stream(ThrottledStream {
+                                    bytes,
+                                    chunk_size,
+                                    interval,
+                                    delay: None,
+                                })
+                            }
                             Fault::StripResponseHeader { name } => {
                                 headers.remove(name);
                                 Body::from(bytes)
@@ -348,5 +365,29 @@ impl futures_core::Stream for AbortStream {
         } else {
             Poll::Ready(None)
         }
+    }
+}
+
+struct ThrottledStream {
+    bytes: Bytes,
+    chunk_size: usize,
+    interval: Duration,
+    delay: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+impl futures_core::Stream for ThrottledStream {
+    type Item = Result<Bytes, io::Error>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.bytes.is_empty() {
+            return Poll::Ready(None);
+        }
+        if let Some(delay) = &mut self.delay
+            && delay.as_mut().poll(cx).is_pending()
+        {
+            return Poll::Pending;
+        }
+        let size = self.chunk_size.min(self.bytes.len());
+        let chunk = self.bytes.split_to(size);
+        self.delay = Some(Box::pin(tokio::time::sleep(self.interval)));
+        Poll::Ready(Some(Ok(chunk)))
     }
 }

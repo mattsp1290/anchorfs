@@ -770,3 +770,100 @@ async fn endpoint_prefix_and_range_edges() {
         assert_eq!(raw_get(&raw, key.as_str()).await.unwrap(), bytes);
     }
 }
+
+#[tokio::test]
+async fn streaming_bodies_share_the_request_deadline() {
+    let minio = start().await;
+    let raw = raw_client(&minio.endpoint).await;
+    let bytes = data(10_000);
+    let stall = Fault::ThrottleBody {
+        chunk_size: 1,
+        interval: Duration::from_secs(3),
+    };
+    let trickle = Fault::ThrottleBody {
+        chunk_size: 1,
+        interval: Duration::from_millis(200),
+    };
+    let deployment = deployment();
+    let proxy = Proxy::start(&minio.endpoint).await;
+    let backend = S3Backend::from_config(&backend_config(
+        &proxy.endpoint,
+        deployment.clone(),
+        ChecksumMode::Sha256,
+        Duration::from_secs(1),
+        0,
+    ))
+    .unwrap();
+    let key = key(&deployment);
+    backend
+        .put(&key, bytes.clone(), sha256(&bytes))
+        .await
+        .unwrap();
+    proxy.script_for(
+        is_get_object,
+        [stall.clone(), stall.clone(), trickle.clone(), trickle],
+    );
+    for _ in 0..2 {
+        let start = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            backend.get_verified(&key, sha256(&bytes), bytes.len() as u64),
+        )
+        .await
+        .expect("verified read must finish within its own budget");
+        assert_eq!(result, Err(BackendError::Timeout));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        let start = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            backend.get_range(&key, 0..bytes.len() as u64),
+        )
+        .await
+        .expect("range read must finish within its own budget");
+        assert_eq!(result, Err(BackendError::Timeout));
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    assert_eq!(proxy.count(is_get_object), 4);
+    assert_eq!(raw_get(&raw, key.as_str()).await.unwrap(), bytes);
+    // Both success-without-echo and ambiguous upload reconciliation depend on verified GET.
+    for mode in MODES {
+        let deployment = minio::deployment();
+        let proxy = Proxy::start(&minio.endpoint).await;
+        proxy.script_for(
+            is_put,
+            [if mode == ChecksumMode::Sha256 {
+                Fault::StripResponseHeader {
+                    name: "x-amz-checksum-sha256",
+                }
+            } else {
+                Fault::ForwardThenStatus { status: 502 }
+            }],
+        );
+        proxy.script_for(is_get_object, [stall.clone()]);
+        let backend = S3Backend::from_config(&backend_config(
+            &proxy.endpoint,
+            deployment.clone(),
+            mode,
+            Duration::from_secs(1),
+            0,
+        ))
+        .unwrap();
+        let key = ObjectKey::new(&deployment, WorkspaceId::new(), ObjectId::new());
+        let start = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            backend.put(&key, bytes.clone(), sha256(&bytes)),
+        )
+        .await
+        .expect("PUT read-back must finish boundedly");
+        assert_eq!(result, Err(BackendError::Timeout));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert_eq!(proxy.count(is_put), 1);
+        assert_eq!(proxy.count(is_get_object), 1);
+        assert_eq!(
+            proxy.count(is_head_object),
+            usize::from(mode == ChecksumMode::None)
+        );
+        assert_eq!(raw_get(&raw, key.as_str()).await.unwrap(), bytes);
+    }
+}
