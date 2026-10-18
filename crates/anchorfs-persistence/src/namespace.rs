@@ -74,6 +74,9 @@ pub async fn lock(
     })
 }
 impl NamespaceGuard {
+    pub fn workspace(&self) -> WorkspaceId {
+        self.workspace
+    }
     pub fn generation(&self) -> i64 {
         self.generation + i64::from(self.bumped.load(Ordering::Relaxed))
     }

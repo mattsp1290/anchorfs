@@ -2036,7 +2036,7 @@ paths:
         required: true
       responses:
         '201':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed handle lifecycle
           content:
             application/json:
               schema:
@@ -2151,7 +2151,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed handle lifecycle
           content:
             application/json:
               schema:
@@ -2266,7 +2266,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed handle lifecycle
           content:
             application/json:
               schema:
@@ -4157,7 +4157,6 @@ components:
       - create
       - exclusive
       - truncate
-      - mode
       properties:
         path:
           type: string
@@ -4172,7 +4171,9 @@ components:
         truncate:
           type: boolean
         mode:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int32
           minimum: 0
     OperationStateDto:

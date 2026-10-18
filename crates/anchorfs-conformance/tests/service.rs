@@ -1,3 +1,31 @@
+const IMPLEMENTED: &[&str] = &[
+    "createWorkspace",
+    "getWorkspace",
+    "createCredential",
+    "rotateCredential",
+    "revokeCredential",
+    "createSession",
+    "renewSession",
+    "rebindSession",
+    "revokeSession",
+    "getAdminOperation",
+    "findAdminOperation",
+    "getOperation",
+    "findOperation",
+    "createDirectory",
+    "removeDirectory",
+    "unlink",
+    "createLink",
+    "createSymlink",
+    "rename",
+    "setAttributes",
+    "statPath",
+    "listDirectory",
+    "readSymlink",
+    "openHandle",
+    "renewHandle",
+    "closeHandle",
+];
 mod common;
 use anchorfs_persistence::settings::DurabilityProfile;
 use anchorfs_service::{api_doc, app::build_router};
@@ -248,31 +276,7 @@ async fn openapi_served() {
 async fn implemented_routes_demand_bearer_and_others_return_501() {
     let app = build_router(common::unavailable());
     let doc: Value = serde_json::from_str(&api_doc::document().to_json().unwrap()).unwrap();
-    let implemented = [
-        "createWorkspace",
-        "getWorkspace",
-        "createCredential",
-        "rotateCredential",
-        "revokeCredential",
-        "createSession",
-        "renewSession",
-        "rebindSession",
-        "revokeSession",
-        "getAdminOperation",
-        "findAdminOperation",
-        "getOperation",
-        "findOperation",
-        "createDirectory",
-        "removeDirectory",
-        "unlink",
-        "createLink",
-        "createSymlink",
-        "rename",
-        "setAttributes",
-        "statPath",
-        "listDirectory",
-        "readSymlink",
-    ];
+    let implemented = IMPLEMENTED;
     let mut implemented_count = 0;
     let mut count = 0;
     for (path, methods) in doc["paths"].as_object().unwrap() {
@@ -316,7 +320,7 @@ async fn implemented_routes_demand_bearer_and_others_return_501() {
         }
     }
     assert_eq!(count, 38);
-    assert_eq!(implemented_count, 23);
+    assert_eq!(implemented_count, 26);
 }
 #[tokio::test]
 async fn invalid_body_returns_400_not_501() {
@@ -597,23 +601,7 @@ async fn session_and_workflow_wire_bindings_are_validated() {
                 response.status(),
                 if ["renewWorkflowLease", "releaseWorkflowLease"].contains(&id) {
                     400
-                } else if [
-                    "renewSession",
-                    "rebindSession",
-                    "revokeSession",
-                    "createDirectory",
-                    "removeDirectory",
-                    "unlink",
-                    "createLink",
-                    "createSymlink",
-                    "rename",
-                    "setAttributes",
-                    "statPath",
-                    "listDirectory",
-                    "readSymlink",
-                ]
-                .contains(&id)
-                {
+                } else if IMPLEMENTED.contains(&id) {
                     401
                 } else {
                     501

@@ -146,3 +146,16 @@ impl From<anchorfs_persistence::namespace::NamespaceError> for ApiError {
         )
     }
 }
+impl From<anchorfs_persistence::handles::HandleError> for ApiError {
+    fn from(error: anchorfs_persistence::handles::HandleError) -> Self {
+        use anchorfs_persistence::handles::HandleError as H;
+        match error {
+            H::Stale => Self::new(ErrorCode::StaleHandle, ""),
+            H::Limit => Self::new(ErrorCode::QuotaExceeded, ""),
+            H::NotFound => Self::new(ErrorCode::NotFound, ""),
+            H::Namespace(error) => error.into(),
+            H::Quota(error) => error.into(),
+            H::Database(error) => error.into(),
+        }
+    }
+}

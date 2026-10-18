@@ -1,4 +1,6 @@
 mod common;
+#[path = "namespace_tx/handles.rs"]
+mod handles;
 #[path = "namespace_tx/mutations.rs"]
 mod mutations;
 #[path = "namespace_tx/resolve.rs"]

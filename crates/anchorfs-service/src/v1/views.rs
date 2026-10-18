@@ -95,3 +95,17 @@ pub fn attributes(
         ctime: timestamp(row.ctime),
     })
 }
+pub fn handle(
+    operation: OperationId,
+    handle: &anchorfs_persistence::handles::HandleRow,
+    inode: &anchorfs_persistence::namespace::InodeRow,
+) -> Result<HandleGrant, ApiError> {
+    Ok(HandleGrant {
+        operation_id: operation.0,
+        handle_id: handle.id,
+        attributes: attributes(inode)?,
+        access_read: handle.access_read,
+        access_write: handle.access_write,
+        expires_at: timestamp(handle.expires_at),
+    })
+}

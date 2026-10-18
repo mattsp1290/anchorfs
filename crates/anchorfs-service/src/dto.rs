@@ -161,7 +161,7 @@ pub struct CreateDirectory {
     pub path: String,
     pub mode: u32,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OpenHandle {
     pub path: String,
     pub read: bool,
@@ -169,7 +169,7 @@ pub struct OpenHandle {
     pub create: bool,
     pub exclusive: bool,
     pub truncate: bool,
-    pub mode: u32,
+    pub mode: Option<u32>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct Truncate {
