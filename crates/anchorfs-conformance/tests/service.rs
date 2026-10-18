@@ -101,8 +101,9 @@ fn uri(path: &str, op: &Value) -> String {
 #[tokio::test]
 async fn readyz_ok_on_default_postgres() {
     let (_container, pool, _) = common::database(&[]).await;
+    let minio = common::minio::start().await;
     let (status, v) = call(
-        build_router(common::state(pool)),
+        build_router(common::state_with(pool, common::minio_s3(&minio))),
         "GET",
         "/readyz",
         vec![],
@@ -112,12 +113,14 @@ async fn readyz_ok_on_default_postgres() {
     .await;
     assert_eq!(status, 200);
     assert_eq!(v["schema_version"], 1);
-    assert_eq!(v["backend"], "not_checked");
+    assert_eq!(v["backend"], "ok");
+    assert_eq!(v["checksum_mode"], "sha256");
 }
 #[tokio::test]
 async fn readyz_rejects_fsync_off() {
     let (_container, pool, _) = common::database(&["fsync=off"]).await;
-    let state = common::state(pool);
+    let minio = common::minio::start().await;
+    let state = common::state_with(pool, common::minio_s3(&minio));
     let (status, v) = call(
         build_router(state.clone()),
         "GET",
@@ -539,4 +542,122 @@ async fn session_and_workflow_wire_bindings_are_validated() {
         }
     }
     assert_eq!(covered, 28);
+}
+
+#[tokio::test]
+async fn readyz_backend_unreachable() {
+    let (_db, pool, _) = common::database(&[]).await;
+    let start = std::time::Instant::now();
+    let (status, v) = call(
+        build_router(common::state(pool)),
+        "GET",
+        "/readyz",
+        vec![],
+        "",
+        false,
+    )
+    .await;
+    assert_eq!(status, 503);
+    assert_eq!(v["code"], "dependency_unavailable");
+    assert!(v["message"].as_str().unwrap().starts_with("backend:"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(3));
+}
+#[tokio::test]
+async fn readyz_backend_bucket_missing() {
+    let (_db, pool, _) = common::database(&[]).await;
+    let minio = common::minio::start().await;
+    let mut config = common::minio_s3(&minio);
+    config.bucket = "absent-bucket".into();
+    let (status, v) = call(
+        build_router(common::state_with(pool, config)),
+        "GET",
+        "/readyz",
+        vec![],
+        "",
+        false,
+    )
+    .await;
+    assert_eq!(status, 503);
+    assert_eq!(v["code"], "dependency_unavailable");
+    assert!(v["message"].as_str().unwrap().contains("bucket not found"));
+}
+#[tokio::test]
+async fn readyz_probe_result_is_memoized() {
+    let (_db, pool, _) = common::database(&[]).await;
+    let minio = common::minio::start().await;
+    let proxy = common::proxy::Proxy::start(&minio.endpoint).await;
+    let mut config = common::minio_s3(&minio);
+    config.endpoint = proxy.endpoint.clone();
+    let app = build_router(common::state_with(pool.clone(), config));
+    proxy.script_for(
+        common::proxy::is_list,
+        [common::proxy::Fault::Delay(
+            std::time::Duration::from_millis(100),
+        )],
+    );
+    let (first, second) = tokio::join!(
+        call(app.clone(), "GET", "/readyz", vec![], "", false),
+        call(app.clone(), "GET", "/readyz", vec![], "", false),
+    );
+    assert_eq!(first.0, 200);
+    assert_eq!(second.0, 200);
+    assert_eq!(call(app, "GET", "/readyz", vec![], "", false).await.0, 200);
+    assert_eq!(proxy.count(common::proxy::is_list), 1);
+    // A separate scripted proxy isolates failure caching from the success window.
+    let proxy = common::proxy::Proxy::start(&minio.endpoint).await;
+    proxy.script_for(
+        common::proxy::is_list,
+        [
+            common::proxy::Fault::Status {
+                status: 503,
+                code: "ServiceUnavailable",
+            },
+            common::proxy::Fault::Pass,
+        ],
+    );
+    let mut config = common::minio_s3(&minio);
+    config.endpoint = proxy.endpoint.clone();
+    let state = common::state_with(pool, config);
+    let app = build_router(state.clone());
+    for _ in 0..2 {
+        assert_eq!(
+            call(app.clone(), "GET", "/readyz", vec![], "", false)
+                .await
+                .0,
+            503
+        );
+    }
+    assert_eq!(proxy.count(common::proxy::is_list), 1);
+    // Age the memo directly so this test controls expiry without a wall-clock race.
+    state.probe_cache.lock().await.as_mut().unwrap().0 =
+        std::time::Instant::now() - std::time::Duration::from_secs(2);
+    assert_eq!(call(app, "GET", "/readyz", vec![], "", false).await.0, 200);
+    assert_eq!(proxy.count(common::proxy::is_list), 2);
+}
+#[tokio::test]
+async fn readyz_backend_probe_deadline() {
+    let (_db, pool, _) = common::database(&[]).await;
+    let minio = common::minio::start().await;
+    let proxy = common::proxy::Proxy::start(&minio.endpoint).await;
+    proxy.script_for(
+        common::proxy::is_list,
+        [common::proxy::Fault::Delay(std::time::Duration::from_secs(
+            3,
+        ))],
+    );
+    let mut config = common::minio_s3(&minio);
+    config.endpoint = proxy.endpoint.clone();
+    let mut state = common::state_with(pool, config);
+    Arc::make_mut(&mut state.config).backend_probe_deadline = std::time::Duration::from_millis(100);
+    let start = std::time::Instant::now();
+    let (status, v) = call(build_router(state), "GET", "/readyz", vec![], "", false).await;
+    assert_eq!(status, 503);
+    assert!(
+        v["message"]
+            .as_str()
+            .unwrap()
+            .contains("backend: probe deadline exceeded")
+    );
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(proxy.count(common::proxy::is_list), 1);
 }

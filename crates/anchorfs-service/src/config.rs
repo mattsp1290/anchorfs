@@ -1,4 +1,4 @@
-use anchorfs_backend::config::{Addressing, CredentialSource, S3Config};
+use anchorfs_backend::config::{Addressing, ChecksumMode, CredentialSource, S3Config};
 use anchorfs_core::{DeploymentId, Limits, Secret, Timers, random_token};
 use anchorfs_persistence::{
     meta::DeploymentQuotaConfig, pool::PoolConfig, settings::DurabilityProfile,
@@ -21,6 +21,7 @@ pub struct Config {
     pub deployment_physical_bytes_limit: i64,
     pub deployment_staging_bytes_limit: i64,
     pub s3: S3Config,
+    pub backend_probe_deadline: Duration,
 }
 #[derive(Debug)]
 pub struct ConfigError {
@@ -68,7 +69,9 @@ impl Config {
             cursor_signing_key: Secret::new(String::new()),
             deployment_physical_bytes_limit: 1 << 40,
             deployment_staging_bytes_limit: 1 << 30,
+            backend_probe_deadline: Duration::from_secs(1),
             s3: S3Config {
+                checksum_mode: anchorfs_backend::config::ChecksumMode::Sha256,
                 endpoint: "https://s3.invalid".parse().expect("static URL"),
                 region: "local".into(),
                 addressing: Addressing::Path,
@@ -148,6 +151,18 @@ impl Config {
         {
             return Err(invalid("LIMITS"));
         }
+        c.backend_probe_deadline =
+            Duration::from_millis(parse("BACKEND_PROBE_DEADLINE_MS", 1000u64)?);
+        if !(Duration::from_millis(100)..=Duration::from_secs(1))
+            .contains(&c.backend_probe_deadline)
+        {
+            return Err(invalid("LIMITS"));
+        }
+        c.s3.checksum_mode = match value("S3_CHECKSUM_MODE").as_deref().unwrap_or("sha256") {
+            "sha256" => ChecksumMode::Sha256,
+            "none" => ChecksumMode::None,
+            _ => return Err(invalid("S3_CHECKSUM_MODE")),
+        };
         c.s3.deployment_id = c.deployment_id.clone();
         if let Some(prefix) = value("S3_DEPLOYMENT_PREFIX")
             && prefix != c.deployment_id.as_str()

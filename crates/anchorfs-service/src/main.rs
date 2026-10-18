@@ -49,6 +49,8 @@ async fn main() {
 }
 async fn serve() -> Result<(), (i32, String)> {
     let config = Config::from_env().map_err(|err| (err.code, err.message))?;
+    let backend =
+        anchorfs_backend::s3::S3Backend::from_config(&config.s3).map_err(|e| (2, e.to_string()))?;
     let pool = pool::connect(&config.pool_config())
         .await
         .map_err(|_| (2, "database connection failed".into()))?;
@@ -93,6 +95,8 @@ async fn serve() -> Result<(), (i32, String)> {
     let drain = config.shutdown_drain;
     let state = AppState {
         pool: pool.clone(),
+        backend: std::sync::Arc::new(backend),
+        probe_cache: Default::default(),
         config: config.shared(),
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();

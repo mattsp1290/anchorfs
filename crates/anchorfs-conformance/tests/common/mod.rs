@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+pub mod minio;
+pub mod proxy;
 use anchorfs_core::{DeploymentId, Secret};
 use anchorfs_persistence::{
     meta::{self, DeploymentQuotaConfig},
@@ -48,10 +50,34 @@ pub async fn database(settings: &[&str]) -> (ContainerAsync<Postgres>, PgPool, S
     .unwrap();
     (container, pool, url)
 }
+pub fn unreachable_s3() -> anchorfs_backend::config::S3Config {
+    let mut s3 = Config::contract_defaults().s3;
+    s3.endpoint = "http://127.0.0.1:1".parse().unwrap();
+    s3.allow_plaintext = true;
+    s3.request_timeout = Duration::from_secs(1);
+    s3.max_retries = 0;
+    s3
+}
+pub fn minio_s3(minio: &minio::Minio) -> anchorfs_backend::config::S3Config {
+    minio::backend_config(
+        &minio.endpoint,
+        DeploymentId::parse("test").unwrap(),
+        anchorfs_backend::config::ChecksumMode::Sha256,
+        Duration::from_secs(20),
+        2,
+    )
+}
 pub fn state(pool: PgPool) -> AppState {
-    let config = Config::contract_defaults();
+    state_with(pool, unreachable_s3())
+}
+pub fn state_with(pool: PgPool, s3: anchorfs_backend::config::S3Config) -> AppState {
+    let mut config = Config::contract_defaults();
+    config.deployment_id = s3.deployment_id.clone();
+    config.s3 = s3;
     AppState {
         pool,
+        backend: Arc::new(anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap()),
+        probe_cache: Default::default(),
         config: Arc::new(config),
     }
 }
