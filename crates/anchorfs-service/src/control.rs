@@ -107,6 +107,14 @@ async fn await_job<T>(
         Ok(Err(_)) | Err(_) => Err(unavailable(kind, trace)),
     }
 }
+
+pub fn timestamp(value: time::OffsetDateTime) -> String {
+    value
+        .to_offset(time::UtcOffset::UTC)
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("database timestamp fits RFC3339")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

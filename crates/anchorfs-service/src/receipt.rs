@@ -50,6 +50,59 @@ pub fn replay(status: StatusCode, result: Value) -> Response {
     (status, Json(result)).into_response()
 }
 
+pub enum Start {
+    Fresh(anchorfs_core::OperationId),
+    Complete(Result<Value, crate::error::ApiError>),
+}
+pub async fn begin(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    scope: anchorfs_persistence::receipts::ReceiptScope,
+    request: anchorfs_persistence::receipts::ReceiptRequest<'_>,
+) -> Result<Start, crate::error::ApiError> {
+    use crate::error::ApiError;
+    use anchorfs_core::ErrorCode;
+    use anchorfs_persistence::receipts::{self, ReceiptEntry, ReceiptError};
+    let result = receipts::begin(tx, scope, request).await;
+    match result {
+        Ok(ReceiptEntry::Fresh(id)) => Ok(Start::Fresh(id)),
+        Ok(ReceiptEntry::Replay { result, .. }) => Ok(Start::Complete(Ok(result))),
+        Ok(ReceiptEntry::Mismatch { operation_id })
+        | Ok(ReceiptEntry::Expired { operation_id }) => {
+            let code = if matches!(result, Ok(ReceiptEntry::Mismatch { .. })) {
+                ErrorCode::IdempotencyMismatch
+            } else {
+                ErrorCode::OperationIndeterminate
+            };
+            let mut error = ApiError::new(code, "");
+            error.operation_id = Some(operation_id);
+            Ok(Start::Complete(Err(error)))
+        }
+        Err(ReceiptError::PendingOwner) => {
+            let mut e = ApiError::new(ErrorCode::OutcomeUnknown, "");
+            e.retry_after_ms = Some(100);
+            Err(e)
+        }
+        Err(ReceiptError::Database(error)) => Err(error.into()),
+    }
+}
+/// Commit-first errors carry the route's trace after the outer transaction succeeds.
+pub fn response(
+    result: Result<Result<Value, crate::error::ApiError>, crate::error::ApiError>,
+    status: StatusCode,
+    trace: &str,
+) -> Result<Response, crate::error::ApiError> {
+    let result = result.and_then(|inner| inner);
+    match result {
+        Ok(value) => Ok(replay(status, value)),
+        Err(mut error) => {
+            if error.trace_id.is_empty() {
+                error.trace_id = trace.into();
+            }
+            Err(error)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

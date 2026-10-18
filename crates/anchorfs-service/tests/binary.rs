@@ -300,3 +300,72 @@ fn config_checksum_mode_and_probe_deadline() {
     );
     assert_eq!(defaults.backend_probe_deadline, Duration::from_secs(1));
 }
+
+#[tokio::test]
+async fn bootstrap_admin_once() {
+    let (container, url) = database(&[]).await;
+    let first = command()
+        .args(["bootstrap-admin", "--uid", "1000", "--gid", "1000"])
+        .env("ANCHORFS_DATABASE_URL", &url)
+        .env("ANCHORFS_DEPLOYMENT_PHYSICAL_BYTES_LIMIT", "12345")
+        .output()
+        .unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout).lines().count(), 1);
+    let grant: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(grant["credential_id"].as_str().unwrap().len(), 36);
+    let secret = grant["secret"].as_str().unwrap();
+    assert_eq!(secret.len(), 64);
+    assert!(
+        secret
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    );
+    assert!(!String::from_utf8_lossy(&first.stderr).contains(secret));
+    let second = command()
+        .args(["bootstrap-admin", "--uid", "1000", "--gid", "1000"])
+        .env("ANCHORFS_DATABASE_URL", &url)
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(8));
+    assert!(second.stdout.is_empty());
+    assert_eq!(
+        sql(&container, "SELECT count(*) FROM credentials")
+            .await
+            .trim(),
+        "1"
+    );
+    assert_eq!(
+        sql(
+            &container,
+            "SELECT physical_bytes_limit FROM deployment_quotas"
+        )
+        .await
+        .trim(),
+        "12345"
+    );
+    // Re-initialization with different defaults must preserve the bootstrap quota.
+    let pool = anchorfs_persistence::pool::PgPool::connect(&url)
+        .await
+        .unwrap();
+    anchorfs_persistence::meta::initialize(
+        &pool,
+        &anchorfs_core::DeploymentId::parse("test").unwrap(),
+        &anchorfs_service::config::Config::contract_defaults().quota_config(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        sql(
+            &container,
+            "SELECT physical_bytes_limit FROM deployment_quotas"
+        )
+        .await
+        .trim(),
+        "12345"
+    );
+}

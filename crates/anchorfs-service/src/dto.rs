@@ -112,28 +112,31 @@ pub struct OperationStatus {
 pub struct WorkspaceIdParam {
     pub workspace_id: Uuid,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CreateWorkspace {
+    pub root_uid: u32,
+    pub root_gid: u32,
+    pub root_mode: Option<u32>,
     pub logical_bytes_limit: u64,
     pub logical_inodes_limit: u64,
     pub physical_bytes_limit: u64,
     pub staging_bytes_limit: u64,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialKind {
     Administrator,
     Host,
     Worker,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialRole {
     Read,
     Write,
     Admin,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CreateCredential {
     pub workspace_id: Option<Uuid>,
     pub kind: CredentialKind,
@@ -143,12 +146,12 @@ pub struct CreateCredential {
     pub expires_at: Option<String>,
     pub max_reservation_bytes: u64,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CreateSession {
     pub credential_id: Uuid,
     pub bind_to_workflow_lease: Option<String>,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct RebindSession {
     pub workflow_lease_token: Option<String>,
 }
@@ -251,7 +254,8 @@ pub struct CreatedWorkspace {
 pub struct IssuedCredential {
     pub operation_id: Uuid,
     pub credential_id: Uuid,
-    pub secret: String,
+    /// Present on the initial response; receipt replays return null.
+    pub secret: Option<String>,
     pub credential_epoch: i64,
     pub expires_at: Option<String>,
 }

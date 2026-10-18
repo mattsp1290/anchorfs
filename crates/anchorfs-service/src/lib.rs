@@ -11,3 +11,5 @@ pub mod v1;
 
 pub mod control;
 pub mod receipt;
+
+pub mod bootstrap;

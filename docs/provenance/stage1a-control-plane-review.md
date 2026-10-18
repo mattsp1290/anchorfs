@@ -38,3 +38,23 @@ Observed foundation verification:
   retained semaphore permits and unknown outcomes for panicking jobs.
 
 Further verification and fresh review verdicts will be appended as completed.
+
+## Workspace and credential package
+
+Workspace creation, bootstrap, issuance, rotation, cascade revocation and
+administrator receipt inspection implement the WP2 authority matrix. Secrets
+are omitted from persisted results (`null` on replay), and fresh secret responses
+carry `Cache-Control: no-store`. Bootstrap shares the metadata initialization
+sequence with the server and reads only metadata configuration.
+
+Observed verification: seven `control_plane_tx` integration tests passed,
+including the issuer-lock/concurrent-child schedule, a cascade containing its
+own authenticated actor, host lifetime/allowance bounds, and exactly one 40P01
+victim for mutually rotating actors followed by successful retry with the new
+proof. `bootstrap_admin_once` passed against disposable PostgreSQL. All five
+OpenAPI snapshot tests and workspace all-target Clippy passed.
+
+The mutual-rotation test makes an implicit plan detail explicit: the winning
+rotation changes the deadlock victim's bearer secret, so its retry must use the
+newly issued proof; retrying a stale bearer correctly returns unauthenticated.
+The test does not bypass authentication for its retry.
