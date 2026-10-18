@@ -53,6 +53,7 @@ pub fn contract_router(config: &Config) -> OpenApiRouter<AppState> {
         .routes(utoipa_axum::routes!(crate::v1::namespace::list_directory))
         .routes(utoipa_axum::routes!(crate::v1::namespace::create_directory))
         .routes(utoipa_axum::routes!(crate::v1::namespace::remove_directory))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::unlink))
         .routes(utoipa_axum::routes!(crate::v1::namespace::create_link))
         .routes(utoipa_axum::routes!(crate::v1::namespace::create_symlink))
         .routes(utoipa_axum::routes!(crate::v1::namespace::read_symlink))
@@ -91,7 +92,6 @@ pub fn contract_router(config: &Config) -> OpenApiRouter<AppState> {
         config.metadata_call_deadline,
     );
     let data = OpenApiRouter::new()
-        .routes(utoipa_axum::routes!(crate::v1::namespace::unlink))
         .routes(utoipa_axum::routes!(crate::v1::bytes::read_range))
         .routes(utoipa_axum::routes!(crate::v1::bytes::write_at))
         .routes(utoipa_axum::routes!(crate::v1::bytes::append));
@@ -211,7 +211,7 @@ mod tests {
                 (
                     "DELETE",
                     format!("/v1/workspaces/{id}/files?path=file"),
-                    true,
+                    false,
                 ),
             ] {
                 let request = Request::builder()

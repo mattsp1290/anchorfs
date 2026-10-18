@@ -155,7 +155,7 @@ pub struct CreateSession {
 pub struct RebindSession {
     pub workflow_lease_token: Option<String>,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CreateDirectory {
     pub path: String,
     pub mode: u32,
@@ -178,22 +178,22 @@ pub struct Truncate {
 pub struct PathBody {
     pub path: String,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CreateLink {
     pub existing_path: String,
     pub new_path: String,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CreateSymlink {
     pub path: String,
     pub target: String,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct Rename {
     pub from: String,
     pub to: String,
 }
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct SetAttributes {
     /// Omit to select the workspace root.
     pub path: Option<String>,

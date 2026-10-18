@@ -262,6 +262,13 @@ async fn implemented_routes_demand_bearer_and_others_return_501() {
         "findAdminOperation",
         "getOperation",
         "findOperation",
+        "createDirectory",
+        "removeDirectory",
+        "unlink",
+        "createLink",
+        "createSymlink",
+        "rename",
+        "setAttributes",
     ];
     let mut implemented_count = 0;
     let mut count = 0;
@@ -306,7 +313,7 @@ async fn implemented_routes_demand_bearer_and_others_return_501() {
         }
     }
     assert_eq!(count, 38);
-    assert_eq!(implemented_count, 13);
+    assert_eq!(implemented_count, 20);
 }
 #[tokio::test]
 async fn invalid_body_returns_400_not_501() {
@@ -450,8 +457,19 @@ async fn root_selection_preserves_relative_path_rules() {
         )
         .await
         .0,
-        501
+        401
     );
+    let app = app.layer(axum::middleware::from_fn(
+        async |mut req: axum::extract::Request, next: axum::middleware::Next| {
+            req.headers_mut().insert(
+                "Authorization",
+                format!("Bearer {}.{}", uuid::Uuid::new_v4(), "a".repeat(64))
+                    .parse()
+                    .unwrap(),
+            );
+            next.run(req).await
+        },
+    ));
     for path in ["", "%2F", "..", "a%2F..%2Fb", "%FF", "%ZZ"] {
         let (status, v) = call(
             app.clone(),
@@ -576,7 +594,20 @@ async fn session_and_workflow_wire_bindings_are_validated() {
                 response.status(),
                 if ["renewWorkflowLease", "releaseWorkflowLease"].contains(&id) {
                     400
-                } else if ["renewSession", "rebindSession", "revokeSession"].contains(&id) {
+                } else if [
+                    "renewSession",
+                    "rebindSession",
+                    "revokeSession",
+                    "createDirectory",
+                    "removeDirectory",
+                    "unlink",
+                    "createLink",
+                    "createSymlink",
+                    "rename",
+                    "setAttributes"
+                ]
+                .contains(&id)
+                {
                     401
                 } else {
                     501

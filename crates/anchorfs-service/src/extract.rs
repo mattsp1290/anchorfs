@@ -241,6 +241,27 @@ impl<S: Send + Sync> FromRequestParts<S> for OptionalWorkflowGrant {
     }
 }
 
+/// Common namespace authority header grammar; the prologue verifies database state.
+pub struct SessionAuthority {
+    pub binding: SessionBinding,
+    pub workflow: Option<anchorfs_persistence::authority::WorkflowProof>,
+    pub proof: anchorfs_core::CredentialProof,
+}
+impl<S: Send + Sync> FromRequestParts<S> for SessionAuthority {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let binding = SessionBinding::from_request_parts(parts, state).await?;
+        let OptionalWorkflowGrant(workflow) =
+            OptionalWorkflowGrant::from_request_parts(parts, state).await?;
+        let Bearer(proof) = Bearer::from_request_parts(parts, state).await?;
+        Ok(Self {
+            binding,
+            workflow,
+            proof,
+        })
+    }
+}
+
 #[cfg(test)]
 mod bearer_tests {
     use super::*;
