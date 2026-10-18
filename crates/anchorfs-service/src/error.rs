@@ -105,3 +105,13 @@ impl From<sqlx::Error> for ApiError {
         database(error, "")
     }
 }
+impl From<anchorfs_persistence::sessions::SessionError> for ApiError {
+    fn from(error: anchorfs_persistence::sessions::SessionError) -> Self {
+        use anchorfs_persistence::sessions::SessionError;
+        match error {
+            SessionError::Authority(error) => error.into(),
+            SessionError::Limit => ApiError::new(ErrorCode::QuotaExceeded, ""),
+            SessionError::Database(error) => error.into(),
+        }
+    }
+}

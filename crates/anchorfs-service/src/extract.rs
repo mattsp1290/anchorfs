@@ -203,6 +203,28 @@ impl<S: Send + Sync> FromRequestParts<S> for Bearer {
     }
 }
 
+/// Request timing and trace travel together through control-plane handlers.
+pub struct RequestContext {
+    pub trace: TraceId,
+    pub start: crate::middleware::RequestStart,
+}
+impl<S: Send + Sync> FromRequestParts<S> for RequestContext {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self {
+            trace: parts
+                .extensions
+                .get::<TraceId>()
+                .expect("trace middleware")
+                .clone(),
+            start: *parts
+                .extensions
+                .get::<crate::middleware::RequestStart>()
+                .expect("timing middleware"),
+        })
+    }
+}
+
 #[cfg(test)]
 mod bearer_tests {
     use super::*;

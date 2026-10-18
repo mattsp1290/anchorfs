@@ -378,7 +378,7 @@ paths:
         required: true
       responses:
         '201':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed session authority change
           content:
             application/json:
               schema:
@@ -493,7 +493,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed session authority change
           content:
             application/json:
               schema:
@@ -614,7 +614,7 @@ paths:
         required: true
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed session authority change
           content:
             application/json:
               schema:
@@ -729,7 +729,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed session authority change
           content:
             application/json:
               schema:
@@ -2554,7 +2554,7 @@ paths:
           format: uuid
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workspace receipt or expired tombstone
           content:
             application/json:
               schema:
@@ -2614,7 +2614,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workspace receipt or expired tombstone
           content:
             application/json:
               schema:

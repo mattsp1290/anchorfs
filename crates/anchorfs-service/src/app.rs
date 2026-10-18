@@ -222,6 +222,8 @@ mod tests {
                     response.status(),
                     if short {
                         StatusCode::SERVICE_UNAVAILABLE
+                    } else if !is_data {
+                        StatusCode::UNAUTHORIZED
                     } else {
                         StatusCode::NOT_IMPLEMENTED
                     },
@@ -239,6 +241,8 @@ mod tests {
                     error["code"],
                     if short {
                         "dependency_unavailable"
+                    } else if !is_data {
+                        "unauthenticated"
                     } else {
                         "not_implemented"
                     }

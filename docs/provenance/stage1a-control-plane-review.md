@@ -58,3 +58,17 @@ The mutual-rotation test makes an implicit plan detail explicit: the winning
 rotation changes the deadlock victim's bearer secret, so its retry must use the
 newly issued proof; retrying a stale bearer correctly returns unauthenticated.
 The test does not bypass authentication for its retry.
+
+## Session package
+
+WP3 implements bounded minting, actor-session verification, renew/rebind/revoke
+and workspace receipt inspection. The actor session uses an update lock when
+it is also the target. The mint advisory lock follows receipt acquisition;
+rotation revokes sessions so epoch-fenced sessions do not consume active slots.
+
+Twelve persistence control-plane tests passed, including 63 existing sessions
+plus two concurrent minters (exactly one success, one limit), lazy session
+expiry, rotation freeing all slots, rebind clearing its binding and fencing old
+epochs, own-session same-key renew replay without deadlock, and cross-session
+renew producing exactly one 40P01 followed by successful retry. All five
+OpenAPI snapshot tests passed after regeneration.

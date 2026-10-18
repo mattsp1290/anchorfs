@@ -8,4 +8,5 @@ pub mod settings;
 pub mod authority;
 pub mod credentials;
 pub mod receipts;
+pub mod sessions;
 pub mod workspaces;
