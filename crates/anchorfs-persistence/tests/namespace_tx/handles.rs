@@ -465,3 +465,114 @@ async fn unlink_between_resolve_and_lock_fails_open() {
     first.rollback().await.unwrap();
     invariants(&db, w).await;
 }
+
+#[tokio::test]
+async fn renewal_waiting_on_admission_cannot_reactivate_an_expired_slot() {
+    let (db, w) = fixture().await;
+    let session = actor_session(&db, w).await;
+    let mut setup = db.pool.begin().await.unwrap();
+    let guard = namespace::lock(&mut setup, w).await.unwrap();
+    let policy = HandlePolicy {
+        ttl: Duration::from_secs(60),
+        limit: 1,
+    };
+    let req = |name: &str, create| OpenRequest {
+        path: path(name),
+        read: true,
+        write: false,
+        create,
+        exclusive: false,
+        truncate: false,
+        mode: Some(0o600),
+    };
+    let old = handles::open_file(
+        &mut setup,
+        Some(&guard),
+        &caller(),
+        &session,
+        req("old", true),
+        policy,
+    )
+    .await
+    .unwrap();
+    namespace::create_file(&mut setup, &guard, &caller(), &path("replacement"), 0o600)
+        .await
+        .unwrap();
+    let expires:time::OffsetDateTime=sqlx::query_scalar("UPDATE handles SET expires_at=clock_timestamp()+interval '2 seconds' WHERE workspace_id=$1 AND id=$2 RETURNING expires_at").bind(w.0).bind(old.handle.id).fetch_one(&mut *setup).await.unwrap();
+    setup.commit().await.unwrap();
+    let mut opening = db.pool.begin().await.unwrap();
+    handles::lock_admission(&mut opening, session.id)
+        .await
+        .unwrap();
+    let mut renewing = db.pool.begin().await.unwrap();
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *renewing)
+        .await
+        .unwrap();
+    let renew_session = session.clone();
+    let renewal = tokio::spawn(async move {
+        let result = handles::renew(
+            &mut renewing,
+            w,
+            &renew_session,
+            HandleId(old.handle.id),
+            policy.ttl,
+        )
+        .await;
+        renewing.rollback().await.unwrap();
+        result
+    });
+    waiting(&db.pool, pid).await;
+    let advisory:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='advisory' AND NOT granted)").bind(pid).fetch_one(&db.pool).await.unwrap();
+    assert!(advisory);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let expired: bool = sqlx::query_scalar("SELECT clock_timestamp()>=$1")
+                .bind(expires)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            if expired {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    handles::open_file(
+        &mut opening,
+        None,
+        &caller(),
+        &session,
+        req("replacement", false),
+        policy,
+    )
+    .await
+    .unwrap();
+    opening.commit().await.unwrap();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(5), renewal)
+            .await
+            .unwrap()
+            .unwrap(),
+        Err(HandleError::Stale)
+    ));
+    let mut check = db.pool.begin().await.unwrap();
+    assert_eq!(
+        handles::count_open(&mut check, w, session.id)
+            .await
+            .unwrap(),
+        1
+    );
+    let actual: time::OffsetDateTime =
+        sqlx::query_scalar("SELECT expires_at FROM handles WHERE workspace_id=$1 AND id=$2")
+            .bind(w.0)
+            .bind(old.handle.id)
+            .fetch_one(&mut *check)
+            .await
+            .unwrap();
+    assert_eq!(actual, expires);
+    check.rollback().await.unwrap();
+    invariants(&db, w).await;
+}

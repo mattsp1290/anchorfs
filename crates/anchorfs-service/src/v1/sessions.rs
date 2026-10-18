@@ -95,6 +95,7 @@ pub async fn create_session(
                 receipt::execute(
                     tx,
                     Authority {
+                        workflow: None,
                         actor: &actor,
                         session: None,
                     },
@@ -446,6 +447,7 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
                 receipt::execute(
                     tx,
                     Authority {
+                        workflow: None,
                         actor: &actor,
                         session: Some(&actor_session),
                     },

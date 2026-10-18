@@ -212,6 +212,15 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
                 receipt::execute(
                     tx,
                     Authority {
+                        workflow: Some(receipt::WorkflowAuthority {
+                            workspace: &p.workspace,
+                            proof: authority.workflow.as_ref(),
+                            mode: if mutation {
+                                LeaseMode::Mutation
+                            } else {
+                                LeaseMode::Read
+                            },
+                        }),
                         actor: &p.actor,
                         session: Some(&p.session),
                     },

@@ -428,6 +428,11 @@ async fn mutate(call: MutationCall, mutation: Mutation) -> Result<Response, ApiE
                 receipt::execute(
                     tx,
                     Authority {
+                        workflow: Some(receipt::WorkflowAuthority {
+                            workspace: &p.workspace,
+                            proof: workflow.as_ref(),
+                            mode: LeaseMode::Mutation,
+                        }),
                         actor: &p.actor,
                         session: Some(&p.session),
                     },

@@ -216,8 +216,10 @@ pub async fn renew(
     if row.inode_id != inode.id {
         return Err(HandleError::NotFound);
     }
-    let handle=sqlx::query_as("UPDATE handles SET expires_at=clock_timestamp()+$3::bigint*interval '1 millisecond' WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(workspace.0).bind(id.0).bind(ttl_ms(ttl)).fetch_one(&mut **tx).await?;
     lock_admission(tx, session.id).await?;
+    // Recheck the original lifetime after admission: an opener may have consumed
+    // its expired slot while this renewal waited. Extend only a still-live row.
+    let handle=sqlx::query_as("UPDATE handles SET expires_at=clock_timestamp()+$3::bigint*interval '1 millisecond' WHERE workspace_id=$1 AND id=$2 AND expires_at>clock_timestamp() RETURNING *").bind(workspace.0).bind(id.0).bind(ttl_ms(ttl)).fetch_optional(&mut **tx).await?.ok_or(HandleError::Stale)?;
     Ok((handle, inode))
 }
 pub async fn close(

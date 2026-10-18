@@ -117,6 +117,7 @@ pub async fn create_credential(
                 receipt::execute(
                     tx,
                     Authority {
+                        workflow: None,
                         actor: &actor,
                         session: None,
                     },
@@ -309,6 +310,7 @@ async fn mutate_credential(
                 receipt::execute(
                     tx,
                     Authority {
+                        workflow: None,
                         actor: &actor,
                         session: None,
                     },

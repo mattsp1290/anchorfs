@@ -96,6 +96,37 @@ impl Published {
 pub struct Authority<'a> {
     pub actor: &'a anchorfs_persistence::authority::ActorCredential,
     pub session: Option<&'a anchorfs_persistence::authority::ActorSession>,
+    pub workflow: Option<WorkflowAuthority<'a>>,
+}
+#[derive(Clone, Copy)]
+pub struct WorkflowAuthority<'a> {
+    pub workspace: &'a anchorfs_persistence::authority::WorkspaceLock,
+    pub proof: Option<&'a anchorfs_persistence::authority::WorkflowProof>,
+    pub mode: anchorfs_persistence::authority::LeaseMode,
+}
+impl Authority<'_> {
+    async fn check_publication(
+        self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), crate::error::ApiError> {
+        if let Some(workflow) = self.workflow {
+            let session = self
+                .session
+                .ok_or_else(|| crate::error::ApiError::new(anchorfs_core::ErrorCode::Fenced, ""))?;
+            anchorfs_persistence::authority::check_workflow(
+                tx,
+                workflow.workspace,
+                self.actor,
+                session,
+                workflow.proof,
+                workflow.mode,
+            )
+            .await?;
+        }
+        anchorfs_persistence::authority::check_publication_time(tx, self.actor, self.session)
+            .await?;
+        Ok(())
+    }
 }
 pub type PublicationFuture<'a> = std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<Published, crate::error::ApiError>> + Send + 'a>,
@@ -120,10 +151,7 @@ pub async fn execute(
 ) -> Result<Result<Answer, crate::error::ApiError>, crate::error::ApiError> {
     use crate::error::ApiError;
     use anchorfs_core::ErrorCode;
-    use anchorfs_persistence::{
-        authority::check_publication_time,
-        receipts::{self, ReceiptEntry, ReceiptError},
-    };
+    use anchorfs_persistence::receipts::{self, ReceiptEntry, ReceiptError};
     let entry = receipts::begin(tx, scope, request)
         .await
         .map_err(|error| match error {
@@ -137,7 +165,7 @@ pub async fn execute(
     let result = match entry {
         ReceiptEntry::Fresh(operation) => {
             let published = mutate(tx, operation).await?;
-            check_publication_time(tx, authority.actor, authority.session).await?;
+            authority.check_publication(tx).await?;
             receipts::commit_result(tx, scope, operation, &published.stored).await?;
             return Ok(Ok(published.response));
         }
@@ -150,7 +178,7 @@ pub async fn execute(
             operation_id,
         )),
     };
-    check_publication_time(tx, authority.actor, authority.session).await?;
+    authority.check_publication(tx).await?;
     Ok(result)
 }
 fn receipt_error(
