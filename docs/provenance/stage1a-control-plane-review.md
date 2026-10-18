@@ -205,7 +205,8 @@ creation/Compose metadata and left untouched.
 Resumed standard checkpoint gates passed: format, all-target Clippy, workspace
 build, all 125 workspace tests, dependency licenses/bans/advisories/sources,
 and diff whitespace. The Docker-free core/backend/mount subset and workspace
-test compilation also passed. Remote CI remains pending PR creation.
+test compilation also passed. Remote CI evidence is recorded in the publication
+section below.
 
 
 ## Thermonuclear structural pass
@@ -247,7 +248,7 @@ and stopped before commit/push. The separate manual fix-review pass addresses:
 
 All code/tests are independently authored from existing DTOs, APIs, specifications
 and the rubric's structural criteria. No dependencies or imported baselines
-changed. Recheck and second checkpoint verification remain pending.
+changed. The completed recheck and second checkpoint are recorded below.
 
 
 Thermonuclear recheck completed: APPROVE, no blocking provenance findings,
@@ -257,10 +258,34 @@ scenario bodies directly against the checkpoint HEAD. This is a same-context
 recheck; the original fresh verdict remains preserved. The approved packet's
 review-history withholding exception remains explicit. Resumed canonical auto
 validation reports all four already resolved and zero needs-manual items.
-The second checkpoint now runs its discovered CI gates before commit/push.
+The second checkpoint subsequently passed its discovered CI gates before
+commit/push.
 
 Second checkpoint gates passed: format, all-target Clippy, workspace build,
 all 126 workspace tests, full dependency license/ban/advisory/source checks,
 and diff whitespace. All original backend, readiness, schema and binary tests
 remain in that passing full run. The generated OpenAPI contract is unchanged by
-the structural pass. Remote CI and actual PR evidence follow publication.
+the structural pass. Publication evidence follows below.
+
+
+## Publication and hosted verification
+
+PR: https://github.com/mattsp1290/anchorfs/pull/3, targeting `main` from
+`feat/stage1a-control-plane`. Owner sign-off is requested for this milestone and
+its recorded limitations; this work does not merge or deploy the change.
+
+Implementation commit `19a9a3db5f4cf6877d0fff9657d4cde089541e07` was pushed
+and verified equal to the remote branch. Its hosted CI run completed successfully:
+https://github.com/mattsp1290/anchorfs/actions/runs/39159875610.
+All five jobs passed: lint, test, deny, build-linux-arm64 and build-macos. The
+local full workspace run passed all 126 tests; hosted tests and platform gates
+independently passed. The standard checkpoint had already been committed/pushed
+at `781542bdad4ca36703d726c05d9451a556921c66` before the live thermonuclear
+rubric was fetched.
+
+This publication evidence is a documentation-only follow-up to that reviewed and
+verified implementation commit. Its final revision and hosted CI result are
+recorded in PR #3's description and checks, together with the local completion
+report in the thermonuclear review directory. Recording a revision's own future
+CI run identity in that revision would itself create a different revision.
+The documentation follow-up does not change the reviewed implementation packet.
