@@ -16,32 +16,50 @@ use uuid::Uuid;
 #[utoipa::path(get, path="/v1/workspaces/{workspace_id}/stat", operation_id="statPath",
 
  params(("X-Anchorfs-Session-Id" = Uuid, Header), ("X-Anchorfs-Session-Epoch" = i64, Header, minimum=1),("X-Anchorfs-Workflow-Token" = Option<String>, Header, description="64 hex characters; required with active workflow authority"),("X-Anchorfs-Workflow-Epoch" = Option<i64>, Header, minimum=1),("workspace_id" = Uuid, Path),("path" = Option<String>, Query, description="Omit for workspace root; supplied paths must be nonempty and relative")),
- responses((status=200,description="Future success contract; Stage 0 returns 501",body=InodeAttributes), (status=404,description="not_found",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody)), security(("credential" = [])))]
+ responses((status=200,description="Committed namespace metadata",body=InodeAttributes), (status=409,description="not_directory or fenced",body=ErrorBody), (status=404,description="not_found",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody)), security(("credential" = [])))]
 pub async fn stat_path(
-    axum::Extension(trace): axum::Extension<crate::middleware::TraceId>,
-    _session: SessionBinding,
-    ApiPath(_ids): ApiPath<(Uuid,)>,
+    State(state): State<AppState>,
+    context: RequestContext,
+    authority: SessionAuthority,
+    ApiPath((workspace,)): ApiPath<(Uuid,)>,
     ApiQuery(query): ApiQuery<LookupQuery>,
-) -> Result<(), ApiError> {
-    if let Some(path) = query.path.as_deref() {
-        validate_path(path, &trace.0)?;
+) -> Result<axum::Json<serde_json::Value>, ApiError> {
+    if let Some(path) = &query.path {
+        validate_path(path, &context.trace.0)?;
     }
-    Err(ApiError::not_implemented(trace.0))
+    read(
+        state,
+        context,
+        authority,
+        WorkspaceId(workspace),
+        Read::Stat(query),
+    )
+    .await
+    .map(axum::Json)
 }
 #[utoipa::path(get, path="/v1/workspaces/{workspace_id}/directory", operation_id="listDirectory",
 
  params(("X-Anchorfs-Session-Id" = Uuid, Header), ("X-Anchorfs-Session-Epoch" = i64, Header, minimum=1),("X-Anchorfs-Workflow-Token" = Option<String>, Header, description="64 hex characters; required with active workflow authority"),("X-Anchorfs-Workflow-Epoch" = Option<i64>, Header, minimum=1),("workspace_id" = Uuid, Path),("path" = Option<String>, Query, description="Omit for workspace root; supplied paths must be nonempty and relative"),("cursor" = Option<String>, Query),("limit" = Option<u32>, Query)),
- responses((status=200,description="Future success contract; Stage 0 returns 501",body=DirectoryPage), (status=404,description="not_found",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody)), security(("credential" = [])))]
+ responses((status=200,description="Committed namespace metadata",body=DirectoryPage), (status=409,description="not_directory or fenced",body=ErrorBody), (status=404,description="not_found",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody)), security(("credential" = [])))]
 pub async fn list_directory(
-    axum::Extension(trace): axum::Extension<crate::middleware::TraceId>,
-    _session: SessionBinding,
-    ApiPath(_ids): ApiPath<(Uuid,)>,
+    State(state): State<AppState>,
+    context: RequestContext,
+    authority: SessionAuthority,
+    ApiPath((workspace,)): ApiPath<(Uuid,)>,
     ApiQuery(query): ApiQuery<ListQuery>,
-) -> Result<(), ApiError> {
-    if let Some(path) = query.path.as_deref() {
-        validate_path(path, &trace.0)?;
+) -> Result<axum::Json<serde_json::Value>, ApiError> {
+    if let Some(path) = &query.path {
+        validate_path(path, &context.trace.0)?;
     }
-    Err(ApiError::not_implemented(trace.0))
+    read(
+        state,
+        context,
+        authority,
+        WorkspaceId(workspace),
+        Read::List(query),
+    )
+    .await
+    .map(axum::Json)
 }
 #[utoipa::path(post, path="/v1/workspaces/{workspace_id}/directories", operation_id="createDirectory",
  request_body = CreateDirectory,
@@ -207,15 +225,24 @@ pub async fn create_symlink(
 #[utoipa::path(get, path="/v1/workspaces/{workspace_id}/symlinks", operation_id="readSymlink",
 
  params(("X-Anchorfs-Session-Id" = Uuid, Header), ("X-Anchorfs-Session-Epoch" = i64, Header, minimum=1),("X-Anchorfs-Workflow-Token" = Option<String>, Header, description="64 hex characters; required with active workflow authority"),("X-Anchorfs-Workflow-Epoch" = Option<i64>, Header, minimum=1),("workspace_id" = Uuid, Path),("path" = String, Query)),
- responses((status=200,description="Future success contract; Stage 0 returns 501",body=SymlinkContents), (status=404,description="not_found",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody)), security(("credential" = [])))]
+ responses((status=200,description="Committed namespace metadata",body=SymlinkContents), (status=409,description="not_directory or fenced",body=ErrorBody), (status=404,description="not_found",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody)), security(("credential" = [])))]
 pub async fn read_symlink(
-    axum::Extension(trace): axum::Extension<crate::middleware::TraceId>,
-    _session: SessionBinding,
-    ApiPath(_ids): ApiPath<(Uuid,)>,
+    State(state): State<AppState>,
+    context: RequestContext,
+    authority: SessionAuthority,
+    ApiPath((workspace,)): ApiPath<(Uuid,)>,
     ApiQuery(query): ApiQuery<PathQuery>,
-) -> Result<(), ApiError> {
-    validate_path(&query.path, &trace.0)?;
-    Err(ApiError::not_implemented(trace.0))
+) -> Result<axum::Json<serde_json::Value>, ApiError> {
+    validate_path(&query.path, &context.trace.0)?;
+    read(
+        state,
+        context,
+        authority,
+        WorkspaceId(workspace),
+        Read::Symlink(query),
+    )
+    .await
+    .map(axum::Json)
 }
 #[utoipa::path(post, path="/v1/workspaces/{workspace_id}/rename", operation_id="rename",
  request_body = Rename,
@@ -431,4 +458,135 @@ async fn mutate(call: MutationCall, mutation: Mutation) -> Result<Response, ApiE
     )
     .await;
     receipt::response(result, StatusCode::OK, &context.trace.0)
+}
+
+enum Read {
+    Stat(LookupQuery),
+    List(ListQuery),
+    Symlink(PathQuery),
+}
+async fn read(
+    state: AppState,
+    context: RequestContext,
+    authority: SessionAuthority,
+    workspace: WorkspaceId,
+    request: Read,
+) -> Result<serde_json::Value, ApiError> {
+    let key = state.cursor_key;
+    let max_page = state.config.max_list_page;
+    let ttl = state.config.cursor_ttl;
+    control::run(
+        &state,
+        context.start,
+        context.trace,
+        control::Kind::Read,
+        move |tx, _| {
+            Box::pin(async move {
+                let p = super::prologue(
+                    tx,
+                    &authority.proof,
+                    workspace,
+                    &authority.binding,
+                    authority.workflow.as_ref(),
+                    super::Gate {
+                        role_mutation: false,
+                        lease: LeaseMode::Read,
+                    },
+                )
+                .await?;
+                let path = match &request {
+                    Read::Stat(q) => q.path.as_deref(),
+                    Read::List(q) => q.path.as_deref(),
+                    Read::Symlink(q) => Some(q.path.as_str()),
+                }
+                .map(|s| WorkspacePath::parse(s).expect("validated path"));
+                let row = namespace::resolve(tx, workspace, path.as_ref(), &p.caller).await?;
+                let value = match request {
+                    Read::Stat(_) => serde_json::to_value(super::views::attributes(&row)?),
+                    Read::Symlink(_) => {
+                        if row.kind != "symlink" {
+                            return Err(namespace::NamespaceError::InvalidInput.into());
+                        }
+                        serde_json::to_value(SymlinkContents {
+                            target: row.symlink_target.expect("symlink constraint"),
+                            generation: row.generation,
+                        })
+                    }
+                    Read::List(q) => {
+                        if row.kind != "directory" {
+                            return Err(namespace::NamespaceError::NotDirectory.into());
+                        }
+                        namespace::access(
+                            &row,
+                            &p.caller,
+                            anchorfs_core::Access {
+                                read: true,
+                                exec: true,
+                                ..Default::default()
+                            },
+                        )?;
+                        let limit = q.limit.unwrap_or(max_page).min(max_page);
+                        if limit == 0 {
+                            return Err(namespace::NamespaceError::InvalidInput.into());
+                        }
+                        let now: i64 = sqlx::query_scalar(
+                            "SELECT (extract(epoch FROM clock_timestamp())*1000)::bigint",
+                        )
+                        .fetch_one(&mut **tx)
+                        .await?;
+                        let after = q
+                            .cursor
+                            .as_deref()
+                            .map(|text| crate::cursor::decode(text, &key, now, workspace.0, row.id))
+                            .transpose()?
+                            .map(|c| c.last_name);
+                        let rows = namespace::list(
+                            tx,
+                            workspace,
+                            row.id,
+                            after.as_deref(),
+                            i64::from(limit) + 1,
+                        )
+                        .await?;
+                        let generation = namespace::current_generation(tx, workspace).await?;
+                        let more = rows.len() > limit as usize;
+                        let entries = rows
+                            .into_iter()
+                            .take(limit as usize)
+                            .map(|(name, inode)| {
+                                Ok(DirectoryEntry {
+                                    name,
+                                    attributes: super::views::attributes(&inode)?,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, ApiError>>()?;
+                        let next_cursor = if more {
+                            Some(crate::cursor::encode(
+                                &crate::cursor::ListCursor {
+                                    workspace: workspace.0,
+                                    parent_inode: row.id,
+                                    last_name: entries.last().expect("nonzero limit").name.clone(),
+                                    namespace_generation: generation,
+                                    expires_unix_ms: now.saturating_add(
+                                        ttl.as_millis().min(i64::MAX as u128) as i64,
+                                    ),
+                                },
+                                &key,
+                            ))
+                        } else {
+                            None
+                        };
+                        serde_json::to_value(DirectoryPage {
+                            entries,
+                            next_cursor,
+                            namespace_generation: generation,
+                        })
+                    }
+                };
+                value
+                    .map_err(|_| ApiError::new(anchorfs_core::ErrorCode::DependencyUnavailable, ""))
+            })
+        },
+    )
+    .await
 }

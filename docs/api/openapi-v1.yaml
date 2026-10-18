@@ -838,7 +838,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed namespace metadata
           content:
             application/json:
               schema:
@@ -863,6 +863,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
           description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: not_directory or fenced
           content:
             application/json:
               schema:
@@ -941,7 +947,7 @@ paths:
           minimum: 0
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed namespace metadata
           content:
             application/json:
               schema:
@@ -966,6 +972,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
           description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: not_directory or fenced
           content:
             application/json:
               schema:
@@ -1595,7 +1607,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed namespace metadata
           content:
             application/json:
               schema:
@@ -1620,6 +1632,12 @@ paths:
                 $ref: '#/components/schemas/ErrorBody'
         '404':
           description: not_found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: not_directory or fenced
           content:
             application/json:
               schema:
@@ -3938,8 +3956,12 @@ components:
     DirectoryPage:
       type: object
       required:
+      - namespace_generation
       - entries
       properties:
+        namespace_generation:
+          type: integer
+          format: int64
         entries:
           type: array
           items:

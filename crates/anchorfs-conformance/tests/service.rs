@@ -269,6 +269,9 @@ async fn implemented_routes_demand_bearer_and_others_return_501() {
         "createSymlink",
         "rename",
         "setAttributes",
+        "statPath",
+        "listDirectory",
+        "readSymlink",
     ];
     let mut implemented_count = 0;
     let mut count = 0;
@@ -313,7 +316,7 @@ async fn implemented_routes_demand_bearer_and_others_return_501() {
         }
     }
     assert_eq!(count, 38);
-    assert_eq!(implemented_count, 20);
+    assert_eq!(implemented_count, 23);
 }
 #[tokio::test]
 async fn invalid_body_returns_400_not_501() {
@@ -443,7 +446,7 @@ async fn root_selection_preserves_relative_path_rules() {
             )
             .await
             .0,
-            501
+            401
         );
     }
     assert_eq!(
@@ -604,7 +607,10 @@ async fn session_and_workflow_wire_bindings_are_validated() {
                     "createLink",
                     "createSymlink",
                     "rename",
-                    "setAttributes"
+                    "setAttributes",
+                    "statPath",
+                    "listDirectory",
+                    "readSymlink",
                 ]
                 .contains(&id)
                 {

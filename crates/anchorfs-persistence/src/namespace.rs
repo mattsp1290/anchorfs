@@ -547,3 +547,17 @@ pub async fn rename(
     guard.bump(tx).await?;
     Ok(mutated(&row))
 }
+
+pub async fn list(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: WorkspaceId,
+    parent: i64,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<(String, InodeRow)>, sqlx::Error> {
+    use sqlx::{FromRow, Row};
+    let rows=sqlx::query("SELECT e.name,i.* FROM directory_entries e JOIN inodes i ON i.workspace_id=e.workspace_id AND i.id=e.inode_id WHERE e.workspace_id=$1 AND e.parent_inode_id=$2 AND ($3::text IS NULL OR e.name>$3 COLLATE \"C\") ORDER BY e.name LIMIT $4").bind(workspace.0).bind(parent).bind(after).bind(limit).fetch_all(&mut **tx).await?;
+    rows.iter()
+        .map(|row| Ok((row.try_get("name")?, InodeRow::from_row(row)?)))
+        .collect()
+}

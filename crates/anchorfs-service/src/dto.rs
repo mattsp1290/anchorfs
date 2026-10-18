@@ -99,6 +99,7 @@ pub struct DirectoryEntry {
 }
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct DirectoryPage {
+    pub namespace_generation: i64,
     pub entries: Vec<DirectoryEntry>,
     pub next_cursor: Option<String>,
 }

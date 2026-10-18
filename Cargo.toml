@@ -31,6 +31,7 @@ bytes = { version = "=1.12.1" }
 cargo_metadata = { version = "=0.23.1" }
 clap = { version = "=4.6.7", features = ["derive", "env"] }
 futures-core = { version = "=0.3.34" }
+hmac = { version = "=0.13.0" }
 fuser = { version = "=0.18.0" }
 nix = { version = "=0.31.3", features = ["signal", "process"] }
 rand = { version = "=0.9.5" }
