@@ -2,13 +2,13 @@ use crate::{
     app::AppState,
     control,
     middleware::{RequestStart, TraceId},
-    receipt::{self, Start},
+    receipt::{self, Authority, Published},
 };
 use crate::{dto::*, error::ApiError, extract::*};
-use anchorfs_core::{CredentialId, OperationId, SessionId, WorkspaceId};
+use anchorfs_core::{CredentialId, SessionId, WorkspaceId};
 use anchorfs_persistence::{
     authority::{self, LockMode},
-    receipts::{self, ReceiptRequest, ReceiptScope},
+    receipts::{ReceiptRequest, ReceiptScope},
     sessions,
 };
 use axum::{http::StatusCode, response::Response};
@@ -91,8 +91,13 @@ pub async fn create_session(
                 let scope = ReceiptScope::Admin {
                     credential: actor.id,
                 };
-                let operation = match receipt::begin(
+                let mutation_actor = actor.clone();
+                receipt::execute(
                     tx,
+                    Authority {
+                        actor: &actor,
+                        session: None,
+                    },
                     scope,
                     ReceiptRequest {
                         key: &key,
@@ -102,28 +107,22 @@ pub async fn create_session(
                         retention,
                         wait_bound: budget.remaining(),
                     },
+                    move |tx, operation| {
+                        Box::pin(async move {
+                            let session = sessions::create(
+                                tx,
+                                &mutation_actor,
+                                workspace,
+                                CredentialId(body.credential_id),
+                                ttl,
+                                limit,
+                            )
+                            .await?;
+                            Published::metadata(super::views::session(operation, session))
+                        })
+                    },
                 )
-                .await?
-                {
-                    Start::Fresh(id) => id,
-                    Start::Complete(result) => {
-                        authority::check_publication_time(tx, &actor, None).await?;
-                        return Ok(result);
-                    }
-                };
-                let session = sessions::create(
-                    tx,
-                    &actor,
-                    workspace,
-                    CredentialId(body.credential_id),
-                    ttl,
-                    limit,
-                )
-                .await?;
-                let result = grant(operation, session);
-                authority::check_publication_time(tx, &actor, None).await?;
-                receipts::commit_result(tx, scope, operation, &result).await?;
-                Ok(Ok(result))
+                .await
             })
         },
     )
@@ -442,8 +441,14 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
                     authorization_epoch: workspace_lock.authorization_epoch,
                     mutation_epoch: workspace_lock.mutation_epoch,
                 };
-                let operation = match receipt::begin(
+                let mutation_actor = actor.clone();
+                let mutation_session = actor_session.clone();
+                receipt::execute(
                     tx,
+                    Authority {
+                        actor: &actor,
+                        session: Some(&actor_session),
+                    },
                     scope,
                     ReceiptRequest {
                         key: &key,
@@ -453,50 +458,53 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
                         retention,
                         wait_bound: budget.remaining(),
                     },
+                    move |tx, operation| {
+                        Box::pin(async move {
+                            match kind {
+                                Mutation::Renew => Published::metadata(super::views::session(
+                                    operation,
+                                    sessions::renew(
+                                        tx,
+                                        &mutation_actor,
+                                        &mutation_session,
+                                        workspace,
+                                        target,
+                                        ttl,
+                                    )
+                                    .await?,
+                                )),
+                                Mutation::Rebind => Published::metadata(super::views::session(
+                                    operation,
+                                    sessions::rebind(
+                                        tx,
+                                        &mutation_actor,
+                                        &mutation_session,
+                                        workspace,
+                                        target,
+                                        ttl,
+                                        limit,
+                                    )
+                                    .await?,
+                                )),
+                                Mutation::Revoke => {
+                                    sessions::revoke(
+                                        tx,
+                                        &mutation_actor,
+                                        &mutation_session,
+                                        workspace,
+                                        target,
+                                    )
+                                    .await?;
+                                    Published::metadata(super::views::mutation(operation))
+                                }
+                            }
+                        })
+                    },
                 )
-                .await?
-                {
-                    Start::Fresh(id) => id,
-                    Start::Complete(result) => {
-                        authority::check_publication_time(tx, &actor, Some(&actor_session)).await?;
-                        return Ok(result);
-                    }
-                };
-                let result = match kind {
-                    Mutation::Renew => grant(
-                        operation,
-                        sessions::renew(tx, &actor, &actor_session, workspace, target, ttl).await?,
-                    ),
-                    Mutation::Rebind => grant(
-                        operation,
-                        sessions::rebind(tx, &actor, &actor_session, workspace, target, ttl, limit)
-                            .await?,
-                    ),
-                    Mutation::Revoke => {
-                        sessions::revoke(tx, &actor, &actor_session, workspace, target).await?;
-                        serde_json::json!({
-                        "operation_id":operation.0,
-                        "inode_id":null,
-                        "generation":null}
-                        )
-                    }
-                };
-                authority::check_publication_time(tx, &actor, Some(&actor_session)).await?;
-                receipts::commit_result(tx, scope, operation, &result).await?;
-                Ok(Ok(result))
+                .await
             })
         },
     )
     .await;
     receipt::response(result, StatusCode::OK, &trace.0)
-}
-fn grant(operation: OperationId, session: sessions::SessionView) -> serde_json::Value {
-    serde_json::json!({
-    "operation_id":operation.0,
-    "session_id":session.id.0,
-    "session_epoch":session.session_epoch,
-    "credential_epoch":session.credential_epoch,
-    "bound_mutation_epoch":session.bound_mutation_epoch,
-    "expires_at":control::timestamp(session.expires_at)}
-    )
 }

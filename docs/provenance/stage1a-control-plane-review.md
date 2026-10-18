@@ -206,3 +206,61 @@ Resumed standard checkpoint gates passed: format, all-target Clippy, workspace
 build, all 125 workspace tests, dependency licenses/bans/advisories/sources,
 and diff whitespace. The Docker-free core/backend/mount subset and workspace
 test compilation also passed. Remote CI remains pending PR creation.
+
+
+## Thermonuclear structural pass
+
+Pinned source:
+https://raw.githubusercontent.com/cursor/plugins/0b8e952052d482ee6de06deebf14d590d77b1b34/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md
+(commit `0b8e952052d482ee6de06deebf14d590d77b1b34`). It was fetched from the live
+main identity after the first verified push, its frontmatter was validated, and
+the entire rubric applied as criteria only. No commands/edits/scope authority was
+granted by the external text.
+
+Fresh reviewer directory:
+`reviews/feat-stage1a-control-plane-thermo-2026-10-18-152402-781542bdad4c`.
+The approved packet withheld this record's prior reviewer-history section from
+the fresh reviewer under AGENTS.md; all changed implementation/contract/generated
+files were read fully. This explicit exception preserves independent initial
+judgment rather than silently feeding earlier conclusions. The reviewer returned
+REQUEST_CHANGES for 3 Important structural items and 1 Suggestion, separately
+reporting no blocking provenance findings. Independent evidence included 57
+passing tests, offline license/source gates and unchanged baseline identities.
+
+Canonical auto mode flagged all four as needs-manual because the affected
+production and acceptance files concern credentials/authority. It made no edits
+and stopped before commit/push. The separate manual fix-review pass addresses:
+
+- T1: runtime DTO construction and explicit view conversion; typed secret grants
+  select cache policy and preserve secret-null receipts. A new HTTP contract
+  scenario deserializes fresh/replay/inspection responses into declared DTOs.
+- T2: one receipt lifecycle helper owns begin/dispatch, final admitted-time check,
+  fresh stored result and response separation. Callbacks keep route-specific
+  authorization/locks/business operations explicit; direct persistence caller
+  responsibilities are documented. No macro or trait hierarchy was introduced.
+- T3: focused HTTP and transaction child modules plus shared support retain the
+  original integration target names. All 31 original test bodies were moved
+  byte-for-byte (hashes recorded in the local move manifest), and every new source
+  file remains below 1,000 lines. The DTO scenario adds one test.
+- S1: a receipt lookup enum removes invalid paired-option combinations and nullable
+  lookup predicates, preserving by-ID/by-key visibility rules.
+
+All code/tests are independently authored from existing DTOs, APIs, specifications
+and the rubric's structural criteria. No dependencies or imported baselines
+changed. Recheck and second checkpoint verification remain pending.
+
+
+Thermonuclear recheck completed: APPROVE, no blocking provenance findings,
+T1/T2/T3/S1 resolved. The reviewer independently ran 44 tests, formatting and
+offline license/source checks, read all new modules, and compared all 31 original
+scenario bodies directly against the checkpoint HEAD. This is a same-context
+recheck; the original fresh verdict remains preserved. The approved packet's
+review-history withholding exception remains explicit. Resumed canonical auto
+validation reports all four already resolved and zero needs-manual items.
+The second checkpoint now runs its discovered CI gates before commit/push.
+
+Second checkpoint gates passed: format, all-target Clippy, workspace build,
+all 126 workspace tests, full dependency license/ban/advisory/source checks,
+and diff whitespace. All original backend, readiness, schema and binary tests
+remain in that passing full run. The generated OpenAPI contract is unchanged by
+the structural pass. Remote CI and actual PR evidence follow publication.

@@ -45,11 +45,11 @@ pub async fn create_workspace(
 ) -> Result<axum::response::Response, ApiError> {
     use crate::{
         control::{self, Kind},
-        receipt::{self, Start},
+        receipt::{self, Authority, Published},
     };
     use anchorfs_persistence::{
         authority::{self, CredentialKind, LockMode},
-        receipts::{self, ReceiptScope},
+        receipts::{ReceiptRequest, ReceiptScope},
         workspaces,
     };
     let invalid = || ApiError::new(anchorfs_core::ErrorCode::InvalidInput, &trace.0);
@@ -84,10 +84,14 @@ pub async fn create_workspace(
                 let scope = ReceiptScope::Admin {
                     credential: actor.id,
                 };
-                let operation = match receipt::begin(
+                receipt::execute(
                     tx,
+                    Authority {
+                        actor: &actor,
+                        session: None,
+                    },
                     scope,
-                    anchorfs_persistence::receipts::ReceiptRequest {
+                    ReceiptRequest {
                         key: &key,
                         op_type: "workspace_create",
                         digest,
@@ -95,35 +99,29 @@ pub async fn create_workspace(
                         retention,
                         wait_bound: budget.remaining(),
                     },
-                )
-                .await?
-                {
-                    Start::Fresh(id) => id,
-                    Start::Complete(result) => {
-                        authority::check_publication_time(tx, &actor, None).await?;
-                        return Ok(result);
-                    }
-                };
-                let workspace = workspaces::create(
-                    tx,
-                    workspaces::NewWorkspace {
-                        logical_bytes_limit: body.logical_bytes_limit as i64,
-                        logical_inodes_limit: body.logical_inodes_limit as i64,
-                        physical_bytes_limit: body.physical_bytes_limit as i64,
-                        staging_bytes_limit: body.staging_bytes_limit as i64,
-                        root_uid: body.root_uid,
-                        root_gid: body.root_gid,
-                        root_mode: body.root_mode.unwrap_or(0o755),
+                    move |tx, operation| {
+                        Box::pin(async move {
+                            let workspace = workspaces::create(
+                                tx,
+                                workspaces::NewWorkspace {
+                                    logical_bytes_limit: body.logical_bytes_limit as i64,
+                                    logical_inodes_limit: body.logical_inodes_limit as i64,
+                                    physical_bytes_limit: body.physical_bytes_limit as i64,
+                                    staging_bytes_limit: body.staging_bytes_limit as i64,
+                                    root_uid: body.root_uid,
+                                    root_gid: body.root_gid,
+                                    root_mode: body.root_mode.unwrap_or(0o755),
+                                },
+                            )
+                            .await?;
+                            Published::metadata(CreatedWorkspace {
+                                operation_id: operation.0,
+                                workspace: super::views::workspace(workspace)?,
+                            })
+                        })
                     },
                 )
-                .await?;
-                let result = serde_json::json!({
-                "operation_id": operation.0,
-                 "workspace": workspace_json(workspace)}
-                );
-                authority::check_publication_time(tx, &actor, None).await?;
-                receipts::commit_result(tx, scope, operation, &result).await?;
-                Ok(Ok(result))
+                .await
             })
         },
     )
@@ -185,30 +183,12 @@ pub async fn get_workspace(
                     .await?
                     .ok_or(authority::AuthorityError::NotFound)?;
                 authority::check_publication_time(tx, &actor, None).await?;
-                Ok(Ok(workspace_json(view)))
+                Ok(Ok(crate::receipt::Answer::metadata(
+                    super::views::workspace(view)?,
+                )?))
             })
         },
     )
     .await;
     crate::receipt::response(result, axum::http::StatusCode::OK, &trace.0)
-}
-fn workspace_json(view: anchorfs_persistence::workspaces::WorkspaceView) -> serde_json::Value {
-    serde_json::json!({
-    "workspace_id":view.id,
-    "authorization_epoch":view.authorization_epoch,
-    "mutation_epoch":view.mutation_epoch,
-            "root":{
-    "inode_id":view.inode_id,
-    "generation":view.generation,
-    "kind":view.kind,
-    "size":view.size,
-    "mode":view.mode,
-    "uid":view.uid,
-    "gid":view.gid,
-    "nlink":view.nlink,
-    "atime":crate::control::timestamp(view.atime),
-    "mtime":crate::control::timestamp(view.mtime),
-    "ctime":crate::control::timestamp(view.ctime)}
-    }
-    )
 }

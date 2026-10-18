@@ -1,4 +1,5 @@
 use crate::{dto::*, error::ApiError, extract::*};
+use anchorfs_persistence::receipts::ReceiptLookup;
 use uuid::Uuid;
 #[utoipa::path(get,
  path="/v1/workspaces/{workspace_id}/operations/{operation_id}",
@@ -42,8 +43,7 @@ pub async fn get_operation(
         trace,
         proof,
         Some(anchorfs_core::WorkspaceId(workspace)),
-        Some(anchorfs_core::OperationId(operation)),
-        None,
+        ReceiptLookup::Id(anchorfs_core::OperationId(operation)),
     )
     .await
 }
@@ -90,8 +90,7 @@ pub async fn find_operation(
         trace,
         proof,
         Some(anchorfs_core::WorkspaceId(workspace)),
-        None,
-        Some(query.idempotency_key),
+        ReceiptLookup::Key(query.idempotency_key),
     )
     .await
 }
@@ -132,8 +131,7 @@ pub async fn get_admin_operation(
         trace,
         proof,
         None,
-        Some(anchorfs_core::OperationId(operation)),
-        None,
+        ReceiptLookup::Id(anchorfs_core::OperationId(operation)),
     )
     .await
 }
@@ -174,8 +172,7 @@ pub async fn find_admin_operation(
         trace,
         proof,
         None,
-        None,
-        Some(query.idempotency_key),
+        ReceiptLookup::Key(query.idempotency_key),
     )
     .await
 }
@@ -185,16 +182,14 @@ async fn inspect(
     trace: crate::middleware::TraceId,
     proof: anchorfs_core::CredentialProof,
     workspace: Option<anchorfs_core::WorkspaceId>,
-    operation: Option<anchorfs_core::OperationId>,
-    key: Option<String>,
+    lookup: ReceiptLookup,
 ) -> Result<axum::response::Response, ApiError> {
     use anchorfs_persistence::{
         authority::{self, CredentialKind, LockMode},
         receipts::{self, ReceiptFilter},
     };
-    if key.as_ref().is_some_and(|key| {
-        key.is_empty() || key.len() > 256 || !key.bytes().all(|b| b.is_ascii_graphic())
-    }) {
+    if matches!(&lookup,ReceiptLookup::Key(key) if key.is_empty() || key.len()>256 || !key.bytes().all(|b| b.is_ascii_graphic()))
+    {
         return Err(ApiError::new(
             anchorfs_core::ErrorCode::InvalidInput,
             trace.0,
@@ -221,20 +216,13 @@ async fn inspect(
                     allow_workspace_actors: workspace.is_some()
                         && actor.kind == CredentialKind::Host,
                 };
-                let view = match operation {
-                    Some(id) => receipts::read_by_id(tx, filter, id).await?,
-                    None => {
-                        receipts::read_by_key(tx, filter, key.as_deref().expect("query key"))
-                            .await?
-                    }
-                }
-                .ok_or(authority::AuthorityError::NotFound)?;
+                let view = receipts::read(tx, filter, lookup)
+                    .await?
+                    .ok_or(authority::AuthorityError::NotFound)?;
                 authority::check_publication_time(tx, &actor, None).await?;
-                Ok(Ok(serde_json::json!({
-                "operation_id":view.operation_id.0,
-                "state":view.state,
-                "result":view.result}
-                )))
+                Ok(Ok(crate::receipt::Answer::metadata(
+                    super::views::operation(view)?,
+                )?))
             })
         },
     )

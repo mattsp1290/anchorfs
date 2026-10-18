@@ -62,3 +62,4 @@ pub const REQUIRED_OPERATIONS: &[&str] = &[
     "releaseWorkflowLease",
     "takeoverWorkflowLease",
 ];
+mod views;

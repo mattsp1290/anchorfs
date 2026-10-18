@@ -2,14 +2,14 @@ use crate::{
     app::AppState,
     control,
     middleware::{RequestStart, TraceId},
-    receipt::{self, Start},
+    receipt::{self, Authority, Published},
 };
 use crate::{dto::*, error::ApiError, extract::*};
 use anchorfs_core::{ErrorCode, WorkspaceId};
 use anchorfs_persistence::{
     authority::{self, CredentialKind as Kind, CredentialRole as Role, LockMode},
     credentials,
-    receipts::{self, ReceiptScope},
+    receipts::{ReceiptRequest, ReceiptScope},
 };
 use axum::{http::StatusCode, response::Response};
 use uuid::Uuid;
@@ -112,10 +112,15 @@ pub async fn create_credential(
                 let scope = ReceiptScope::Admin {
                     credential: actor.id,
                 };
-                let operation = match receipt::begin(
+                let mutation_actor = actor.clone();
+                receipt::execute(
                     tx,
+                    Authority {
+                        actor: &actor,
+                        session: None,
+                    },
                     scope,
-                    anchorfs_persistence::receipts::ReceiptRequest {
+                    ReceiptRequest {
                         key: &key,
                         op_type: "credential_issue",
                         digest,
@@ -123,25 +128,19 @@ pub async fn create_credential(
                         retention,
                         wait_bound: budget.remaining(),
                     },
+                    move |tx, operation| {
+                        Box::pin(async move {
+                            let issued = credentials::issue(tx, &mutation_actor, new).await?;
+                            Published::credential(super::views::credential(operation, issued))
+                        })
+                    },
                 )
-                .await?
-                {
-                    Start::Fresh(id) => id,
-                    Start::Complete(result) => {
-                        authority::check_publication_time(tx, &actor, None).await?;
-                        return Ok(result);
-                    }
-                };
-                let issued = credentials::issue(tx, &actor, new).await?;
-                let stored = issued_json(operation, &issued, false);
-                authority::check_publication_time(tx, &actor, None).await?;
-                receipts::commit_result(tx, scope, operation, &stored).await?;
-                Ok(Ok(issued_json(operation, &issued, true)))
+                .await
             })
         },
     )
     .await;
-    secret_response(result, StatusCode::CREATED, &trace.0)
+    receipt::response(result, StatusCode::CREATED, &trace.0)
 }
 #[utoipa::path(post,
  path="/v1/credentials/{credential_id}/rotate",
@@ -305,10 +304,15 @@ async fn mutate_credential(
                 let scope = ReceiptScope::Admin {
                     credential: actor.id,
                 };
-                let operation = match receipt::begin(
+                let mutation_actor = actor.clone();
+                receipt::execute(
                     tx,
+                    Authority {
+                        actor: &actor,
+                        session: None,
+                    },
                     scope,
-                    anchorfs_persistence::receipts::ReceiptRequest {
+                    ReceiptRequest {
                         key: &key,
                         op_type,
                         digest,
@@ -316,76 +320,23 @@ async fn mutate_credential(
                         retention,
                         wait_bound: budget.remaining(),
                     },
+                    move |tx, operation| {
+                        Box::pin(async move {
+                            if rotation {
+                                let issued =
+                                    credentials::rotate(tx, &mutation_actor, target).await?;
+                                Published::credential(super::views::credential(operation, issued))
+                            } else {
+                                credentials::revoke(tx, &mutation_actor, target).await?;
+                                Published::metadata(super::views::mutation(operation))
+                            }
+                        })
+                    },
                 )
-                .await?
-                {
-                    Start::Fresh(id) => id,
-                    Start::Complete(result) => {
-                        authority::check_publication_time(tx, &actor, None).await?;
-                        return Ok(result);
-                    }
-                };
-                if rotation {
-                    let issued = credentials::rotate(tx, &actor, target).await?;
-                    authority::check_publication_time(tx, &actor, None).await?;
-                    receipts::commit_result(
-                        tx,
-                        scope,
-                        operation,
-                        &issued_json(operation, &issued, false),
-                    )
-                    .await?;
-                    Ok(Ok(issued_json(operation, &issued, true)))
-                } else {
-                    credentials::revoke(tx, &actor, target).await?;
-                    let result = serde_json::json!({
-                    "operation_id":operation.0,
-                    "inode_id":null,
-                    "generation":null}
-                    );
-                    authority::check_publication_time(tx, &actor, None).await?;
-                    receipts::commit_result(tx, scope, operation, &result).await?;
-                    Ok(Ok(result))
-                }
+                .await
             })
         },
     )
     .await;
-    secret_response(result, StatusCode::OK, &trace.0)
-}
-fn issued_json(
-    operation: anchorfs_core::OperationId,
-    issued: &credentials::Issued,
-    expose: bool,
-) -> serde_json::Value {
-    serde_json::json!({
-    "operation_id":operation.0,
-    "credential_id":issued.id.0,
-    "secret":if expose {
-     Some(issued.secret.expose()) }
-     else {
-     None }
-    ,
-    "credential_epoch":issued.epoch,
-    "expires_at":issued.expires_at.map(control::timestamp)}
-    )
-}
-fn secret_response(
-    result: Result<Result<serde_json::Value, ApiError>, ApiError>,
-    status: StatusCode,
-    trace: &str,
-) -> Result<Response, ApiError> {
-    let carries_secret = result
-        .as_ref()
-        .ok()
-        .and_then(|v| v.as_ref().ok())
-        .is_some_and(|v| v.get("secret").is_some_and(|s| !s.is_null()));
-    let mut response = receipt::response(result, status, trace)?;
-    if carries_secret {
-        response.headers_mut().insert(
-            axum::http::header::CACHE_CONTROL,
-            axum::http::HeaderValue::from_static("no-store"),
-        );
-    }
-    Ok(response)
+    receipt::response(result, StatusCode::OK, &trace.0)
 }

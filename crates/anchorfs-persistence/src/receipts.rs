@@ -207,11 +207,15 @@ pub struct ReceiptFilter {
     pub credential: CredentialId,
     pub allow_workspace_actors: bool,
 }
-async fn read(
+/// Inspection chooses exactly one identity; by-key lookup always stays actor-scoped.
+pub enum ReceiptLookup {
+    Id(OperationId),
+    Key(String),
+}
+pub async fn read(
     tx: &mut Transaction<'_, Postgres>,
     filter: ReceiptFilter,
-    id: Option<OperationId>,
-    key: Option<&str>,
+    lookup: ReceiptLookup,
 ) -> Result<Option<ReceiptView>, sqlx::Error> {
     let table = if filter.workspace.is_some() {
         "operations"
@@ -223,18 +227,21 @@ async fn read(
     } else {
         "$1::uuid IS NULL"
     };
+    let by_id = matches!(&lookup, ReceiptLookup::Id(_));
+    let predicate = if by_id { "id=$4" } else { "idempotency_key=$4" };
+    // Only fixed enum-selected predicates/table names are interpolated.
     let query = format!(
-        "SELECT id, request_digest, state, result, expires_at FROM {table} WHERE {workspace_filter} AND (credential_id=$2 OR ($3 AND $4::uuid IS NOT NULL)) AND (($4::uuid IS NOT NULL AND id=$4) OR ($4 IS NULL AND idempotency_key=$5)) FOR UPDATE"
+        "SELECT id,request_digest,state,result,expires_at FROM {table} WHERE {workspace_filter} AND (credential_id=$2 OR $3) AND {predicate} FOR UPDATE"
     );
-    let Some(mut row) = sqlx::query_as::<_, Stored>(sqlx::AssertSqlSafe(query))
+    let query = sqlx::query_as::<_, Stored>(sqlx::AssertSqlSafe(query))
         .bind(filter.workspace.map(|w| w.0))
         .bind(filter.credential.0)
-        .bind(filter.allow_workspace_actors)
-        .bind(id.map(|i| i.0))
-        .bind(key)
-        .fetch_optional(&mut **tx)
-        .await?
-    else {
+        .bind(by_id && filter.allow_workspace_actors);
+    let row = match lookup {
+        ReceiptLookup::Id(id) => query.bind(id.0).fetch_optional(&mut **tx).await?,
+        ReceiptLookup::Key(key) => query.bind(key).fetch_optional(&mut **tx).await?,
+    };
+    let Some(mut row) = row else {
         return Ok(None);
     };
     tombstone(tx, table, &mut row).await?;
@@ -249,12 +256,12 @@ pub async fn read_by_id(
     filter: ReceiptFilter,
     id: OperationId,
 ) -> Result<Option<ReceiptView>, sqlx::Error> {
-    read(tx, filter, Some(id), None).await
+    read(tx, filter, ReceiptLookup::Id(id)).await
 }
 pub async fn read_by_key(
     tx: &mut Transaction<'_, Postgres>,
     filter: ReceiptFilter,
     key: &str,
 ) -> Result<Option<ReceiptView>, sqlx::Error> {
-    read(tx, filter, None, Some(key)).await
+    read(tx, filter, ReceiptLookup::Key(key.to_owned())).await
 }

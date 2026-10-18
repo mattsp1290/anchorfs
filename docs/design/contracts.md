@@ -220,3 +220,16 @@ admitting a replacement before the renewal becomes visible. Target expiry is
 checked after acquiring admission, so renew still fences an expired target;
 rebind remains the explicit reactivation path. The lock covers create, renew and
 rebind, and a blocked-minter regression verifies the MVCC interval.
+
+
+Stage 1a service-boundary consolidation (2026-10-18): success responses are
+constructed from the declared wire DTOs, including explicit persistence enum and
+numeric conversions. Heterogeneous durable receipt payloads remain JSON. The
+service's `receipt::execute` owns receipt dispatch, the final original-authority
+time check and fresh receipt storage. `Published::credential` derives a secret-free
+stored DTO and a fresh response from the typed optional secret, which also selects
+no-store; no response-shape probing is used. Route callbacks keep their authority
+predicates, required locks and business mutation explicit. Persistence helpers
+still check their own publication work for direct callers; callers adding further
+waits must guard their final publication point. Receipt lookup is an Id/Key enum,
+with by-key lookup always actor-scoped and host by-ID visibility unchanged.
