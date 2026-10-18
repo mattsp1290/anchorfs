@@ -134,3 +134,75 @@ No competitor parity, provider compatibility or storage durability claim follows
 from these control-plane tests.
 
 Fresh review verdicts and remote CI evidence remain pending at this checkpoint.
+
+
+## Standard review findings and manual disposition
+
+Exact review directory:
+`reviews/feat-stage1a-control-plane-2026-10-18-150719-6dbd87933512`.
+Transaction Correctness and Authority Architecture independently reviewed fresh
+approved packets and both returned REQUEST_CHANGES with no blocking provenance
+findings, 0 Critical / 2 Important / 0 Suggestions. Each independently reproduced
+expired rebind exceeding capacity and publication after authority expiry; the
+transaction reviewer also reproduced target-credential expiry during mint admission.
+No prior reviewer conclusions or excluded research were supplied. The requested
+opus model is unavailable; available reviewer agents were used, an explicit
+procedural limitation rather than a claim that the model requirement was met.
+
+Canonical fix-review --auto deduplicated the findings into two needs-manual items
+because they affect authentication. It made no automatic edits and stopped the
+checkpoint before commit/push. The implementer then applied a separate manually
+inspected fix-review pass under the user's existing implementation authorization:
+
+- TC1/AA2: mint and expired-session reactivation now share admission serialization;
+  full capacity rejects reactivation, active rebind retains its slot. Concurrent
+  create/rebind and rebind/rebind cases enforce one activation into the last slot.
+- TC2/AA1: a database-clock guard checks captured credential/actor-session expiry
+  after waits at publication, including receipt replay/inspection. Original
+  lifetimes preserve intentional self-fencing semantics. Mint checks target expiry
+  after admission and insertion. Business errors roll back fresh state and receipt.
+
+These fixes enforce the approved session bound and spec 02 publication predicate;
+no scope narrowing or imported specification amendment was used. Local contract
+records clarify admission and actual target-lock ordering. Reviewers' follow-ups
+are labeled rechecks, not fresh independent initial reviews.
+
+New regression evidence: 16 persistence control-plane tests passed, including
+all three new expiry/admission tests. HTTP regressions observe real database lock
+waits before expiry, then prove 401/409 plus unchanged state and no fresh receipt.
+A 64-active-plus-one-expired HTTP case checks 507 and active rebind at capacity.
+Reviewer rechecks and resumed checkpoint gates remain pending.
+
+
+The first recheck confirmed a residual TC1/AA2 schedule: a renewal's uncommitted
+extension can be hidden behind the old committed expiry while create counts
+slots. Both reviewers independently identified the gap; the transaction reviewer
+reproduced it using a test-only disposable-database barrier. Renew now takes the
+same admission lock through COMMIT and evaluates target expiry after acquiring it.
+`renewed_session_does_not_release_a_hidden_mvcc_slot` holds a real renewal
+uncommitted past the old expiry and observes the minter block, then reject at
+capacity after renewal commits. This is the same bounded-session requirement,
+not a scope change. Rechecks continue on this additional manual fix.
+
+
+Final standard rechecks: Transaction Correctness and Authority Architecture both
+returned APPROVE with no blocking provenance findings on the manually inspected
+fixes, including renewal's MVCC interval. The former independently reran 17
+transaction and 14 HTTP tests plus its repaired scratch reproduction; the latter
+ran 17 transaction, 14 HTTP, 3 design and 3 provenance tests. Both rechecks are
+same-context continuations. Authority Architecture's first recheck was interrupted
+by a tool content filter; it resumed ordinary code inspection/repository tests
+and completed, so no review stage is inferred from the interrupted attempt.
+
+Canonical auto validation was resumed against the same manifest/head: both
+findings are already resolved; no automatic auth edits, no outstanding
+needs-manual item. Original findings and both structured summaries remain in the
+exact review directory. The first checkpoint now runs the discovered CI gates
+before its dedicated commit and push. No task-created PostgreSQL/MinIO container
+remains; a pre-existing `web-api-postgres-1` Compose container was identified by
+creation/Compose metadata and left untouched.
+
+Resumed standard checkpoint gates passed: format, all-target Clippy, workspace
+build, all 125 workspace tests, dependency licenses/bans/advisories/sources,
+and diff whitespace. The Docker-free core/backend/mount subset and workspace
+test compilation also passed. Remote CI remains pending PR creation.

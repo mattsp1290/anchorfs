@@ -127,10 +127,14 @@ pub async fn create_credential(
                 .await?
                 {
                     Start::Fresh(id) => id,
-                    Start::Complete(result) => return Ok(result),
+                    Start::Complete(result) => {
+                        authority::check_publication_time(tx, &actor, None).await?;
+                        return Ok(result);
+                    }
                 };
                 let issued = credentials::issue(tx, &actor, new).await?;
                 let stored = issued_json(operation, &issued, false);
+                authority::check_publication_time(tx, &actor, None).await?;
                 receipts::commit_result(tx, scope, operation, &stored).await?;
                 Ok(Ok(issued_json(operation, &issued, true)))
             })
@@ -316,10 +320,14 @@ async fn mutate_credential(
                 .await?
                 {
                     Start::Fresh(id) => id,
-                    Start::Complete(result) => return Ok(result),
+                    Start::Complete(result) => {
+                        authority::check_publication_time(tx, &actor, None).await?;
+                        return Ok(result);
+                    }
                 };
                 if rotation {
                     let issued = credentials::rotate(tx, &actor, target).await?;
+                    authority::check_publication_time(tx, &actor, None).await?;
                     receipts::commit_result(
                         tx,
                         scope,
@@ -335,6 +343,7 @@ async fn mutate_credential(
                     "inode_id":null,
                     "generation":null}
                     );
+                    authority::check_publication_time(tx, &actor, None).await?;
                     receipts::commit_result(tx, scope, operation, &result).await?;
                     Ok(Ok(result))
                 }

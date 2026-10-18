@@ -334,9 +334,14 @@ The Stage 0 model for future file mutations serializes on workspace_quotas; name
 
 For implemented control-plane jobs the order is workspace FOR SHARE → actor
 credential FOR SHARE (FOR UPDATE for self-rotation or a cascade containing the
-actor) → credential targets FOR UPDATE top-down → actor session FOR SHARE
-(FOR UPDATE when also the target) → receipt SELECT FOR UPDATE / INSERT →
-per-target session-mint advisory lock. Namespace/file transaction ordering above
+actor) → actor session FOR SHARE (FOR UPDATE when also the target) → receipt
+SELECT FOR UPDATE / INSERT → mutation target credentials FOR UPDATE top-down
+or target session FOR UPDATE → per-target session-admission advisory lock.
+The admission lock applies to mint and rebind; expired rebind consumes a slot,
+while active rebind retains its slot. Session revocation updates follow the
+locked credential cascade. This review clarification records actual target locks
+after receipts; self-target actor locks remain in the prologue to prevent the
+same-key lock-upgrade cycle. Namespace/file transaction ordering above
 is retained as its Stage 0 baseline and must be reconciled before those routes
 are implemented. Control-plane jobs store quota limits but do not acquire
 workspace quota locks or charge file bytes.
@@ -350,7 +355,9 @@ mutual session renew, sibling revocation during parent cascade); PostgreSQL abor
 one transaction with 40P01, mapped to retryable 503. Clients retry with the same
 key under current authority; rotation/revocation may require a replacement proof.
 No deadlock-freedom claim is made. Persistence tests observe same-key replay and
-the mutual rotation/renew schedules.
+all three deadlock schedules. A final database-clock check after all publication
+waits enforces the original actor credential/session expiry; row locks alone
+do not preserve a lifetime. Fresh mutation/receipt writes roll back on expiry.
 
 ## Publication fencing
 
@@ -361,3 +368,11 @@ Capture and recheck credential epoch/revoked_at; workspace authorization and mut
 Credential id, kind, workspace_id and issued_by_credential_id are immutable after issuance. Rotation/revocation may change secret/epoch/role/lifetime fields but cannot transfer identity or issuer scope. This closes the reproduced concurrent issuer-rescope/worker-issuance schedule without relying on snapshot reads. Schema verification: credential_scope_cannot_transfer_during_worker_issuance.
 
 receipt_expire owns the state/result expiration transition in both receipt tables and session_epoch/revoked_at changes described in B11. The structural fixture retains a live current manifest and object/reservation references, expires both receipt payloads and demonstrates unique-key rejection. It is not an expiry worker or a claim that future publication fencing is implemented.
+
+Stage 1a admission recheck (2026-10-18): renew also holds the same per-credential
+admission lock through COMMIT. Without this, another transaction could count an
+old committed expiry after it lapses while a renewal's extension is uncommitted,
+admitting a replacement before the renewal becomes visible. Target expiry is
+checked after acquiring admission, so renew still fences an expired target;
+rebind remains the explicit reactivation path. The lock covers create, renew and
+rebind, and a blocked-minter regression verifies the MVCC interval.

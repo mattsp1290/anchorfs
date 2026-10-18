@@ -229,6 +229,7 @@ async fn inspect(
                     }
                 }
                 .ok_or(authority::AuthorityError::NotFound)?;
+                authority::check_publication_time(tx, &actor, None).await?;
                 Ok(Ok(serde_json::json!({
                 "operation_id":view.operation_id.0,
                 "state":view.state,

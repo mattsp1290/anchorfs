@@ -106,7 +106,10 @@ pub async fn create_session(
                 .await?
                 {
                     Start::Fresh(id) => id,
-                    Start::Complete(result) => return Ok(result),
+                    Start::Complete(result) => {
+                        authority::check_publication_time(tx, &actor, None).await?;
+                        return Ok(result);
+                    }
                 };
                 let session = sessions::create(
                     tx,
@@ -118,6 +121,7 @@ pub async fn create_session(
                 )
                 .await?;
                 let result = grant(operation, session);
+                authority::check_publication_time(tx, &actor, None).await?;
                 receipts::commit_result(tx, scope, operation, &result).await?;
                 Ok(Ok(result))
             })
@@ -401,9 +405,10 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
         &[&workspace.to_string(), &target.to_string()],
         body.as_ref(),
     );
-    let (ttl, retention) = (
+    let (ttl, retention, limit) = (
         state.config.client_session_ttl,
         state.config.receipt_retention,
+        state.config.max_sessions_per_credential,
     );
     let result = control::run(
         &state,
@@ -452,7 +457,10 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
                 .await?
                 {
                     Start::Fresh(id) => id,
-                    Start::Complete(result) => return Ok(result),
+                    Start::Complete(result) => {
+                        authority::check_publication_time(tx, &actor, Some(&actor_session)).await?;
+                        return Ok(result);
+                    }
                 };
                 let result = match kind {
                     Mutation::Renew => grant(
@@ -461,7 +469,7 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
                     ),
                     Mutation::Rebind => grant(
                         operation,
-                        sessions::rebind(tx, &actor, &actor_session, workspace, target, ttl)
+                        sessions::rebind(tx, &actor, &actor_session, workspace, target, ttl, limit)
                             .await?,
                     ),
                     Mutation::Revoke => {
@@ -473,6 +481,7 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
                         )
                     }
                 };
+                authority::check_publication_time(tx, &actor, Some(&actor_session)).await?;
                 receipts::commit_result(tx, scope, operation, &result).await?;
                 Ok(Ok(result))
             })

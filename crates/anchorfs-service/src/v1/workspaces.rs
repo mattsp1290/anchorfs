@@ -99,7 +99,10 @@ pub async fn create_workspace(
                 .await?
                 {
                     Start::Fresh(id) => id,
-                    Start::Complete(result) => return Ok(result),
+                    Start::Complete(result) => {
+                        authority::check_publication_time(tx, &actor, None).await?;
+                        return Ok(result);
+                    }
                 };
                 let workspace = workspaces::create(
                     tx,
@@ -118,6 +121,7 @@ pub async fn create_workspace(
                 "operation_id": operation.0,
                  "workspace": workspace_json(workspace)}
                 );
+                authority::check_publication_time(tx, &actor, None).await?;
                 receipts::commit_result(tx, scope, operation, &result).await?;
                 Ok(Ok(result))
             })
@@ -180,6 +184,7 @@ pub async fn get_workspace(
                 let view = workspaces::read(tx, workspace)
                     .await?
                     .ok_or(authority::AuthorityError::NotFound)?;
+                authority::check_publication_time(tx, &actor, None).await?;
                 Ok(Ok(workspace_json(view)))
             })
         },

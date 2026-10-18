@@ -213,3 +213,24 @@ pub async fn lock_workspace(
 pub fn same_workspace(actor: &ActorCredential, workspace: WorkspaceId) -> bool {
     actor.kind == CredentialKind::Administrator || actor.workspace_id == Some(workspace)
 }
+
+/// Row locks freeze authority fields, not database time. Check the admitted
+/// lifetimes again after waits, using the original session even for self-renew.
+/// Intentionally do not reload post-mutation epochs/revocation: self-fencing
+/// operations must be able to publish their receipt.
+pub async fn check_publication_time(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorCredential,
+    session: Option<&ActorSession>,
+) -> Result<(), AuthorityError> {
+    let now: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    if actor.expires_at.is_some_and(|expiry| expiry <= now) {
+        return Err(AuthorityError::Unauthenticated);
+    }
+    if session.is_some_and(|session| session.expires_at <= now) {
+        return Err(AuthorityError::Fenced);
+    }
+    Ok(())
+}

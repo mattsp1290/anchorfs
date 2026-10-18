@@ -140,7 +140,9 @@ pub async fn issue(
         }
         CredentialKind::Worker => return Err(AuthorityError::Forbidden),
     }
-    Ok(insert(tx, new, Some(actor.id)).await?)
+    let issued = insert(tx, new, Some(actor.id)).await?;
+    crate::authority::check_publication_time(tx, actor, None).await?;
+    Ok(issued)
 }
 /// Caller holds the workspace and actor locks before invoking target mutations.
 async fn target(
@@ -192,6 +194,7 @@ pub async fn rotate(
     .fetch_one(&mut **tx)
     .await?;
     sqlx::query("UPDATE client_sessions SET revoked_at=transaction_timestamp() WHERE credential_id=$1 AND revoked_at IS NULL").bind(id.0).execute(&mut **tx).await?;
+    crate::authority::check_publication_time(tx, actor, None).await?;
     Ok(Issued {
         id,
         secret,
@@ -232,6 +235,7 @@ pub async fn revoke(
     .execute(&mut **tx)
     .await?;
     let sessions = sqlx::query("UPDATE client_sessions SET revoked_at=transaction_timestamp() WHERE credential_id=ANY($1) AND revoked_at IS NULL").bind(&locked).execute(&mut **tx).await?.rows_affected();
+    crate::authority::check_publication_time(tx, actor, None).await?;
     Ok(RevokeOutcome {
         revoked_credentials: locked.into_iter().map(CredentialId).collect(),
         revoked_sessions: sessions,

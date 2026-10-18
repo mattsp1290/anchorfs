@@ -165,7 +165,8 @@ identity, role, allowance and lifetime cannot exceed the host's grant.
 
 Administrators and hosts mint sessions; workers cannot. Session limits count
 unrevoked/unexpired sessions and serialize under a per-target transaction advisory
-lock. Every session mutation checks the actor's credential, session ownership,
+lock. Rebinding an expired session consumes a slot under the same lock; an
+already active target can rebind at capacity without consuming another slot. Every session mutation checks the actor's credential, session ownership,
 workspace, expiry and both epochs. Workers renew/revoke only their actor session;
 hosts manage any session in W. Rebind is host-only, permits expired targets,
 increments the session epoch and clears binding. Revoked sessions stay terminal.
@@ -199,3 +200,23 @@ bounds each ordinary lock wait; receipt insertion temporarily lowers it to the
 remaining budget. 40P01/40001/55P03/57014 before commit map to retryable 503
 with 100 ms guidance; session limit returns 507 quota_exceeded. The service does
 not retry internally. No rate limiting or background expiry sweeper exists.
+
+Stage 1a review correction (2026-10-18): row locks preserve authority fields but
+cannot freeze time. Every implemented mutation checks its originally admitted
+credential and required actor-session expiry again at the final publication
+boundary after receipt, target and admission waits. Captured original expiry is
+used even for self-renew/rebind/revoke; reloading the mutated epochs would wrongly
+reject legitimate self-fencing results. Minting also rechecks target-credential
+expiry after admission/insert waits. Expiry rejects and rolls back state plus
+fresh receipt (401 credential, 409 actor-session fence, 404 expired mint target).
+Receipt replays and inspection recheck current admitted credential time before
+returning metadata. This adds enforcement of the existing spec 02 predicate;
+it does not change the imported baseline.
+
+Stage 1a admission recheck (2026-10-18): renew also holds the same per-credential
+admission lock through COMMIT. Without this, another transaction could count an
+old committed expiry after it lapses while a renewal's extension is uncommitted,
+admitting a replacement before the renewal becomes visible. Target expiry is
+checked after acquiring admission, so renew still fences an expired target;
+rebind remains the explicit reactivation path. The lock covers create, renew and
+rebind, and a blocked-minter regression verifies the MVCC interval.
