@@ -64,7 +64,7 @@ One deployment_id is both schema_meta identity and bucket prefix. Startup compar
 
 TLS (U1): spec 03 requires TLS. Stage 0 listener is plaintext, restricted to loopback under the durable profile; development may bind all addresses. TLS_CERT_PATH/TLS_KEY_PATH are reserved and rejected. TLS termination is a Stage 1 decision. Verified boundary: serve_refuses_non_loopback_plaintext_durable.
 
-Readiness: spec 04 ultimately requires backend capability checks. Stage 0 reports backend=not_checked and checks only database/version/durability readiness. Backend checks remain unverified until the Stage 1 MinIO contract suite. PostgreSQL reset_val plus role/database override checks detect the specified unsafe profiles; a privileged role setting can mask a lower-level server default, so these checks do not certify every deployment configuration or storage hardware.
+Readiness lists one key under the deployment prefix through a retry-free client, with a bounded deadline and a one-second single-flight memo. It checks reachability, authentication, bucket existence and list permission; write permission, durability and replication remain unprobed. The service readiness setting `backend_probe_deadline` is deliberately outside the storage Timers table. TLS U1 and the development-only plaintext S3 rule are unchanged, so durable-profile end-to-end successful backend readiness remains unverified until U1. PostgreSQL reset_val plus role/database override checks detect the specified unsafe profiles; a privileged role setting can mask a lower-level server default, so these checks do not certify every deployment configuration or storage hardware.
 
 ## Linux/FUSE matrix
 
@@ -86,7 +86,7 @@ Only default_permissions is a mount option here. direct_io is an open/reply flag
 
 | Provider | Status |
 |---|---|
-| MinIO local | unverified until Stage 1 contract suite |
+| MinIO local | partially verified: `anchorfs-conformance/tests/backend.rs` F1–F15 against `bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20`, single node, plaintext loopback. Delete excluded. Throttling, timeouts and lost responses are simulated by an in-test proxy. Checksum enforcement observed through one raw SDK request (F11b). No multi-node or durability claim. |
 | DigitalOcean Spaces | unverified until Stage 3 live disposable contract suite |
 | AWS S3 | later stage; unverified |
 
@@ -103,3 +103,9 @@ All workspace operations except getWorkspace, createSession and receipt inspecti
 Workflow authority is the paired X-Anchorfs-Workflow-Token (64 hex characters encoding 32 random bytes) and X-Anchorfs-Workflow-Epoch (positive mutation epoch). Both must be present or both absent. Renew/release require them. During an active lease, every mutation must present its current grant; ordinary operations may omit it only when no active lease applies. Bound sessions also record the grant epoch and fail closed after expiry until authorized host rebind. Stage 0 validates header shape only; Stage 1 must verify token hash, original credential, actor/target binding, current epochs/expiry and workflow/session authority under transaction locks.
 
 GET /v1/admin-operations/{operation_id} and GET /v1/admin-operations?idempotency_key=... inspect original-credential-scoped administrative receipts. After a lost createWorkspace response, the authenticated original issuer can look up its original key without knowing either generated workspace ID or operation ID. It must not create again under a new key. Expired results return the retained tombstone through inspection and operation_indeterminate on mutation retry. B11 in persistent-state.md defines permanent identity/key retention and atomic session fencing; session renewal never revives a revoked epoch.
+
+## Backend integrity contract
+
+PUT verifies the local SHA-256 before uploading a nonempty object of at most the default chunk size. The default `checksum_mode=sha256` sends a signed SHA-256 checksum header: a matching provider echo confirms it, an absent echo triggers verified read-back, and a wrong echo is an integrity error. Mode `none` relies on transport integrity for successful uploads. SDK response checksum validation is disabled; AnchorFS verifies digest and length in `get_verified`. `get_range` verifies Content-Range and Content-Length framing only, and surfaces absent or clamped ranges rather than zero-filling.
+
+Ambiguous uploads reconcile through HEAD and, when needed, verified GET, repeating the same immutable bytes only after observed absence. The bound is two PUT, two HEAD and two GET calls, each with bounded SDK retries. `Unavailable` after reconciliation means not observed stored after the repeat and final HEAD; a delayed request may still land. Failed observation yields `UncertainOutcome`. Native metadata publication and file operations remain unimplemented. No Spaces/AWS compatibility or performance claim follows from local provider tests.

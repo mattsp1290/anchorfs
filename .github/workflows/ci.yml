@@ -46,7 +46,7 @@ jobs:
             target
           key: ${{ runner.os }}-${{ runner.arch }}-test-${{ hashFiles('Cargo.lock') }}
       - run: rustup show active-toolchain
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked -- --test-threads=4
   build-linux-arm64:
     runs-on: ubuntu-24.04-arm
     steps:

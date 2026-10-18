@@ -22,6 +22,6 @@ Use the [local milestone selector](../.agents/skills/anchorfs-next-milestone/SKI
 
 - [Native API contract](api/openapi-v1.yaml), generated from service route annotations.
 - [Persistent state ownership](design/persistent-state.md) and [frozen contracts](design/contracts.md).
-- [Dependency provenance](provenance/dependencies.md) and [Stage 0 review evidence](provenance/stage0-review.md).
+- [Dependency provenance](provenance/dependencies.md), [Stage 0 review evidence](provenance/stage0-review.md), and [Stage 1 backend evidence](provenance/stage1-backend-review.md).
 
-Stage 0 implements build, schema and service-contract verification. Native storage operations return 501; backend persistence and Linux mount behavior remain later-stage work.
+Backend object operations are implemented and verified against a pinned local MinIO image, and readiness checks database settings and backend list capability. Native storage routes still return 501; metadata publication and Linux mount behavior remain later-stage work.

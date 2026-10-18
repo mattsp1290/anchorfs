@@ -559,6 +559,19 @@ async fn checksum_request_provider_and_payload_contracts() {
                     request.request_headers["x-amz-sdk-checksum-algorithm"],
                     "SHA256"
                 );
+                let authorization = request.request_headers["authorization"].to_str().unwrap();
+                let signed = authorization
+                    .split("SignedHeaders=")
+                    .nth(1)
+                    .unwrap()
+                    .split(',')
+                    .next()
+                    .unwrap();
+                assert!(
+                    signed
+                        .split(';')
+                        .any(|name| name == "x-amz-checksum-sha256")
+                );
             } else {
                 assert!(
                     !request

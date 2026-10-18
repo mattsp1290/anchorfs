@@ -15,12 +15,22 @@ WP1 implements the plan's two-upload reconciliation bound, prefix guards, length
 ## Verification so far
 
 - `cargo check -p anchorfs-backend -p anchorfs-service --locked`: passed.
-- `cargo test -p anchorfs-backend --locked`: nine network-free tests passed on the development macOS host; further classification coverage is being finalized.
+- `cargo test -p anchorfs-backend --locked`: nine network-free tests passed on the development macOS host, including service, construction, timeout, dispatch and response-error classification.
 - `cargo deny check licenses bans advisories sources`: passed all four checks with existing duplicate-version warnings, without policy changes.
+
+## Provider observations and plan corrections
+
+The fixture and transparent-proxy gates each passed three times before scenario verification. The first complete F1–F15 run passed 11 grouped tests, but repeated workspace runs exposed a startup race: observed Bitnami logs show a temporary setup server stopped about five seconds after startup before the final `** Starting MinIO **` marker. Two successful HEAD requests did not prove setup had ended. The fixture now waits for that final marker before the bounded list poll, bucket creation and two HEAD checks; the corrected gates each passed three additional runs. This is an independently observed provider lifecycle correction, not a change to product scope.
+
+The interrupted-body proxy delays its stream error by 50 ms after yielding bytes, so headers/body reach the client before interruption; otherwise hyper can fail before headers and the SDK correctly retries the GET. CI test concurrency is capped at four per test binary, as the plan permits for container pressure. A local full run at default concurrency failed before the startup race was diagnosed; no unbounded-concurrency claim is made.
+
+Observed pinned image: `bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20`. `minio --version` reports `DEVELOPMENT.2025-07-23T15-54-02Z`, commit `7ced9663e6a791fef9dc6be798ff24cda9c730ac`, Go 1.24.6 linux/arm64, GNU AGPLv3. F11b rejects a wrong checksum with `XAmzContentChecksumMismatch` (mapped to IntegrityMismatch). F15 clamps the range with HTTP 206 and Content-Range `bytes 9000-9999/10000`.
+
+Development toolchain: rustc 1.95.0 (59807616e, 2026-04-14), cargo 1.95.0, Docker Engine 29.2.1, macOS arm64. Local service conformance passed 17 tests; service binary tests passed eight, including development successful readiness, durable failed backend readiness with live process/healthz, and plaintext rejection. Design coverage and provenance suites passed three tests each. The macOS Docker-free core/backend/mount subset passed. Relative links under docs resolved, imported specifications remain unchanged, and the OpenAPI command still matches the frozen snapshot.
 
 ## Review and acceptance status
 
-Implementation and verification are in progress. Fresh independent code reviews, the review gauntlet, provider observations, full workspace verification, and final CI evidence remain pending. Owner sign-off is pending.
+Local implementation verification passed: `cargo test --workspace --locked -- --test-threads=4`, `cargo fmt --all --check`, and workspace Clippy with `-D warnings`. The final checksum signing assertion and the corrected 404 mapping also passed targeted tests. Fresh independent code reviews, the review gauntlet and final CI evidence remain pending. Owner sign-off is pending.
 
 ## Limits and follow-ups
 

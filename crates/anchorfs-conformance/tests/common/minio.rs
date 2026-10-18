@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use anchorfs_backend::config::{Addressing, ChecksumMode, CredentialSource, S3Config};
 use anchorfs_core::{DeploymentId, Secret, digest::Sha256Digest};
+use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::{
     Client,
     config::{BehaviorVersion, Credentials, Region, retry::RetryConfig},
@@ -9,7 +10,9 @@ use aws_sdk_s3::{
 use reqwest::Url;
 use std::time::{Duration, Instant};
 use testcontainers::{
-    ContainerAsync, GenericImage, ImageExt, core::IntoContainerPort, runners::AsyncRunner,
+    ContainerAsync, GenericImage, ImageExt,
+    core::{IntoContainerPort, WaitFor},
+    runners::AsyncRunner,
 };
 
 pub const MINIO_IMAGE: &str = "bitnamilegacy/minio";
@@ -28,6 +31,8 @@ pub struct Minio {
 pub async fn start() -> Minio {
     let container = GenericImage::new(MINIO_IMAGE, &format!("{MINIO_TAG}@{MINIO_IMAGE_DIGEST}"))
         .with_exposed_port(9000.tcp())
+        // Bitnami stops its temporary setup server before this final marker.
+        .with_wait_for(WaitFor::message_on_stderr("** Starting MinIO **"))
         .with_env_var("MINIO_ROOT_USER", ROOT_USER)
         .with_env_var("MINIO_ROOT_PASSWORD", ROOT_PASSWORD)
         .with_startup_timeout(Duration::from_secs(60))
@@ -142,7 +147,12 @@ pub async fn raw_get(client: &Client, key: &str) -> Option<Vec<u8>> {
     match client.get_object().bucket(BUCKET).key(key).send().await {
         Ok(output) => Some(output.body.collect().await.unwrap().into_bytes().to_vec()),
         Err(error) if error.as_service_error().is_some_and(|e| e.is_no_such_key()) => None,
-        Err(error) => panic!("independent GET failed: {error}"),
+        Err(error) => panic!(
+            "independent GET failed: code={:?} message={:?} status={:?}",
+            error.code(),
+            error.message(),
+            error.raw_response().map(|r| r.status().as_u16())
+        ),
     }
 }
 

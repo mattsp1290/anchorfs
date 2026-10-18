@@ -454,7 +454,7 @@ fn service_error(
         "RequestTimeout" | "IncompleteBody" => BackendError::Unavailable,
         _ => match status {
             Some(401 | 403) => BackendError::Forbidden,
-            Some(404) if object => BackendError::NotFound,
+            Some(404) if object && code.is_none() => BackendError::NotFound,
             Some(404) => BackendError::BucketNotFound,
             Some(416) => BackendError::InvalidRange,
             Some(429 | 500..=599) => BackendError::Unavailable,
@@ -698,6 +698,10 @@ mod tests {
         assert_eq!(
             service_error(Some("NotFound"), Some(404), None, true),
             BackendError::NotFound
+        );
+        assert_eq!(
+            service_error(Some("UnexpectedBucketError"), Some(404), None, true),
+            BackendError::BucketNotFound
         );
         let e: SdkError<PutObjectError> =
             SdkError::construction_failure(std::io::Error::other("synthetic"));
