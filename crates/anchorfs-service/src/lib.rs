@@ -1,4 +1,4 @@
-//! Native API contract and Stage 0 service. No storage operations are implemented.
+//! Native API contract, control plane, namespace and metadata-only handles.
 pub mod api_doc;
 pub mod app;
 pub mod config;

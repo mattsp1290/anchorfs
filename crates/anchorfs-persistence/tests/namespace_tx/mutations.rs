@@ -247,3 +247,38 @@ async fn concurrent(cycle: bool) {
     tx.rollback().await.unwrap();
     invariants(&db, w).await;
 }
+#[tokio::test]
+async fn collation_is_byte_order() {
+    let (db, w) = fixture().await;
+    let mut tx = db.pool.begin().await.unwrap();
+    let guard = namespace::lock(&mut tx, w).await.unwrap();
+    for name in ["B", "a", "é", "_", "Z"] {
+        namespace::symlink(&mut tx, &guard, &caller(), &path(name), "opaque")
+            .await
+            .unwrap();
+    }
+    let root = namespace::root(&mut tx, w).await.unwrap();
+    let rows = namespace::list(&mut tx, w, root.id, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        ["B", "Z", "_", "a", "é"]
+    );
+    tx.commit().await.unwrap();
+    invariants(&db, w).await;
+}
+#[tokio::test]
+async fn namespace_guard_cannot_outlive_its_locking_transaction() {
+    let (db, w) = fixture().await;
+    let mut first = db.pool.begin().await.unwrap();
+    let guard = namespace::lock(&mut first, w).await.unwrap();
+    first.commit().await.unwrap();
+    let mut second = db.pool.begin().await.unwrap();
+    assert!(matches!(
+        namespace::mkdir(&mut second, &guard, &caller(), &path("a"), 0o755).await,
+        Err(NamespaceError::Database(sqlx::Error::Protocol(_)))
+    ));
+    second.rollback().await.unwrap();
+    invariants(&db, w).await;
+}

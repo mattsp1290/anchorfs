@@ -53,6 +53,7 @@ pub enum NamespaceError {
 }
 /// Constructed only after locking the workspace's namespace row.
 pub struct NamespaceGuard {
+    transaction_id: i64,
     workspace: WorkspaceId,
     generation: i64,
     bumped: AtomicBool,
@@ -67,13 +68,32 @@ pub async fn lock(
     .bind(workspace.0)
     .fetch_one(&mut **tx)
     .await?;
+    let transaction_id = sqlx::query_scalar("SELECT txid_current()")
+        .fetch_one(&mut **tx)
+        .await?;
     Ok(NamespaceGuard {
+        transaction_id,
         workspace,
         generation,
         bumped: AtomicBool::new(false),
     })
 }
 impl NamespaceGuard {
+    /// A guard cannot be reused after its locking transaction has ended.
+    pub async fn check_transaction(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<(), sqlx::Error> {
+        let current: i64 = sqlx::query_scalar("SELECT txid_current()")
+            .fetch_one(&mut **tx)
+            .await?;
+        if current != self.transaction_id {
+            return Err(sqlx::Error::Protocol(
+                "namespace guard belongs to another transaction".into(),
+            ));
+        }
+        Ok(())
+    }
     pub fn workspace(&self) -> WorkspaceId {
         self.workspace
     }
@@ -81,6 +101,7 @@ impl NamespaceGuard {
         self.generation + i64::from(self.bumped.load(Ordering::Relaxed))
     }
     pub async fn bump(&self, tx: &mut Transaction<'_, Postgres>) -> Result<i64, sqlx::Error> {
+        self.check_transaction(tx).await?;
         if !self.bumped.load(Ordering::Relaxed) {
             sqlx::query("UPDATE namespace_locks SET namespace_generation=namespace_generation+1 WHERE workspace_id=$1").bind(self.workspace.0).execute(&mut **tx).await?;
             self.bumped.store(true, Ordering::Relaxed);
@@ -301,6 +322,7 @@ async fn create(
     target: Option<&str>,
 ) -> Result<InodeRow, NamespaceError> {
     validate_mode(mode)?;
+    guard.check_transaction(tx).await?;
     let w = guard.workspace;
     let (parent, name) = resolve_parent(tx, w, path, caller).await?;
     let rows = lock_inodes(tx, w, &[parent.id]).await?;
@@ -356,6 +378,7 @@ pub async fn link(
     existing: &WorkspacePath,
     path: &WorkspacePath,
 ) -> Result<Mutated, NamespaceError> {
+    guard.check_transaction(tx).await?;
     let w = guard.workspace;
     let source = resolve(tx, w, Some(existing), caller).await?;
     if source.kind == "directory" {
@@ -404,6 +427,7 @@ async fn remove(
     path: &WorkspacePath,
     directory: bool,
 ) -> Result<Mutated, NamespaceError> {
+    guard.check_transaction(tx).await?;
     let w = guard.workspace;
     let (parent, name) = resolve_parent(tx, w, path, caller).await?;
     let row = child(tx, w, parent.id, name.as_str())
@@ -444,6 +468,7 @@ pub async fn set_attributes(
     if let Some(mode) = mode {
         validate_mode(mode)?;
     }
+    guard.check_transaction(tx).await?;
     let w = guard.workspace;
     let row = resolve(tx, w, path, caller).await?;
     let rows = lock_inodes(tx, w, &[row.id]).await?;
@@ -468,6 +493,7 @@ pub async fn rename(
     from: &WorkspacePath,
     to: &WorkspacePath,
 ) -> Result<Mutated, NamespaceError> {
+    guard.check_transaction(tx).await?;
     let w = guard.workspace;
     let (pf, nf) = resolve_parent(tx, w, from, caller).await?;
     let (pt, nt) = resolve_parent(tx, w, to, caller).await?;

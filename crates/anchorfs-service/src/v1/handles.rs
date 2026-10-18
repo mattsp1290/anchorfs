@@ -34,7 +34,8 @@ pub async fn open_handle(
         exclusive: body.exclusive,
         truncate: body.truncate,
         mode: body.mode,
-    })?;
+    })
+    .map_err(|_| ApiError::new(anchorfs_core::ErrorCode::InvalidInput, &context.trace.0))?;
     execute(
         HandleCall {
             state,

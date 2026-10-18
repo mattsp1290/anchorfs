@@ -104,6 +104,9 @@ pub async fn open_file(
     validate_request(&req)?;
     let w = session.workspace_id;
     let existing = if req.create {
+        if let Some(guard) = guard {
+            guard.check_transaction(tx).await?;
+        }
         if guard.is_none_or(|g| g.workspace() != w) {
             return Err(NamespaceError::InvalidInput.into());
         }

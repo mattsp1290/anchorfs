@@ -1,7 +1,7 @@
 # anchorfs
 durable state independent of compute
 
-AnchorFS is an independent Rust storage project for persistent workspaces shared by agent harnesses and replaceable tool workers. The repository currently contains reviewed specifications and planning workflows; storage implementation has not started.
+AnchorFS is an independent Rust storage project for persistent workspaces shared by agent harnesses and replaceable tool workers. The service implements authenticated workspace/session control, transactional namespace metadata and empty-file handles, plus a locally verified S3 backend adapter. Durable file bytes and Linux mounts remain later work. See [Stage 1b evidence](docs/provenance/stage1b-namespace-review.md).
 
 Start with [the implementation documents](docs/README.md) and [cleanroom policy](docs/cleanroom.md).
 

@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 pub mod client;
 pub mod fake_backend;
+pub mod fixture;
 pub mod minio;
 pub mod proxy;
 use anchorfs_core::{DeploymentId, Secret};
