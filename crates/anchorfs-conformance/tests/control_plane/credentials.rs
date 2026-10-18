@@ -377,3 +377,49 @@ async fn cp10_revocation_cascades_and_bootstrap_recovers_all_administrators_revo
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn admin_hosts_are_reachable_and_cannot_delegate_admin() {
+    let f = Fixture::new().await;
+    let mut body = credential_body(f.workspace, "host");
+    body["role"] = json!("admin");
+    let grant = f
+        .client
+        .call(
+            "POST",
+            "/v1/credentials",
+            Some(&f.admin),
+            None,
+            Some("admin-host"),
+            Some(body.clone()),
+        )
+        .await
+        .status(201)
+        .body;
+    let host = Credential::from_grant(&grant);
+    f.client
+        .call(
+            "POST",
+            "/v1/credentials",
+            Some(&host),
+            None,
+            Some("delegate-admin"),
+            Some(body),
+        )
+        .await
+        .error(403, "forbidden");
+    let mut worker = credential_body(f.workspace, "worker");
+    worker["role"] = json!("admin");
+    f.client
+        .call(
+            "POST",
+            "/v1/credentials",
+            Some(&f.admin),
+            None,
+            Some("admin-worker"),
+            Some(worker),
+        )
+        .await
+        .error(400, "invalid_input");
+    f.backend.untouched();
+}

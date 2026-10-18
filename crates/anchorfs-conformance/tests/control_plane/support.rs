@@ -136,6 +136,8 @@ impl Fixture {
         config.metadata_call_deadline = Duration::from_millis(millis);
         Client {
             app: build_router(AppState {
+                cursor_key: anchorfs_core::decode_hex_32(config.cursor_signing_key.expose())
+                    .expect("validated cursor signing key"),
                 pool: self.pool.clone(),
                 config: Arc::new(config),
                 backend: self.backend.clone(),

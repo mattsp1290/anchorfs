@@ -73,3 +73,25 @@ pub fn operation(view: ReceiptView) -> Result<OperationStatus, ApiError> {
         result: view.result,
     })
 }
+pub fn attributes(
+    row: &anchorfs_persistence::namespace::InodeRow,
+) -> Result<InodeAttributes, ApiError> {
+    Ok(InodeAttributes {
+        inode_id: row.id,
+        generation: row.generation,
+        kind: match row.kind.as_str() {
+            "file" => InodeKindDto::File,
+            "directory" => InodeKindDto::Directory,
+            "symlink" => InodeKindDto::Symlink,
+            _ => return Err(invalid_record()),
+        },
+        size: row.size.try_into().map_err(|_| invalid_record())?,
+        mode: row.mode.try_into().map_err(|_| invalid_record())?,
+        uid: row.uid.try_into().map_err(|_| invalid_record())?,
+        gid: row.gid.try_into().map_err(|_| invalid_record())?,
+        nlink: row.nlink.try_into().map_err(|_| invalid_record())?,
+        atime: timestamp(row.atime),
+        mtime: timestamp(row.mtime),
+        ctime: timestamp(row.ctime),
+    })
+}

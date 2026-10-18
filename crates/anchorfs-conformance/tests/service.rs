@@ -136,6 +136,8 @@ async fn readyz_rejects_fsync_off() {
     let mut config = (*state.config).clone();
     config.durability_profile = DurabilityProfile::Development;
     let state = anchorfs_service::app::AppState {
+        cursor_key: anchorfs_core::decode_hex_32(config.cursor_signing_key.expose())
+            .expect("validated cursor signing key"),
         config: Arc::new(config),
         ..state
     };

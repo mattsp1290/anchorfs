@@ -225,6 +225,22 @@ impl<S: Send + Sync> FromRequestParts<S> for RequestContext {
     }
 }
 
+pub struct OptionalWorkflowGrant(pub Option<anchorfs_persistence::authority::WorkflowProof>);
+impl<S: Send + Sync> FromRequestParts<S> for OptionalWorkflowGrant {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        workflow_proof(parts, false)?;
+        let proof = header(parts, "X-Anchorfs-Workflow-Token").map(|token| {
+            anchorfs_persistence::authority::WorkflowProof {
+                token: anchorfs_core::decode_hex_32(token).expect("validated workflow token"),
+                epoch: positive_epoch(header(parts, "X-Anchorfs-Workflow-Epoch"))
+                    .expect("validated epoch"),
+            }
+        });
+        Ok(Self(proof))
+    }
+}
+
 #[cfg(test)]
 mod bearer_tests {
     use super::*;

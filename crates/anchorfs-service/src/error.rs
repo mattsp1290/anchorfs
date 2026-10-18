@@ -79,6 +79,7 @@ pub fn authority(
     let trace = trace.into();
     let code = match error {
         A::Unauthenticated => ErrorCode::Unauthenticated,
+        A::WorkspaceBusy => ErrorCode::WorkspaceBusy,
         A::Fenced => ErrorCode::Fenced,
         A::Forbidden => ErrorCode::Forbidden,
         A::NotFound => ErrorCode::NotFound,
@@ -113,5 +114,35 @@ impl From<anchorfs_persistence::sessions::SessionError> for ApiError {
             SessionError::Limit => ApiError::new(ErrorCode::QuotaExceeded, ""),
             SessionError::Database(error) => error.into(),
         }
+    }
+}
+impl From<anchorfs_persistence::quota::QuotaError> for ApiError {
+    fn from(error: anchorfs_persistence::quota::QuotaError) -> Self {
+        match error {
+            anchorfs_persistence::quota::QuotaError::Exceeded => {
+                Self::new(ErrorCode::QuotaExceeded, "")
+            }
+            anchorfs_persistence::quota::QuotaError::Database(error) => error.into(),
+        }
+    }
+}
+impl From<anchorfs_persistence::namespace::NamespaceError> for ApiError {
+    fn from(error: anchorfs_persistence::namespace::NamespaceError) -> Self {
+        use anchorfs_persistence::namespace::NamespaceError as N;
+        Self::new(
+            match error {
+                N::NotFound => ErrorCode::NotFound,
+                N::NotDirectory => ErrorCode::NotDirectory,
+                N::IsDirectory => ErrorCode::IsDirectory,
+                N::DirectoryNotEmpty => ErrorCode::DirectoryNotEmpty,
+                N::Exists => ErrorCode::Exists,
+                N::Forbidden => ErrorCode::Forbidden,
+                N::InvalidInput => ErrorCode::InvalidInput,
+                N::NotImplemented => ErrorCode::NotImplemented,
+                N::Quota(error) => return error.into(),
+                N::Database(error) => return error.into(),
+            },
+            "",
+        )
     }
 }

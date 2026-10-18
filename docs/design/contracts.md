@@ -132,7 +132,7 @@ workspace. Missing/out-of-scope targets return 404 after authentication.
 | `createWorkspace` | allowed | 403 | 403 |
 | `getWorkspace(W)` | allowed | allowed; other → 404 | allowed; other → 404 |
 | `createCredential` kind=administrator | allowed (`workspace_id` must be null and role admin, else 400) | 403 | 403 |
-| `createCredential` kind=host | allowed (`workspace_id` required, else 400) | 403 | 403 |
+| `createCredential` kind=host | allowed (`workspace_id` required; role read/write/admin, else 400) | 403 | 403 |
 | `createCredential` kind=worker | allowed, any uid/gid, role read/write, any lifetime and allowance | allowed only when body `workspace_id` equals H's workspace (null → 400; other → 404), `uid`/`gid` equal H's, role ≤ H's role (read ≤ write), `max_reservation_bytes` ≤ H's, and `expires_at` ≤ H's `expires_at` (a `null` `expires_at` is allowed only when H's is `null`); otherwise 403 (D13) | 403 |
 | `rotateCredential(X)` | allowed | X == H (self), or `X.issued_by == H` and X in W; X not in W or unknown → 404; in W but not issued by H → 403 | 403 |
 | `revokeCredential(X)` | allowed for any X, including A's ancestors and A itself (the response commits; A's later requests → 401; recovery is another administrator or `bootstrap-admin` once no unrevoked administrator remains) | `X.issued_by == H` and X in W; H itself → 403; not in W or unknown → 404 | 403 |
@@ -233,3 +233,7 @@ predicates, required locks and business mutation explicit. Persistence helpers
 still check their own publication work for direct callers; callers adding further
 waits must guard their final publication point. Receipt lookup is an Id/Key enum,
 with by-key lookup always actor-scoped and host by-ID visibility unchanged.
+
+### Stage 1b authority amendment — 2026-10-18
+
+Deployment administrators may issue host credentials with role admin. These are the workspace administrators of spec 03 and bypass mode checks; workers remain read/write only. Hosts may issue only workers and cannot delegate admin. Deployment administrators have no actor sessions and cannot perform namespace operations directly. Workflow token hashes use SHA-256 of the 32 decoded token bytes; mutation proofs require the lease owner credential or a session bound to the current lease epoch. Bound sessions fail closed after lease expiry until explicitly rebound.

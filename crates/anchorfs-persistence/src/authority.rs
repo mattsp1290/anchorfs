@@ -72,6 +72,8 @@ pub struct ActorCredential {
 pub enum AuthorityError {
     #[error("unauthenticated")]
     Unauthenticated,
+    #[error("workspace_busy")]
+    WorkspaceBusy,
     #[error("fenced")]
     Fenced,
     #[error("forbidden")]
@@ -198,6 +200,9 @@ pub async fn load_actor_session(
 }
 #[derive(Debug, sqlx::FromRow)]
 pub struct WorkspaceLock {
+    pub workflow_owner_credential_id: Option<uuid::Uuid>,
+    pub workflow_token_hash: Option<Vec<u8>>,
+    pub workflow_expires_at: Option<OffsetDateTime>,
     pub id: uuid::Uuid,
     pub authorization_epoch: i64,
     pub mutation_epoch: i64,
@@ -207,7 +212,7 @@ pub async fn lock_workspace(
     tx: &mut Transaction<'_, Postgres>,
     workspace: WorkspaceId,
 ) -> Result<Option<WorkspaceLock>, sqlx::Error> {
-    sqlx::query_as("SELECT id, authorization_epoch, mutation_epoch, state FROM workspaces WHERE id=$1 FOR SHARE")
+    sqlx::query_as("SELECT id, authorization_epoch, mutation_epoch, state, workflow_owner_credential_id, workflow_token_hash, workflow_expires_at FROM workspaces WHERE id=$1 FOR SHARE")
         .bind(workspace.0).fetch_optional(&mut **tx).await
 }
 pub fn same_workspace(actor: &ActorCredential, workspace: WorkspaceId) -> bool {
@@ -233,4 +238,69 @@ pub async fn check_publication_time(
         return Err(AuthorityError::Fenced);
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkflowProof {
+    pub token: [u8; 32],
+    pub epoch: i64,
+}
+#[derive(Debug, Clone, Copy)]
+pub enum LeaseMode {
+    Mutation,
+    Read,
+}
+pub async fn check_workflow(
+    tx: &mut Transaction<'_, Postgres>,
+    lock: &WorkspaceLock,
+    actor: &ActorCredential,
+    session: &ActorSession,
+    proof: Option<&WorkflowProof>,
+    mode: LeaseMode,
+) -> Result<(), AuthorityError> {
+    let now: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await?;
+    if session
+        .bound_mutation_epoch
+        .is_some_and(|e| e != lock.mutation_epoch)
+    {
+        return Err(AuthorityError::Fenced);
+    }
+    if matches!(mode, LeaseMode::Read) {
+        return Ok(());
+    }
+    let active = lock.workflow_expires_at.is_some_and(|t| t > now);
+    let valid = proof.is_some_and(|p| {
+        active
+            && p.epoch == lock.mutation_epoch
+            && lock
+                .workflow_token_hash
+                .as_ref()
+                .is_some_and(|hash| constant_time_eq(&anchorfs_core::sha256(p.token).0, hash))
+            && (lock.workflow_owner_credential_id == Some(actor.id.0)
+                || session.bound_mutation_epoch == Some(p.epoch))
+    });
+    if session.bound_mutation_epoch.is_some() && !valid {
+        return Err(AuthorityError::Fenced);
+    }
+    if active && !valid {
+        return Err(AuthorityError::WorkspaceBusy);
+    }
+    if !active && proof.is_some() {
+        return Err(AuthorityError::Fenced);
+    }
+    Ok(())
+}
+pub fn role_permits_mutation(actor: &ActorCredential) -> bool {
+    actor.role >= CredentialRole::Write
+}
+pub fn is_workspace_admin(actor: &ActorCredential) -> bool {
+    actor.kind == CredentialKind::Host && actor.role == CredentialRole::Admin
+}
+pub fn identity(actor: &ActorCredential) -> anchorfs_core::Identity {
+    anchorfs_core::Identity {
+        uid: actor.uid,
+        gid: actor.gid,
+    }
 }

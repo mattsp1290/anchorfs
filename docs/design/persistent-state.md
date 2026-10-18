@@ -134,6 +134,7 @@ SQL type/nullability/checks below are structural invariants; the semantic invari
 | inodes.current_manifest_id | write_commit / truncate_commit (implemented: workspaces::create (root only)) | `uuid`; stable inode identity; generation increases on mutation; manifests belong to this inode; zero links may remain pinned | B4, B7, B13 | use committed generation and manifest; reclaim only after every handle and read/upload pin is gone |
 | inodes.symlink_target | workspace_create / namespace_mutation / write_commit / truncate_commit / handle_close / reservation_expire (implemented: workspaces::create (root only)) | `text`; stable inode identity; generation increases on mutation; manifests belong to this inode; zero links may remain pinned | B4, B7, B13 | use committed generation and manifest; reclaim only after every handle and read/upload pin is gone |
 | inodes.unlinked_at | workspace_create / namespace_mutation / write_commit / truncate_commit / handle_close / reservation_expire (implemented: workspaces::create (root only)) | `timestamptz`; stable inode identity; generation increases on mutation; manifests belong to this inode; zero links may remain pinned | B4, B7, B13 | use committed generation and manifest; reclaim only after every handle and read/upload pin is gone |
+| inodes.charge_released_at | timestamptz NULL | Logical charge release marker | namespace/handle transaction under inode lock | Released only for a tombstone with no live handle |
 
 ## directory_entries
 
@@ -376,3 +377,9 @@ admitting a replacement before the renewal becomes visible. Target expiry is
 checked after acquiring admission, so renew still fences an expired target;
 rebind remains the explicit reactivation path. The lock covers create, renew and
 rebind, and a blocked-minter regression verifies the MVCC interval.
+
+## Stage 1b namespace lock amendment — 2026-10-18
+
+Namespace and handle transactions use this relative order: workspace FOR SHARE → actor credential FOR SHARE → actor session FOR SHARE → operations receipt → namespace_locks FOR UPDATE (entry mutations) → all affected inodes FOR UPDATE in a single ascending-id statement → directory_entries → workspace_quotas FOR UPDATE (charge changes) → handles FOR UPDATE → session-keyed advisory lock 7002 (open/renew admission). This resolves the Stage 1a reconciliation requirement and supersedes the Stage 0 quota-before-inode order for namespace and future byte transactions; the baseline text above remains historical.
+
+Reads and open-without-create do not take the namespace lock. Reads use committed, non-snapshot path walks. The inode lock serializes handle renewal against charge release. A persisted charge_released_at marker makes release idempotent and accounting independently checkable; the root inode is uncharged.
