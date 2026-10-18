@@ -6,6 +6,8 @@ use std::{
 };
 use testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
 use testcontainers_modules::postgres::Postgres;
+#[path = "common/minio.rs"]
+mod minio;
 const DIGEST: &str = "sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3";
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
@@ -99,7 +101,24 @@ async fn starts_and_stops(url: &str, profile: &str, bind_all: bool) {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     let address = format!("{}:{port}", if bind_all { "0.0.0.0" } else { "127.0.0.1" });
-    let mut child = spawn(url, profile, &address);
+    let minio = if profile == "development" {
+        Some(minio::start().await)
+    } else {
+        None
+    };
+    let mut cmd = command();
+    if let Some(minio) = &minio {
+        with_minio(&mut cmd, minio);
+    }
+    let mut child = ChildGuard(
+        cmd.arg("serve")
+            .env("ANCHORFS_DATABASE_URL", url)
+            .env("ANCHORFS_DURABILITY_PROFILE", profile)
+            .env("ANCHORFS_LISTEN_ADDR", &address)
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(1))
         .build()
@@ -114,11 +133,25 @@ async fn starts_and_stops(url: &str, profile: &str, bind_all: bool) {
             .get(format!("http://127.0.0.1:{port}/readyz"))
             .send()
             .await
-            && response.status() == 200
+            && response.status() == if profile == "development" { 200 } else { 503 }
         {
             let v: serde_json::Value = response.json().await.unwrap();
-            assert_eq!(v["schema_version"], 1);
-            assert_eq!(v["backend"], "not_checked");
+            if profile == "development" {
+                assert_eq!(v["schema_version"], 1);
+                assert_eq!(v["backend"], "ok");
+            } else {
+                assert_eq!(v["code"], "dependency_unavailable");
+                assert!(v["message"].as_str().unwrap().starts_with("backend:"));
+                assert_eq!(
+                    client
+                        .get(format!("http://127.0.0.1:{port}/healthz"))
+                        .send()
+                        .await
+                        .unwrap()
+                        .status(),
+                    200
+                );
+            }
             break;
         }
         assert!(
@@ -208,4 +241,62 @@ fn openapi_command_matches_snapshot() {
         .unwrap()
         .trim_end()
     );
+}
+
+fn with_minio(cmd: &mut Command, minio: &minio::Minio) {
+    cmd.env("ANCHORFS_S3_ENDPOINT", minio.endpoint.as_str())
+        .env("ANCHORFS_S3_BUCKET", minio::BUCKET)
+        .env("ANCHORFS_S3_REGION", "us-east-1")
+        .env("ANCHORFS_S3_ALLOW_PLAINTEXT", "true")
+        .env("ANCHORFS_S3_CREDENTIAL_SOURCE", "static")
+        .env("ANCHORFS_S3_ACCESS_KEY_ID", minio::ROOT_USER)
+        .env("ANCHORFS_S3_SECRET_ACCESS_KEY", minio::ROOT_PASSWORD);
+}
+#[tokio::test]
+async fn serve_rejects_plaintext_s3_durable() {
+    let output = command()
+        .arg("serve")
+        .env(
+            "ANCHORFS_DATABASE_URL",
+            "postgres://unused:unused@127.0.0.1:1/unused",
+        )
+        .env("ANCHORFS_S3_ALLOW_PLAINTEXT", "true")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("S3_ALLOW_PLAINTEXT"));
+}
+#[test]
+fn config_checksum_mode_and_probe_deadline() {
+    // Subprocesses isolate environment parsing without process-wide environment mutations.
+    for (mode, deadline, error) in [
+        ("sha256", "1000", None),
+        ("none", "100", None),
+        ("md5", "1000", Some("S3_CHECKSUM_MODE")),
+        ("sha256", "50", Some("LIMITS")),
+        ("sha256", "5000", Some("LIMITS")),
+    ] {
+        let output = command()
+            .arg("serve")
+            .env(
+                "ANCHORFS_DATABASE_URL",
+                "postgres://unused:unused@127.0.0.1:1/unused",
+            )
+            .env("ANCHORFS_S3_CHECKSUM_MODE", mode)
+            .env("ANCHORFS_BACKEND_PROBE_DEADLINE_MS", deadline)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(error.unwrap_or("database connection failed")),
+            "{stderr}"
+        );
+    }
+    let defaults = anchorfs_service::config::Config::contract_defaults();
+    assert_eq!(
+        defaults.s3.checksum_mode,
+        anchorfs_backend::config::ChecksumMode::Sha256
+    );
+    assert_eq!(defaults.backend_probe_deadline, Duration::from_secs(1));
 }

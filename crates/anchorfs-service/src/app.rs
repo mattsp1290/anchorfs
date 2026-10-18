@@ -2,10 +2,13 @@ use crate::{config::Config, error::ApiError};
 use axum::{Router, extract::DefaultBodyLimit, middleware, response::IntoResponse};
 use std::{sync::Arc, time::Duration};
 use utoipa_axum::router::OpenApiRouter;
+pub type ProbeCache = Arc<tokio::sync::Mutex<Option<(std::time::Instant, Result<(), String>)>>>;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: anchorfs_persistence::pool::PgPool,
     pub config: Arc<Config>,
+    pub backend: Arc<dyn anchorfs_backend::traits::ObjectBackend>,
+    pub probe_cache: ProbeCache,
 }
 
 /// Policies belong to the route groups, independently of URL spelling or handler order.
@@ -171,6 +174,10 @@ mod tests {
                     "postgres://unused:unused@127.0.0.1:1/unused",
                 )
                 .unwrap(),
+                backend: Arc::new(
+                    anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap(),
+                ),
+                probe_cache: Default::default(),
                 config: config.shared(),
             };
             let app = build_router(state);

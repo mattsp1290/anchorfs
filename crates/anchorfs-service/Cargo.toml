@@ -28,6 +28,7 @@ time.workspace = true
 bytes.workspace = true
 
 [dev-dependencies]
+aws-sdk-s3.workspace = true
 testcontainers.workspace = true
 testcontainers-modules.workspace = true
 reqwest.workspace = true
