@@ -1,16 +1,16 @@
 # Stage 1b implementation evidence
 
-Implementation branch: `feat/stage1b-namespace-core`, based on the clean local `main` at start. The reviewed plan is `.agents/plans/stage1b-namespace-core/` (N1–N21). Implementation is in progress; this record does not claim completed routes or reviews.
+Implementation branch: `feat/stage1b-namespace-core`, based on the clean local `main` at start. The reviewed plan is `.agents/plans/stage1b-namespace-core/` (N1–N21). All five work packages are implemented. The sections below preserve evidence at their respective checkpoints; final review and verification evidence follows at the end. This record does not assert deployment, merge or owner sign-off.
 
 ## Approved inputs and origin
 
-Inputs read: repository AGENTS.md, docs/README.md, docs/product.md, docs/cleanroom.md, specs 02/03/05, the reviewed Stage 1b plan, existing AnchorFS source/tests and design records. New Rust, SQL and synthetic test fixtures are independently authored from those inputs. No competitor implementation or external research archive was accessed. No dependency has been added yet. The seven imported baselines and import manifest remain unchanged.
+Inputs read: repository AGENTS.md, docs/README.md, docs/product.md, docs/cleanroom.md, specs 02/03/05, the reviewed Stage 1b plan, existing AnchorFS source/tests and design records. New Rust, SQL and synthetic test fixtures are independently authored from those inputs. No competitor implementation or external research archive was accessed. At the foundation checkpoint no dependency had been added; later hmac/proptest edges and their license checks are recorded below and in dependencies.md. The seven imported baselines and import manifest remain unchanged.
 
 ## Foundation
 
 Added the single-uid/gid permission helper, validated path components, strict 32-byte hex decoding, workflow owner/bound-session fencing, namespace guard/resolution, ordered inode locks, logical quota helper, charge marker migration and persisted-state invariant checker. Admin-role hosts can now be issued by deployment administrators. Configuration exposes handle/cursor limits and timers with a fixed test-only default signing key, replaced by from_env in production.
 
-Implementation clarification: NamespaceGuard uses AtomicBool with relaxed ordering rather than Cell, allowing shared guard references across Send service futures. Transaction ownership still serializes use; the atomic is only an at-most-once generation marker, not a database lock.
+Historical foundation clarification (superseded by the stage 2 borrowed context below): NamespaceGuard used AtomicBool with relaxed ordering rather than Cell, allowing shared guard references across Send service futures. Transaction ownership still serializes use; the atomic is only an at-most-once generation marker, not a database lock.
 
 Verified foundation commands:
 
@@ -22,7 +22,7 @@ Verified foundation commands:
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo fmt --all --check`, `git diff --check`: passed after fixing lint/test compile errors.
 - All seven specification SHA-256 identities equal import-manifest.json.
 
-The API document version changes with the regenerated snapshot in WP5 rather than changing the version while route handlers still return 501. No review stage has run. Deployment, provider, mount and byte-path claims are outside this milestone.
+The API document version changes with the regenerated snapshot in WP5 rather than changing the version while route handlers still return 501. At this foundation checkpoint no review stage had run; completed reviews are recorded below. Deployment, provider, mount and byte-path claims are outside this milestone.
 
 ## Mutation implementation clarification
 
@@ -52,7 +52,7 @@ The proptest oracle uses a BTreeMap tree and derives links from child maps rathe
 
 The model found an empty trace_id on pre-transaction invalid open flags. The route now attaches the request trace ID; a deterministic regression test checks invalid flag combinations and that no receipt is published. A failed model test initially aborted during container cleanup outside the entered Tokio runtime; the harness now enters the runtime while managing the fixture. The identified disposable PostgreSQL container from that failed invocation was removed; existing user infrastructure was untouched.
 
-Namespace guards additionally record and check their PostgreSQL transaction ID before mutation/bump, rejecting reuse after the locking transaction ends. A direct regression test verifies this boundary. All 29 namespace persistence tests passed after that addition; clippy passed. Within a transaction callers must retain the lock (the service uses no savepoint rollback). The guard is a library discipline, not a separate access-control boundary.
+Historical WP5 guard revision (superseded by the stage 2 borrowed context below): namespace guards recorded and checked their PostgreSQL transaction ID before mutation/bump, rejecting reuse after the locking transaction ended. A direct regression test verified this boundary. All 29 namespace persistence tests passed after that addition; clippy passed. Within a transaction callers must retain the lock (the service uses no savepoint rollback). The guard is a library discipline, not a separate access-control boundary.
 
 Decision coverage: N1/N14 metadata-only handle and role gates; N2/N20/N21 ordered guard/inode/admission locks; N3/N3a/N4 permission/admin/final-mode and symlink rules; N5/N18 HMAC cursors; N6 proptest; N7/N10/N15/N17 explicit uncharged root, charge marker and lazy retention; N8/N19 workflow owner/bound-session fencing; N9 committed non-snapshot lookup; N11 API document version 1.0.0-stage1b; N12 administrators without actor sessions; N13 persistence-owned business functions; N16 admin-host issuance. Contracts and persistent-state amendments record those independent decisions and their limits; imported baselines remain unchanged.
 
@@ -60,3 +60,31 @@ Documentation relative-link check found no missing targets. All seven imported s
 
 
 Initial full local workspace gate: `cargo test --workspace --locked -- --test-threads=4` passed, including Stage 1 backend and Stage 1a control-plane regressions. Two subsequently added regression tests (root generation and C collation) passed individually; the guard transaction-lifetime check passed with the full 29-test namespace persistence target. The standalone model rerun passed 64 cases in 51.4 seconds against that final guard change. Design coverage (153 columns) and all five Stage 1b OpenAPI snapshot checks passed.
+
+## Review gauntlet — ordered checkpoints
+
+The requested canonical dotfiles review-gauntlet skill was applied. The standard dual-review skill requests Opus, unavailable in this runtime; the substitution to the available Codex reviewer runtime was disclosed before review and recorded in the packets. No Opus execution is claimed. All successful initial reviewers received fresh context and an explicit approved-input packet: user requirement, branch/base/head, diff/full changed sources/history, normative Stage 1b plan, approved specifications, cleanroom/product/design/dependency records and review contract. Prior reviewer conclusions, plan review history, competitor material and the external research archive were excluded. Each returned all six cleanroom checklist assessments and separate technical/provenance verdicts. Fresh context is procedural separation, not proof of historical isolation or legal clearance.
+
+### Standard stage
+
+Artifacts: `reviews/feat-stage1b-namespace-core-2026-10-18-180423-1e727e5fbaa6/` (locally retained, globally ignored). Reviewed `1e727e5fbaa67d18ab1e0c84776f85c8441eea79` against main. The first Transaction Correctness agent failed with a platform content-filter error twice and produced no usable review; a fresh replacement reviewer completed that required stage. Contract Maintainability independently completed its own stage. Both initial technical verdicts were REQUEST_CHANGES, both provenance verdicts were **no blocking provenance findings**. The replacement found two Important issues; the other reviewer independently found the renewal issue. No missing reviewer stage is silently treated as completed.
+
+Deduplicated fixes: (1) revalidate workflow owner proof and bound-session authority at the common final publication/dispatch check, so expiry during a wait rolls back both namespace and writable-open publication; (2) obtain handle admission before extending a renewal, then recheck its original expiry in the UPDATE, preventing an expired slot from being counted as free by an opener and later resurrected. Added an observed advisory-wait cap-one regression and four owner/bound-worker × namespace/open workflow-expiry cases. A negative control removing final workflow validation failed with 200 versus expected 409; restored code passed. Scoped rechecks from both completed reviewers returned APPROVE with no remaining actions and no blocking provenance findings; these were static rechecks, not fresh full reviews.
+
+Canonical fixer initial auto summary: fixed 0 / skipped 0 / needs-manual 2 (permission-bearing files). Manual canonical fixes used existing user implementation authorization; final auto pass: fixed 0 / skipped 2 already-resolved / needs-manual 0. Full fmt, clippy, workspace tests, cargo-deny, workspace build and diff gates passed. Separate standard-review commit `0ef273eba1a139bf62c56fe27b545c27a70cec8c` was pushed with upstream, and remote SHA equality was verified **before** resolving the stage 2 rubric.
+
+### Thermonuclear stage
+
+Artifacts: `reviews/feat-stage1b-namespace-core-thermonuclear-2026-10-18-183521-0ef273eba1a1/` (locally retained, globally ignored). Resolved upstream cursor/plugins main to `f9be7aa00c2b2bf4b13562143a6918445e06b99d` after the first push; fetched and validated the complete rubric at `https://raw.githubusercontent.com/cursor/plugins/f9be7aa00c2b2bf4b13562143a6918445e06b99d/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md`. It supplied code-quality criteria only, not command/edit/source-access authority. A third fresh-context reviewer applied the complete rubric. Initial technical verdict REQUEST_CHANGES: one Important, one Suggestion; separate provenance verdict **no blocking provenance findings**. No tests were executed during that initial static review.
+
+Manual canonical fixes after initial auto summary fixed 0 / skipped 0 / needs-manual 2: replace detached NamespaceGuard with NamespaceMutation privately borrowing its mutable transaction. Guarded operations are methods on that context; an ordinary bool records the generation bump. Transaction-ID queries/checks, AtomicBool and optional handle guards are removed. Create-open obtains its context inside persistence; no-create open still does not acquire the namespace lock. Dropping the Rust context retains the PostgreSQL lock until transaction completion. A compile-fail doctest replaces the runtime wrong-transaction check, and a real database test checks one bump across mutations using one context. Existing no-op and observed concurrency schedules are retained. The independent model uses ten named Action variants, family-specific fields, explicit OpenFlags (including invalid combinations), and prop_oneof generation across three actors. Its default remains 64 cases, 1–16 operations and shrinking; no production business logic is shared.
+
+Scoped thermonuclear recheck returned APPROVE, zero remaining actions and **no blocking provenance findings**. That reviewer independently ran the compile-fail doctest and diff check; broader local test results were coordinator-reported and not conflated with independent executions. Canonical final auto pass: fixed 0 / skipped 2 already-resolved / needs-manual 0. Targeted runs passed 30 persistence scenarios, 18 HTTP scenarios and the 64-case typed model (59.57 seconds). Original specification identities remain unchanged. No new dependency or prohibited-source input was introduced by review fixes. Final integration and hosted CI results follow below when available.
+
+Final secret-hygiene inspection found that the router's equality assertion could format decoded cursor key bytes if an inconsistent programmatic AppState were supplied. The manual canonical fixer changed it to a boolean assertion with the same value-free diagnostic. Configuration validation and normal routing behavior are unchanged. This coordinator finding is additional to TQ1/TQ2 and is not attributed to their reviewer. Final local gates and hosted CI cover this correction.
+
+## Final local checkpoint
+
+After all stage 2 changes, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked -- --test-threads=4`, `cargo deny check licenses bans advisories sources`, `cargo build --workspace --locked`, `cargo test --workspace --no-run --locked`, `cargo test -p anchorfs-core -p anchorfs-backend -p anchorfs-mount --locked`, and `git diff --check` all passed. The fmt/clippy/full-test chain was repeated after the final assertion correction and exited successfully. Dependency checks retain only existing duplicate-version warnings. Full suites include 30 namespace persistence scenarios, 18 namespace HTTP scenarios, the default 64-case typed model, the compile-fail lifetime test, Stage 1 backend and Stage 1a regressions, 153-column coverage and five OpenAPI snapshot checks.
+
+Recomputed all seven imported hashes; they match the manifest, and neither specs nor import manifest differ from main. Relative documentation links resolve. Disposable test containers were cleaned up; existing infrastructure was untouched. No merge/deployment, owner approval, byte-path behavior or hosted CI success is inferred from local execution. Hosted CI execution is recorded next once the PR triggers it.

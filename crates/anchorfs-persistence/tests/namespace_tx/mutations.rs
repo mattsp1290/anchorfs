@@ -6,8 +6,10 @@ fn path(s: &str) -> WorkspacePath {
     WorkspacePath::parse(s).unwrap()
 }
 async fn mkdir(tx: &mut Transaction<'_, Postgres>, w: WorkspaceId, name: &str) {
-    let guard = namespace::lock(tx, w).await.unwrap();
-    namespace::mkdir(tx, &guard, &caller(), &path(name), 0o755)
+    namespace::lock(tx, w)
+        .await
+        .unwrap()
+        .mkdir(&caller(), &path(name), 0o755)
         .await
         .unwrap();
 }
@@ -17,8 +19,10 @@ async fn mkdir_then_rmdir_restores_counts() {
     let mut tx = db.pool.begin().await.unwrap();
     mkdir(&mut tx, w, "a").await;
     assert_eq!(namespace::root(&mut tx, w).await.unwrap().nlink, 3);
-    let guard = namespace::lock(&mut tx, w).await.unwrap();
-    namespace::rmdir(&mut tx, &guard, &caller(), &path("a"))
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .rmdir(&caller(), &path("a"))
         .await
         .unwrap();
     assert_eq!(namespace::root(&mut tx, w).await.unwrap().nlink, 2);
@@ -31,9 +35,12 @@ async fn rmdir_nonempty_rejected() {
     let mut tx = db.pool.begin().await.unwrap();
     mkdir(&mut tx, w, "a").await;
     mkdir(&mut tx, w, "a/b").await;
-    let guard = namespace::lock(&mut tx, w).await.unwrap();
     assert!(matches!(
-        namespace::rmdir(&mut tx, &guard, &caller(), &path("a")).await,
+        namespace::lock(&mut tx, w)
+            .await
+            .unwrap()
+            .rmdir(&caller(), &path("a"))
+            .await,
         Err(NamespaceError::DirectoryNotEmpty)
     ));
     tx.commit().await.unwrap();
@@ -43,18 +50,26 @@ async fn rmdir_nonempty_rejected() {
 async fn link_and_unlink_track_nlink_and_symlink_bytes() {
     let (db, w) = fixture().await;
     let mut tx = db.pool.begin().await.unwrap();
-    let guard = namespace::lock(&mut tx, w).await.unwrap();
-    namespace::symlink(&mut tx, &guard, &caller(), &path("sym"), "/opaque")
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .symlink(&caller(), &path("sym"), "/opaque")
         .await
         .unwrap();
-    namespace::link(&mut tx, &guard, &caller(), &path("sym"), &path("alias"))
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .link(&caller(), &path("sym"), &path("alias"))
         .await
         .unwrap();
     let row = namespace::resolve(&mut tx, w, Some(&path("sym")), &caller())
         .await
         .unwrap();
     assert_eq!(row.nlink, 2);
-    namespace::unlink(&mut tx, &guard, &caller(), &path("sym"))
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .unlink(&caller(), &path("sym"))
         .await
         .unwrap();
     assert_eq!(
@@ -72,7 +87,10 @@ async fn link_and_unlink_track_nlink_and_symlink_bytes() {
     .await
     .unwrap();
     assert_eq!(usage, (1, 7));
-    namespace::unlink(&mut tx, &guard, &caller(), &path("alias"))
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .unlink(&caller(), &path("alias"))
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -84,10 +102,13 @@ async fn rename_cycle_rejected() {
     let mut tx = db.pool.begin().await.unwrap();
     mkdir(&mut tx, w, "a").await;
     mkdir(&mut tx, w, "a/b").await;
-    let guard = namespace::lock(&mut tx, w).await.unwrap();
     for (from, to) in [("a", "a/x"), ("a", "a/b/c")] {
         assert!(matches!(
-            namespace::rename(&mut tx, &guard, &caller(), &path(from), &path(to)).await,
+            namespace::lock(&mut tx, w)
+                .await
+                .unwrap()
+                .rename(&caller(), &path(from), &path(to))
+                .await,
             Err(NamespaceError::InvalidInput)
         ));
     }
@@ -110,11 +131,13 @@ async fn replace_directory(across: bool) {
     }
     let dest = if across { "b/dst" } else { "a/dst" };
     mkdir(&mut tx, w, dest).await;
-    let guard = namespace::lock(&mut tx, w).await.unwrap();
     let src = namespace::resolve(&mut tx, w, Some(&path("a/src")), &caller())
         .await
         .unwrap();
-    namespace::rename(&mut tx, &guard, &caller(), &path("a/src"), &path(dest))
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .rename(&caller(), &path("a/src"), &path(dest))
         .await
         .unwrap();
     assert_eq!(
@@ -147,8 +170,10 @@ async fn rename_same_path_is_noop_but_checks_existence() {
     let mut tx = db.pool.begin().await.unwrap();
     mkdir(&mut tx, w, "a").await;
     let before = namespace::current_generation(&mut tx, w).await.unwrap();
-    let guard = namespace::lock(&mut tx, w).await.unwrap();
-    namespace::rename(&mut tx, &guard, &caller(), &path("a"), &path("a"))
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .rename(&caller(), &path("a"), &path("a"))
         .await
         .unwrap();
     assert_eq!(
@@ -156,14 +181,11 @@ async fn rename_same_path_is_noop_but_checks_existence() {
         before
     );
     assert!(matches!(
-        namespace::rename(
-            &mut tx,
-            &guard,
-            &caller(),
-            &path("missing"),
-            &path("missing")
-        )
-        .await,
+        namespace::lock(&mut tx, w)
+            .await
+            .unwrap()
+            .rename(&caller(), &path("missing"), &path("missing"))
+            .await,
         Err(NamespaceError::NotFound)
     ));
     tx.commit().await.unwrap();
@@ -188,18 +210,26 @@ async fn concurrent(cycle: bool) {
     let before = namespace::current_generation(&mut setup, w).await.unwrap();
     setup.commit().await.unwrap();
     let mut first = db.pool.begin().await.unwrap();
-    let guard = namespace::lock(&mut first, w).await.unwrap();
+    namespace::lock(&mut first, w).await.unwrap();
     let mut second = db.pool.begin().await.unwrap();
     let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
         .fetch_one(&mut *second)
         .await
         .unwrap();
     let waiter = tokio::spawn(async move {
-        let guard = namespace::lock(&mut second, w).await.unwrap();
+        namespace::lock(&mut second, w).await.unwrap();
         let result = if cycle {
-            namespace::rename(&mut second, &guard, &caller(), &path("y"), &path("x/y")).await
+            namespace::lock(&mut second, w)
+                .await
+                .unwrap()
+                .rename(&caller(), &path("y"), &path("x/y"))
+                .await
         } else {
-            namespace::mkdir(&mut second, &guard, &caller(), &path("a"), 0o755).await
+            namespace::lock(&mut second, w)
+                .await
+                .unwrap()
+                .mkdir(&caller(), &path("a"), 0o755)
+                .await
         };
         second.rollback().await.unwrap();
         result
@@ -209,11 +239,17 @@ async fn concurrent(cycle: bool) {
         if waiting {break;}tokio::time::sleep(Duration::from_millis(10)).await;
     }}).await.unwrap();
     if cycle {
-        namespace::rename(&mut first, &guard, &caller(), &path("x"), &path("y/x"))
+        namespace::lock(&mut first, w)
+            .await
+            .unwrap()
+            .rename(&caller(), &path("x"), &path("y/x"))
             .await
             .unwrap();
     } else {
-        namespace::mkdir(&mut first, &guard, &caller(), &path("a"), 0o755)
+        namespace::lock(&mut first, w)
+            .await
+            .unwrap()
+            .mkdir(&caller(), &path("a"), 0o755)
             .await
             .unwrap();
     }
@@ -251,9 +287,11 @@ async fn concurrent(cycle: bool) {
 async fn collation_is_byte_order() {
     let (db, w) = fixture().await;
     let mut tx = db.pool.begin().await.unwrap();
-    let guard = namespace::lock(&mut tx, w).await.unwrap();
     for name in ["B", "a", "é", "_", "Z"] {
-        namespace::symlink(&mut tx, &guard, &caller(), &path(name), "opaque")
+        namespace::lock(&mut tx, w)
+            .await
+            .unwrap()
+            .symlink(&caller(), &path(name), "opaque")
             .await
             .unwrap();
     }
@@ -268,17 +306,23 @@ async fn collation_is_byte_order() {
     tx.commit().await.unwrap();
     invariants(&db, w).await;
 }
+
 #[tokio::test]
-async fn namespace_guard_cannot_outlive_its_locking_transaction() {
+async fn mutation_context_bumps_namespace_once() {
     let (db, w) = fixture().await;
-    let mut first = db.pool.begin().await.unwrap();
-    let guard = namespace::lock(&mut first, w).await.unwrap();
-    first.commit().await.unwrap();
-    let mut second = db.pool.begin().await.unwrap();
-    assert!(matches!(
-        namespace::mkdir(&mut second, &guard, &caller(), &path("a"), 0o755).await,
-        Err(NamespaceError::Database(sqlx::Error::Protocol(_)))
-    ));
-    second.rollback().await.unwrap();
+    let mut tx = db.pool.begin().await.unwrap();
+    let before = namespace::current_generation(&mut tx, w).await.unwrap();
+    {
+        let mut namespace = namespace::lock(&mut tx, w).await.unwrap();
+        assert_eq!(namespace.generation(), before);
+        namespace.mkdir(&caller(), &path("a"), 0o755).await.unwrap();
+        namespace.mkdir(&caller(), &path("b"), 0o755).await.unwrap();
+        assert_eq!(namespace.generation(), before + 1);
+    }
+    assert_eq!(
+        namespace::current_generation(&mut tx, w).await.unwrap(),
+        before + 1
+    );
+    tx.commit().await.unwrap();
     invariants(&db, w).await;
 }

@@ -5,11 +5,56 @@ pub type Outcome = Result<Option<i64>, &'static str>;
 #[derive(Debug, Clone)]
 pub struct Op {
     pub actor: usize,
-    pub kind: u8,
-    pub path: String,
-    pub other: String,
-    pub mode: u32,
-    pub flags: u8,
+    pub action: Action,
+}
+#[derive(Debug, Clone)]
+pub enum Action {
+    Mkdir {
+        path: String,
+        mode: u32,
+    },
+    Rmdir {
+        path: String,
+    },
+    Symlink {
+        path: String,
+    },
+    Link {
+        existing: String,
+        new_path: String,
+    },
+    Unlink {
+        path: String,
+    },
+    Rename {
+        from: String,
+        to: String,
+    },
+    Chmod {
+        path: String,
+        mode: u32,
+    },
+    Chown {
+        path: String,
+        uid: u32,
+        gid: u32,
+    },
+    Open {
+        path: String,
+        flags: OpenFlags,
+        mode: u32,
+    },
+    Close {
+        selector: u8,
+    },
+}
+#[derive(Debug, Clone, Copy)]
+pub struct OpenFlags {
+    pub read: bool,
+    pub write: bool,
+    pub create: bool,
+    pub exclusive: bool,
+    pub truncate: bool,
 }
 #[derive(Debug, Clone)]
 pub struct Node {
@@ -183,66 +228,63 @@ impl Model {
         }
     }
     pub fn apply(&mut self, op: &Op) -> Outcome {
-        match op.kind {
-            0 => Ok(Some(self.create(
-                &op.path,
-                op.actor,
-                "directory",
-                op.mode,
-                None,
-            )?)),
-            1 => self.remove(op, true),
-            2 => Ok(Some(self.create(
-                &op.path,
-                op.actor,
+        let actor = op.actor;
+        match &op.action {
+            Action::Mkdir { path, mode } => {
+                Ok(Some(self.create(path, actor, "directory", *mode, None)?))
+            }
+            Action::Rmdir { path } => self.remove(actor, path, true),
+            Action::Symlink { path } => Ok(Some(self.create(
+                path,
+                actor,
                 "symlink",
                 0o777,
                 Some("/opaque".into()),
             )?)),
-            3 => {
-                let id = self.resolve(&op.path, op.actor)?;
+            Action::Link { existing, new_path } => {
+                let id = self.resolve(existing, actor)?;
                 if self.nodes[&id].kind == "directory" {
                     return Err("is_directory");
                 }
-                let (p, name) = self.parent(&op.other, op.actor)?;
+                let (p, name) = self.parent(new_path, actor)?;
                 if self.nodes[&p].children.contains_key(&name) {
                     return Err("exists");
                 }
                 self.nodes.get_mut(&p).unwrap().children.insert(name, id);
                 Ok(Some(id))
             }
-            4 => self.remove(op, false),
-            5 => self.rename(op),
-            6 => {
-                if op.mode > 0o777 {
+            Action::Unlink { path } => self.remove(actor, path, false),
+            Action::Rename { from, to } => self.rename(actor, from, to),
+            Action::Chmod { path, mode } => {
+                if *mode > 0o777 {
                     return Err("invalid_input");
                 }
-                let id = self.resolve(&op.path, op.actor)?;
+                let id = self.resolve(path, actor)?;
                 let n = &self.nodes[&id];
                 if n.kind == "symlink" {
                     return Err("invalid_input");
                 }
-                if op.actor != 2 && n.uid != Self::identity(op.actor).0 {
+                if actor != 2 && n.uid != Self::identity(actor).0 {
                     return Err("forbidden");
                 }
-                self.nodes.get_mut(&id).unwrap().mode = op.mode;
+                self.nodes.get_mut(&id).unwrap().mode = *mode;
                 Ok(Some(id))
             }
-            7 => {
-                let id = self.resolve(&op.path, op.actor)?;
-                if op.actor != 2 {
+            Action::Chown { path, uid, gid } => {
+                let id = self.resolve(path, actor)?;
+                if actor != 2 {
                     return Err("forbidden");
                 }
                 let n = self.nodes.get_mut(&id).unwrap();
-                n.uid = if op.flags & 1 == 0 { 1000 } else { 2000 };
-                n.gid = if op.flags & 2 == 0 { 1000 } else { 2000 };
+                n.uid = *uid;
+                n.gid = *gid;
                 Ok(Some(id))
             }
-            8 => self.open(op),
-            9 => {
-                let selected = self.selected_handle(op.flags).ok_or("not_found")?;
+            Action::Open { path, flags, mode } => self.open(actor, path, *flags, *mode),
+            Action::Close { selector } => {
+                let selected = self.selected_handle(*selector).ok_or("not_found")?;
                 let h = &self.handles[&selected];
-                if h.actor != op.actor {
+                if h.actor != actor {
                     return Err("not_found");
                 }
                 let id = h.node;
@@ -250,11 +292,10 @@ impl Model {
                 self.nodes.get_mut(&id).unwrap().open_handles -= 1;
                 Ok(Some(id))
             }
-            _ => unreachable!(),
         }
     }
-    fn remove(&mut self, op: &Op, directory: bool) -> Outcome {
-        let (p, name) = self.parent(&op.path, op.actor)?;
+    fn remove(&mut self, actor: usize, path: &str, directory: bool) -> Outcome {
+        let (p, name) = self.parent(path, actor)?;
         let id = *self.nodes[&p].children.get(&name).ok_or("not_found")?;
         let n = &self.nodes[&id];
         if directory && n.kind != "directory" {
@@ -270,17 +311,17 @@ impl Model {
         self.mark_unlinked(id);
         Ok(Some(id))
     }
-    fn rename(&mut self, op: &Op) -> Outcome {
-        let (pf, nf) = self.parent(&op.path, op.actor)?;
-        let (pt, nt) = self.parent(&op.other, op.actor)?;
+    fn rename(&mut self, actor: usize, from: &str, to: &str) -> Outcome {
+        let (pf, nf) = self.parent(from, actor)?;
+        let (pt, nt) = self.parent(to, actor)?;
         let src = *self.nodes[&pf].children.get(&nf).ok_or("not_found")?;
         let dst = self.nodes[&pt].children.get(&nt).copied();
-        if op.path == op.other || dst == Some(src) {
+        if from == to || dst == Some(src) {
             return Ok(Some(src));
         }
         let is_dir = self.nodes[&src].kind == "directory";
         if is_dir && pf != pt {
-            self.access(src, op.actor, 2)?;
+            self.access(src, actor, 2)?;
             if self.descendant(src, pt) {
                 return Err("invalid_input");
             }
@@ -303,24 +344,26 @@ impl Model {
         self.nodes.get_mut(&pt).unwrap().children.insert(nt, src);
         Ok(Some(src))
     }
-    fn open(&mut self, op: &Op) -> Outcome {
-        let read = op.flags & 1 != 0;
-        let write = op.flags & 2 != 0;
-        let create = op.flags & 4 != 0;
-        let excl = op.flags & 8 != 0;
-        let truncate = op.flags & 16 != 0;
+    fn open(&mut self, actor: usize, path: &str, flags: OpenFlags, mode: u32) -> Outcome {
+        let OpenFlags {
+            read,
+            write,
+            create,
+            exclusive: excl,
+            truncate,
+        } = flags;
         if (!read && !write)
             || (excl && !create)
             || (truncate && !write)
-            || (create && op.mode > 0o777)
+            || (create && mode > 0o777)
         {
             return Err("invalid_input");
         }
         let existing = if create {
-            let (p, name) = self.parent(&op.path, op.actor)?;
+            let (p, name) = self.parent(path, actor)?;
             self.nodes[&p].children.get(&name).copied()
         } else {
-            Some(self.resolve(&op.path, op.actor)?)
+            Some(self.resolve(path, actor)?)
         };
         let id = if let Some(id) = existing {
             if excl {
@@ -333,20 +376,14 @@ impl Model {
             if n.kind == "symlink" {
                 return Err("invalid_input");
             }
-            self.access(id, op.actor, u32::from(read) * 4 + u32::from(write) * 2)?;
+            self.access(id, actor, u32::from(read) * 4 + u32::from(write) * 2)?;
             id
         } else {
-            self.create(&op.path, op.actor, "file", op.mode, None)?
+            self.create(path, actor, "file", mode, None)?
         };
         let h = self.next_handle;
         self.next_handle += 1;
-        self.handles.insert(
-            h,
-            Open {
-                node: id,
-                actor: op.actor,
-            },
-        );
+        self.handles.insert(h, Open { node: id, actor });
         self.nodes.get_mut(&id).unwrap().open_handles += 1;
         Ok(Some(id))
     }

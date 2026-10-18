@@ -8,7 +8,7 @@ use crate::{dto::*, error::ApiError, extract::*};
 use anchorfs_core::{HandleId, WorkspaceId, WorkspacePath};
 use anchorfs_persistence::{
     authority::LeaseMode,
-    handles, namespace,
+    handles,
     receipts::{ReceiptRequest, ReceiptScope},
 };
 use axum::{extract::State, http::StatusCode, response::Response};
@@ -237,11 +237,6 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
                         Box::pin(async move {
                             match request {
                                 HandleRequest::Open(body) => {
-                                    let guard = if body.create {
-                                        Some(namespace::lock(tx, workspace).await?)
-                                    } else {
-                                        None
-                                    };
                                     let req = handles::OpenRequest {
                                         path: WorkspacePath::parse(body.path)
                                             .expect("validated path"),
@@ -252,15 +247,9 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
                                         truncate: body.truncate,
                                         mode: body.mode,
                                     };
-                                    let opened = handles::open_file(
-                                        tx,
-                                        guard.as_ref(),
-                                        &p.caller,
-                                        &session,
-                                        req,
-                                        policy,
-                                    )
-                                    .await?;
+                                    let opened =
+                                        handles::open_file(tx, &p.caller, &session, req, policy)
+                                            .await?;
                                     Published::metadata(super::views::handle(
                                         operation,
                                         &opened.handle,

@@ -1,5 +1,5 @@
 use super::support::*;
-use anchorfs_core::{HandleId, SessionId, WorkspaceId, WorkspacePath};
+use anchorfs_core::{HandleId, SessionId, WorkspacePath};
 use anchorfs_persistence::{
     authority::ActorSession,
     handles::{self, HandleError, HandlePolicy, OpenRequest, Opened},
@@ -18,15 +18,12 @@ fn policy() -> HandlePolicy {
 }
 async fn open(
     tx: &mut Transaction<'_, Postgres>,
-    w: WorkspaceId,
     s: &ActorSession,
     name: &str,
     policy: HandlePolicy,
 ) -> Result<Opened, HandleError> {
-    let guard = namespace::lock(tx, w).await.unwrap();
     handles::open_file(
         tx,
-        Some(&guard),
         &caller(),
         s,
         OpenRequest {
@@ -47,10 +44,13 @@ async fn close_releases_charge_only_after_last_open_handle() {
     let (db, w) = fixture().await;
     let s = actor_session(&db, w).await;
     let mut tx = db.pool.begin().await.unwrap();
-    let a = open(&mut tx, w, &s, "f", policy()).await.unwrap();
-    let b = open(&mut tx, w, &s, "f", policy()).await.unwrap();
-    let guard = namespace::lock(&mut tx, w).await.unwrap();
-    namespace::unlink(&mut tx, &guard, &caller(), &path("f"))
+    let a = open(&mut tx, &s, "f", policy()).await.unwrap();
+    let b = open(&mut tx, &s, "f", policy()).await.unwrap();
+
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .unlink(&caller(), &path("f"))
         .await
         .unwrap();
     assert!(
@@ -93,10 +93,13 @@ async fn rename_replaces_file_and_keeps_open_inode() {
     let (db, w) = fixture().await;
     let s = actor_session(&db, w).await;
     let mut tx = db.pool.begin().await.unwrap();
-    let a = open(&mut tx, w, &s, "a", policy()).await.unwrap();
-    let b = open(&mut tx, w, &s, "b", policy()).await.unwrap();
-    let guard = namespace::lock(&mut tx, w).await.unwrap();
-    namespace::rename(&mut tx, &guard, &caller(), &path("a"), &path("b"))
+    let a = open(&mut tx, &s, "a", policy()).await.unwrap();
+    let b = open(&mut tx, &s, "b", policy()).await.unwrap();
+
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .rename(&caller(), &path("a"), &path("b"))
         .await
         .unwrap();
     assert_eq!(
@@ -122,7 +125,7 @@ async fn handle_invisible_to_other_session() {
     let (db, w) = fixture().await;
     let s = actor_session(&db, w).await;
     let mut tx = db.pool.begin().await.unwrap();
-    let a = open(&mut tx, w, &s, "f", policy()).await.unwrap();
+    let a = open(&mut tx, &s, "f", policy()).await.unwrap();
     let other = ActorSession {
         id: SessionId::new(),
         ..s.clone()
@@ -141,7 +144,6 @@ async fn renew_extends_and_stale_after_expiry() {
     let mut tx = db.pool.begin().await.unwrap();
     let a = open(
         &mut tx,
-        w,
         &s,
         "f",
         HandlePolicy {
@@ -178,7 +180,7 @@ async fn two_closes_of_same_handle_do_not_deadlock() {
     let (db, w) = fixture().await;
     let s = actor_session(&db, w).await;
     let mut setup = db.pool.begin().await.unwrap();
-    let a = open(&mut setup, w, &s, "f", policy()).await.unwrap();
+    let a = open(&mut setup, &s, "f", policy()).await.unwrap();
     setup.commit().await.unwrap();
     let mut first = db.pool.begin().await.unwrap();
     handles::close(&mut first, w, &s, HandleId(a.handle.id))
@@ -211,7 +213,7 @@ async fn close_and_unlink_interleave_release_once() {
     let (db, w) = fixture().await;
     let s = actor_session(&db, w).await;
     let mut setup = db.pool.begin().await.unwrap();
-    let a = open(&mut setup, w, &s, "f", policy()).await.unwrap();
+    let a = open(&mut setup, &s, "f", policy()).await.unwrap();
     setup.commit().await.unwrap();
     let mut first = db.pool.begin().await.unwrap();
     handles::close(&mut first, w, &s, HandleId(a.handle.id))
@@ -223,8 +225,10 @@ async fn close_and_unlink_interleave_release_once() {
         .await
         .unwrap();
     let waiter = tokio::spawn(async move {
-        let guard = namespace::lock(&mut second, w).await.unwrap();
-        namespace::unlink(&mut second, &guard, &caller(), &path("f"))
+        namespace::lock(&mut second, w)
+            .await
+            .unwrap()
+            .unlink(&caller(), &path("f"))
             .await
             .unwrap();
         second.commit().await.unwrap();
@@ -242,8 +246,8 @@ async fn open_limit_holds_under_concurrency() {
     let (db, w) = fixture().await;
     let s = actor_session(&db, w).await;
     let mut setup = db.pool.begin().await.unwrap();
-    let _ = open(&mut setup, w, &s, "a", policy()).await.unwrap();
-    let b = open(&mut setup, w, &s, "b", policy()).await.unwrap();
+    let _ = open(&mut setup, &s, "a", policy()).await.unwrap();
+    let b = open(&mut setup, &s, "b", policy()).await.unwrap();
     handles::close(&mut setup, w, &s, HandleId(b.handle.id))
         .await
         .unwrap();
@@ -263,7 +267,7 @@ async fn open_limit_holds_under_concurrency() {
         limit: 2,
         ..policy()
     };
-    handles::open_file(&mut first, None, &caller(), &s, req("a"), p)
+    handles::open_file(&mut first, &caller(), &s, req("a"), p)
         .await
         .unwrap();
     let mut second = db.pool.begin().await.unwrap();
@@ -273,7 +277,7 @@ async fn open_limit_holds_under_concurrency() {
         .unwrap();
     let s2 = s.clone();
     let waiter = tokio::spawn(async move {
-        let result = handles::open_file(&mut second, None, &caller(), &s2, req("b"), p).await;
+        let result = handles::open_file(&mut second, &caller(), &s2, req("b"), p).await;
         second.rollback().await.unwrap();
         result
     });
@@ -295,9 +299,12 @@ async fn renew_close_open_create_do_not_cycle() {
     let (db, w) = fixture().await;
     let s = actor_session(&db, w).await;
     let mut setup = db.pool.begin().await.unwrap();
-    let a = open(&mut setup, w, &s, "old", policy()).await.unwrap();
-    let guard = namespace::lock(&mut setup, w).await.unwrap();
-    namespace::unlink(&mut setup, &guard, &caller(), &path("old"))
+    let a = open(&mut setup, &s, "old", policy()).await.unwrap();
+
+    namespace::lock(&mut setup, w)
+        .await
+        .unwrap()
+        .unlink(&caller(), &path("old"))
         .await
         .unwrap();
     setup.commit().await.unwrap();
@@ -324,7 +331,7 @@ async fn renew_close_open_create_do_not_cycle() {
         .unwrap();
     let s3 = s.clone();
     let create = tokio::spawn(async move {
-        let r = open(&mut creating, w, &s3, "new", policy()).await;
+        let r = open(&mut creating, &s3, "new", policy()).await;
         creating.commit().await.unwrap();
         r
     });
@@ -359,7 +366,6 @@ async fn renew_vs_unlink_at_expiry_boundary_releases_once() {
     let mut setup = db.pool.begin().await.unwrap();
     let a = open(
         &mut setup,
-        w,
         &s,
         "f",
         HandlePolicy {
@@ -380,8 +386,10 @@ async fn renew_vs_unlink_at_expiry_boundary_releases_once() {
         .await
         .unwrap();
     let unlink = tokio::spawn(async move {
-        let guard = namespace::lock(&mut unlinking, w).await.unwrap();
-        namespace::unlink(&mut unlinking, &guard, &caller(), &path("f"))
+        namespace::lock(&mut unlinking, w)
+            .await
+            .unwrap()
+            .unlink(&caller(), &path("f"))
             .await
             .unwrap();
         unlinking.commit().await.unwrap();
@@ -424,15 +432,18 @@ async fn unlink_between_resolve_and_lock_fails_open() {
     let (db, w) = fixture().await;
     let s = actor_session(&db, w).await;
     let mut setup = db.pool.begin().await.unwrap();
-    open(&mut setup, w, &s, "f", policy()).await.unwrap();
+    open(&mut setup, &s, "f", policy()).await.unwrap();
     setup.commit().await.unwrap();
     let mut first = db.pool.begin().await.unwrap();
     let row = namespace::resolve(&mut first, w, Some(&path("f")), &caller())
         .await
         .unwrap();
     let mut other = db.pool.begin().await.unwrap();
-    let guard = namespace::lock(&mut other, w).await.unwrap();
-    namespace::unlink(&mut other, &guard, &caller(), &path("f"))
+
+    namespace::lock(&mut other, w)
+        .await
+        .unwrap()
+        .unlink(&caller(), &path("f"))
         .await
         .unwrap();
     other.commit().await.unwrap();
@@ -443,7 +454,6 @@ async fn unlink_between_resolve_and_lock_fails_open() {
     // open_file repeats resolution and rejects the vanished path; the locked-row predicate above covers an already-resolved open.
     let r = handles::open_file(
         &mut first,
-        None,
         &caller(),
         &s,
         OpenRequest {
@@ -471,7 +481,7 @@ async fn renewal_waiting_on_admission_cannot_reactivate_an_expired_slot() {
     let (db, w) = fixture().await;
     let session = actor_session(&db, w).await;
     let mut setup = db.pool.begin().await.unwrap();
-    let guard = namespace::lock(&mut setup, w).await.unwrap();
+
     let policy = HandlePolicy {
         ttl: Duration::from_secs(60),
         limit: 1,
@@ -485,17 +495,13 @@ async fn renewal_waiting_on_admission_cannot_reactivate_an_expired_slot() {
         truncate: false,
         mode: Some(0o600),
     };
-    let old = handles::open_file(
-        &mut setup,
-        Some(&guard),
-        &caller(),
-        &session,
-        req("old", true),
-        policy,
-    )
-    .await
-    .unwrap();
-    namespace::create_file(&mut setup, &guard, &caller(), &path("replacement"), 0o600)
+    let old = handles::open_file(&mut setup, &caller(), &session, req("old", true), policy)
+        .await
+        .unwrap();
+    namespace::lock(&mut setup, w)
+        .await
+        .unwrap()
+        .create_file(&caller(), &path("replacement"), 0o600)
         .await
         .unwrap();
     let expires:time::OffsetDateTime=sqlx::query_scalar("UPDATE handles SET expires_at=clock_timestamp()+interval '2 seconds' WHERE workspace_id=$1 AND id=$2 RETURNING expires_at").bind(w.0).bind(old.handle.id).fetch_one(&mut *setup).await.unwrap();
@@ -542,7 +548,6 @@ async fn renewal_waiting_on_admission_cannot_reactivate_an_expired_slot() {
     .unwrap();
     handles::open_file(
         &mut opening,
-        None,
         &caller(),
         &session,
         req("replacement", false),

@@ -106,9 +106,9 @@ pub fn contract_router(config: &Config) -> OpenApiRouter<AppState> {
     metadata.merge(data).merge(replacement)
 }
 pub fn build_router(state: AppState) -> Router {
-    assert_eq!(
-        Some(state.cursor_key),
-        anchorfs_core::decode_hex_32(state.config.cursor_signing_key.expose()),
+    assert!(
+        Some(state.cursor_key)
+            == anchorfs_core::decode_hex_32(state.config.cursor_signing_key.expose()),
         "invalid cursor signing key configuration"
     );
     let (router, _) = contract_router(&state.config).split_for_parts();

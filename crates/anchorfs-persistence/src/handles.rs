@@ -11,7 +11,7 @@ pub async fn open_unexpired_count(
 
 use crate::{
     authority::{ActorSession, LockMode},
-    namespace::{self, Caller, InodeRow, NamespaceError, NamespaceGuard},
+    namespace::{self, Caller, InodeRow, NamespaceError},
 };
 use anchorfs_core::{Access, HandleId, SessionId, WorkspacePath};
 use std::time::Duration;
@@ -95,7 +95,6 @@ pub async fn count_open(
 }
 pub async fn open_file(
     tx: &mut Transaction<'_, Postgres>,
-    guard: Option<&NamespaceGuard>,
     caller: &Caller,
     session: &ActorSession,
     req: OpenRequest,
@@ -103,56 +102,44 @@ pub async fn open_file(
 ) -> Result<Opened, HandleError> {
     validate_request(&req)?;
     let w = session.workspace_id;
-    let existing = if req.create {
-        if let Some(guard) = guard {
-            guard.check_transaction(tx).await?;
+    let (row, created) = if req.create {
+        namespace::lock(tx, w)
+            .await?
+            .open_create(caller, &req.path, req.mode.expect("validated mode"))
+            .await?
+    } else {
+        (
+            namespace::resolve(tx, w, Some(&req.path), caller).await?,
+            false,
+        )
+    };
+    let mut inode = if created {
+        row
+    } else {
+        if req.exclusive {
+            return Err(NamespaceError::Exists.into());
         }
-        if guard.is_none_or(|g| g.workspace() != w) {
+        let mut rows = namespace::lock_inodes(tx, w, &[row.id]).await?;
+        let row = rows
+            .pop()
+            .filter(|r| r.nlink > 0)
+            .ok_or(HandleError::NotFound)?;
+        if row.kind == "directory" {
+            return Err(NamespaceError::IsDirectory.into());
+        }
+        if row.kind != "file" {
             return Err(NamespaceError::InvalidInput.into());
         }
-        let (parent, name) = namespace::resolve_parent(tx, w, &req.path, caller).await?;
-        namespace::child(tx, w, parent.id, name.as_str()).await?
-    } else {
-        Some(namespace::resolve(tx, w, Some(&req.path), caller).await?)
-    };
-    let (mut inode, created) = match existing {
-        Some(row) => {
-            if req.exclusive {
-                return Err(NamespaceError::Exists.into());
-            }
-            let mut rows = namespace::lock_inodes(tx, w, &[row.id]).await?;
-            let row = rows
-                .pop()
-                .filter(|r| r.nlink > 0)
-                .ok_or(HandleError::NotFound)?;
-            if row.kind == "directory" {
-                return Err(NamespaceError::IsDirectory.into());
-            }
-            if row.kind != "file" {
-                return Err(NamespaceError::InvalidInput.into());
-            }
-            namespace::access(
-                &row,
-                caller,
-                Access {
-                    read: req.read,
-                    write: req.write,
-                    exec: false,
-                },
-            )?;
-            (row, false)
-        }
-        None => {
-            let row = namespace::create_file(
-                tx,
-                guard.expect("create guard"),
-                caller,
-                &req.path,
-                req.mode.expect("validated mode"),
-            )
-            .await?;
-            (row, true)
-        }
+        namespace::access(
+            &row,
+            caller,
+            Access {
+                read: req.read,
+                write: req.write,
+                exec: false,
+            },
+        )?;
+        row
     };
     if req.truncate {
         if inode.current_manifest_id.is_some() {

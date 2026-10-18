@@ -345,42 +345,35 @@ impl Mutation {
     }
     async fn apply(
         self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        guard: &namespace::NamespaceGuard,
+        namespace: &mut namespace::NamespaceMutation<'_, '_>,
         caller: &namespace::Caller,
     ) -> Result<namespace::Mutated, ApiError> {
         let path = |s: &str| WorkspacePath::parse(s).expect("validated path");
         Ok(match self {
-            Self::Mkdir(b) => namespace::mkdir(tx, guard, caller, &path(&b.path), b.mode).await?,
-            Self::Rmdir(p) => namespace::rmdir(tx, guard, caller, &path(&p)).await?,
-            Self::Unlink(p) => namespace::unlink(tx, guard, caller, &path(&p)).await?,
+            Self::Mkdir(b) => namespace.mkdir(caller, &path(&b.path), b.mode).await?,
+            Self::Rmdir(p) => namespace.rmdir(caller, &path(&p)).await?,
+            Self::Unlink(p) => namespace.unlink(caller, &path(&p)).await?,
             Self::Link(b) => {
-                namespace::link(
-                    tx,
-                    guard,
-                    caller,
-                    &path(&b.existing_path),
-                    &path(&b.new_path),
-                )
-                .await?
+                namespace
+                    .link(caller, &path(&b.existing_path), &path(&b.new_path))
+                    .await?
             }
-            Self::Symlink(b) => {
-                namespace::symlink(tx, guard, caller, &path(&b.path), &b.target).await?
-            }
+            Self::Symlink(b) => namespace.symlink(caller, &path(&b.path), &b.target).await?,
             Self::Rename(b) => {
-                namespace::rename(tx, guard, caller, &path(&b.from), &path(&b.to)).await?
+                namespace
+                    .rename(caller, &path(&b.from), &path(&b.to))
+                    .await?
             }
             Self::Attributes(b) => {
-                namespace::set_attributes(
-                    tx,
-                    guard,
-                    caller,
-                    b.path.as_deref().map(path).as_ref(),
-                    b.mode,
-                    b.uid,
-                    b.gid,
-                )
-                .await?
+                namespace
+                    .set_attributes(
+                        caller,
+                        b.path.as_deref().map(path).as_ref(),
+                        b.mode,
+                        b.uid,
+                        b.gid,
+                    )
+                    .await?
             }
         })
     }
@@ -447,8 +440,8 @@ async fn mutate(call: MutationCall, mutation: Mutation) -> Result<Response, ApiE
                     },
                     move |tx, operation| {
                         Box::pin(async move {
-                            let guard = namespace::lock(tx, workspace).await?;
-                            let m = mutation.apply(tx, &guard, &p.caller).await?;
+                            let mut namespace = namespace::lock(tx, workspace).await?;
+                            let m = mutation.apply(&mut namespace, &p.caller).await?;
                             Published::metadata(MutationResult {
                                 operation_id: operation.0,
                                 inode_id: Some(m.inode_id),

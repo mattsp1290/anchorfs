@@ -3,7 +3,7 @@ mod common;
 #[path = "namespace_model/model.rs"]
 mod model;
 use common::fixture::*;
-use model::{Model, Node, Op};
+use model::{Action, Model, Node, Op, OpenFlags};
 use proptest::{
     prelude::*,
     test_runner::{Config as PropertyConfig, TestRunner},
@@ -73,54 +73,52 @@ impl Case {
         }
     }
     async fn apply(&mut self, f: &Fixture, model: &mut Model, op: &Op) {
-        let selected = model.selected_handle(op.flags);
+        let selected = match &op.action {
+            Action::Close { selector } => model.selected_handle(*selector),
+            _ => None,
+        };
         let handle = selected
             .and_then(|id| self.wire_handles.get(&id).copied())
             .unwrap_or(Uuid::nil());
-        let (method, suffix, body) = match op.kind {
-            0 => (
+        let (method, suffix, body) = match &op.action {
+            Action::Mkdir { path, mode } => (
                 "POST",
                 "/directories".into(),
-                Some(json!({"path":op.path,"mode":op.mode})),
+                Some(json!({"path":path,"mode":mode})),
             ),
-            1 => ("DELETE", format!("/directories?path={}", op.path), None),
-            2 => (
+            Action::Rmdir { path } => ("DELETE", format!("/directories?path={path}"), None),
+            Action::Symlink { path } => (
                 "POST",
                 "/symlinks".into(),
-                Some(json!({"path":op.path,"target":"/opaque"})),
+                Some(json!({"path":path,"target":"/opaque"})),
             ),
-            3 => (
+            Action::Link { existing, new_path } => (
                 "POST",
                 "/links".into(),
-                Some(json!({"existing_path":op.path,"new_path":op.other})),
+                Some(json!({"existing_path":existing,"new_path":new_path})),
             ),
-            4 => ("DELETE", format!("/files?path={}", op.path), None),
-            5 => (
-                "POST",
-                "/rename".into(),
-                Some(json!({"from":op.path,"to":op.other})),
-            ),
-            6 => (
+            Action::Unlink { path } => ("DELETE", format!("/files?path={path}"), None),
+            Action::Rename { from, to } => {
+                ("POST", "/rename".into(), Some(json!({"from":from,"to":to})))
+            }
+            Action::Chmod { path, mode } => (
                 "PATCH",
                 "/attributes".into(),
-                Some(json!({"path":op.path,"mode":op.mode})),
+                Some(json!({"path":path,"mode":mode})),
             ),
-            7 => (
+            Action::Chown { path, uid, gid } => (
                 "PATCH",
                 "/attributes".into(),
-                Some(
-                    json!({"path":op.path,"uid":if op.flags&1==0{1000}else{2000},"gid":if op.flags&2==0{1000}else{2000}}),
-                ),
+                Some(json!({"path":path,"uid":uid,"gid":gid})),
             ),
-            8 => (
+            Action::Open { path, flags, mode } => (
                 "POST",
                 "/handles".into(),
                 Some(
-                    json!({"path":op.path,"read":op.flags&1!=0,"write":op.flags&2!=0,"create":op.flags&4!=0,"exclusive":op.flags&8!=0,"truncate":op.flags&16!=0,"mode":op.mode}),
+                    json!({"path":path,"read":flags.read,"write":flags.write,"create":flags.create,"exclusive":flags.exclusive,"truncate":flags.truncate,"mode":mode}),
                 ),
             ),
-            9 => ("DELETE", format!("/handles/{handle}"), None),
-            _ => unreachable!(),
+            Action::Close { .. } => ("DELETE", format!("/handles/{handle}"), None),
         };
         let mut trial = model.clone();
         let expected = trial.apply(op);
@@ -152,12 +150,16 @@ impl Case {
             Ok(node) => {
                 assert_eq!(
                     reply.status.as_u16(),
-                    if op.kind == 8 { 201 } else { 200 },
+                    if matches!(op.action, Action::Open { .. }) {
+                        201
+                    } else {
+                        200
+                    },
                     "{op:?}: {}",
                     reply.body
                 );
                 if let Some(node) = node {
-                    let id = if op.kind == 8 {
+                    let id = if matches!(op.action, Action::Open { .. }) {
                         reply.body["attributes"]["inode_id"].as_i64()
                     } else {
                         reply.body["inode_id"].as_i64()
@@ -167,14 +169,14 @@ impl Case {
                         assert_eq!(previous, id, "inode identity changed: {op:?}");
                     }
                 }
-                if op.kind == 8 {
+                if matches!(op.action, Action::Open { .. }) {
                     let new = *trial.handles.last_key_value().unwrap().0;
                     self.wire_handles.insert(
                         new,
                         Uuid::parse_str(reply.body["handle_id"].as_str().unwrap()).unwrap(),
                     );
                 }
-                if op.kind == 9 {
+                if matches!(op.action, Action::Close { .. }) {
                     self.wire_handles.remove(&selected.unwrap());
                 }
                 *model = trial;
@@ -260,23 +262,48 @@ fn path_strategy() -> impl Strategy<Value = String> {
             .join("/")
     })
 }
+fn mode_strategy() -> impl Strategy<Value = u32> {
+    prop::sample::select(vec![0, 0o600, 0o700, 0o755, 0o777, 0o4755])
+}
 fn op_strategy() -> impl Strategy<Value = Op> {
-    (
-        0..3_usize,
-        0..10_u8,
-        path_strategy(),
-        path_strategy(),
-        prop::sample::select(vec![0, 0o600, 0o700, 0o755, 0o777, 0o4755]),
-        0..32_u8,
+    // Independent booleans deliberately include invalid open flag combinations.
+    let flags = (
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
     )
-        .prop_map(|(actor, kind, path, other, mode, flags)| Op {
-            actor,
-            kind,
+        .prop_map(|(read, write, create, exclusive, truncate)| OpenFlags {
+            read,
+            write,
+            create,
+            exclusive,
+            truncate,
+        });
+    let action = prop_oneof![
+        (path_strategy(), mode_strategy()).prop_map(|(path, mode)| Action::Mkdir { path, mode }),
+        path_strategy().prop_map(|path| Action::Rmdir { path }),
+        path_strategy().prop_map(|path| Action::Symlink { path }),
+        (path_strategy(), path_strategy())
+            .prop_map(|(existing, new_path)| Action::Link { existing, new_path }),
+        path_strategy().prop_map(|path| Action::Unlink { path }),
+        (path_strategy(), path_strategy()).prop_map(|(from, to)| Action::Rename { from, to }),
+        (path_strategy(), mode_strategy()).prop_map(|(path, mode)| Action::Chmod { path, mode }),
+        (
+            path_strategy(),
+            prop::sample::select(vec![1000, 2000]),
+            prop::sample::select(vec![1000, 2000])
+        )
+            .prop_map(|(path, uid, gid)| Action::Chown { path, uid, gid }),
+        (path_strategy(), flags, mode_strategy()).prop_map(|(path, flags, mode)| Action::Open {
             path,
-            other,
-            mode,
             flags,
-        })
+            mode
+        }),
+        (0..32_u8).prop_map(|selector| Action::Close { selector }),
+    ];
+    (0..3_usize, action).prop_map(|(actor, action)| Op { actor, action })
 }
 #[test]
 fn namespace_model_sequences() {
@@ -303,35 +330,35 @@ fn namespace_model_sequences() {
                 for op in [
                     Op {
                         actor: 2,
-                        kind: 0,
-                        path: "a".into(),
-                        other: String::new(),
-                        mode: 0o777,
-                        flags: 0,
+                        action: Action::Mkdir {
+                            path: "a".into(),
+                            mode: 0o777,
+                        },
                     },
                     Op {
                         actor: 2,
-                        kind: 8,
-                        path: "b".into(),
-                        other: String::new(),
-                        mode: 0o666,
-                        flags: 7,
+                        action: Action::Open {
+                            path: "b".into(),
+                            mode: 0o666,
+                            flags: OpenFlags {
+                                read: true,
+                                write: true,
+                                create: true,
+                                exclusive: false,
+                                truncate: false,
+                            },
+                        },
                     },
                     Op {
                         actor: 2,
-                        kind: 2,
-                        path: "c".into(),
-                        other: String::new(),
-                        mode: 0,
-                        flags: 0,
+                        action: Action::Symlink { path: "c".into() },
                     },
                     Op {
                         actor: 2,
-                        kind: 0,
-                        path: "d".into(),
-                        other: String::new(),
-                        mode: 0o700,
-                        flags: 0,
+                        action: Action::Mkdir {
+                            path: "d".into(),
+                            mode: 0o700,
+                        },
                     },
                 ] {
                     case.apply(&fixture, &mut model, &op).await;

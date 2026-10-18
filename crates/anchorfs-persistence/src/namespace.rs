@@ -1,7 +1,6 @@
 //! Independently authored namespace operations. Paths never follow symlinks.
 use anchorfs_core::{Access, Identity, Mode, Name, WorkspaceId, WorkspacePath, permits};
 use sqlx::{Postgres, Transaction};
-use std::sync::atomic::{AtomicBool, Ordering};
 use time::OffsetDateTime;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -51,60 +50,51 @@ pub enum NamespaceError {
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
-/// Constructed only after locking the workspace's namespace row.
-pub struct NamespaceGuard {
-    transaction_id: i64,
+/// A namespace mutation context exclusively borrows its locking transaction.
+/// The borrow prevents committing or replacing that transaction while using it.
+///
+/// ```compile_fail,E0505
+/// use anchorfs_core::{WorkspaceId, WorkspacePath};
+/// use anchorfs_persistence::namespace::{self, Caller};
+/// use sqlx::{Postgres, Transaction};
+/// async fn cannot_reuse(mut tx: Transaction<'static, Postgres>, w: WorkspaceId,
+///                     caller: Caller, path: WorkspacePath) {
+///     let mut namespace = namespace::lock(&mut tx, w).await.unwrap();
+///     tx.commit().await.unwrap();
+///     namespace.mkdir(&caller, &path, 0o755).await.unwrap();
+/// }
+/// ```
+pub struct NamespaceMutation<'a, 'db> {
+    tx: &'a mut Transaction<'db, Postgres>,
     workspace: WorkspaceId,
     generation: i64,
-    bumped: AtomicBool,
+    bumped: bool,
 }
-pub async fn lock(
-    tx: &mut Transaction<'_, Postgres>,
+pub async fn lock<'a, 'db>(
+    tx: &'a mut Transaction<'db, Postgres>,
     workspace: WorkspaceId,
-) -> Result<NamespaceGuard, sqlx::Error> {
+) -> Result<NamespaceMutation<'a, 'db>, sqlx::Error> {
     let generation = sqlx::query_scalar(
         "SELECT namespace_generation FROM namespace_locks WHERE workspace_id=$1 FOR UPDATE",
     )
     .bind(workspace.0)
     .fetch_one(&mut **tx)
     .await?;
-    let transaction_id = sqlx::query_scalar("SELECT txid_current()")
-        .fetch_one(&mut **tx)
-        .await?;
-    Ok(NamespaceGuard {
-        transaction_id,
+    Ok(NamespaceMutation {
+        tx,
         workspace,
         generation,
-        bumped: AtomicBool::new(false),
+        bumped: false,
     })
 }
-impl NamespaceGuard {
-    /// A guard cannot be reused after its locking transaction has ended.
-    pub async fn check_transaction(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-    ) -> Result<(), sqlx::Error> {
-        let current: i64 = sqlx::query_scalar("SELECT txid_current()")
-            .fetch_one(&mut **tx)
-            .await?;
-        if current != self.transaction_id {
-            return Err(sqlx::Error::Protocol(
-                "namespace guard belongs to another transaction".into(),
-            ));
-        }
-        Ok(())
-    }
-    pub fn workspace(&self) -> WorkspaceId {
-        self.workspace
-    }
+impl NamespaceMutation<'_, '_> {
     pub fn generation(&self) -> i64 {
-        self.generation + i64::from(self.bumped.load(Ordering::Relaxed))
+        self.generation + i64::from(self.bumped)
     }
-    pub async fn bump(&self, tx: &mut Transaction<'_, Postgres>) -> Result<i64, sqlx::Error> {
-        self.check_transaction(tx).await?;
-        if !self.bumped.load(Ordering::Relaxed) {
-            sqlx::query("UPDATE namespace_locks SET namespace_generation=namespace_generation+1 WHERE workspace_id=$1").bind(self.workspace.0).execute(&mut **tx).await?;
-            self.bumped.store(true, Ordering::Relaxed);
+    async fn bump(&mut self) -> Result<i64, sqlx::Error> {
+        if !self.bumped {
+            sqlx::query("UPDATE namespace_locks SET namespace_generation=namespace_generation+1 WHERE workspace_id=$1").bind(self.workspace.0).execute(&mut **self.tx).await?;
+            self.bumped = true;
         }
         Ok(self.generation())
     }
@@ -302,101 +292,6 @@ pub async fn empty(
 ) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM directory_entries WHERE workspace_id=$1 AND parent_inode_id=$2)").bind(workspace.0).bind(inode).fetch_one(&mut **tx).await
 }
-/// Shared create path also used by metadata-only open(create).
-pub async fn create_file(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    path: &WorkspacePath,
-    mode: u32,
-) -> Result<InodeRow, NamespaceError> {
-    create(tx, guard, caller, path, mode, "file", None).await
-}
-async fn create(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    path: &WorkspacePath,
-    mode: u32,
-    kind: &str,
-    target: Option<&str>,
-) -> Result<InodeRow, NamespaceError> {
-    validate_mode(mode)?;
-    guard.check_transaction(tx).await?;
-    let w = guard.workspace;
-    let (parent, name) = resolve_parent(tx, w, path, caller).await?;
-    let rows = lock_inodes(tx, w, &[parent.id]).await?;
-    parent_access(locked(&rows, parent.id)?, caller)?;
-    if child(tx, w, parent.id, name.as_str()).await?.is_some() {
-        return Err(NamespaceError::Exists);
-    }
-    let row: InodeRow = sqlx::query_as("INSERT INTO inodes(workspace_id,kind,size,mode,uid,gid,nlink,symlink_target,atime,mtime,ctime) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,transaction_timestamp(),transaction_timestamp(),transaction_timestamp()) RETURNING *")
-        .bind(w.0).bind(kind).bind(target.map_or(0,|t|t.len() as i64)).bind(mode as i32).bind(i64::from(caller.identity.uid)).bind(i64::from(caller.identity.gid)).bind(if kind=="directory" {2_i32} else {1_i32}).bind(target).fetch_one(&mut **tx).await?;
-    insert_entry(tx, w, parent.id, name.as_str(), row.id).await?;
-    touch_parent(tx, w, parent.id, i32::from(kind == "directory")).await?;
-    crate::quota::apply(
-        tx,
-        w,
-        crate::quota::Charge {
-            inodes: 1,
-            bytes: row.size,
-        },
-    )
-    .await?;
-    guard.bump(tx).await?;
-    Ok(row)
-}
-pub async fn mkdir(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    path: &WorkspacePath,
-    mode: u32,
-) -> Result<Mutated, NamespaceError> {
-    Ok(mutated(
-        &create(tx, guard, caller, path, mode, "directory", None).await?,
-    ))
-}
-pub async fn symlink(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    path: &WorkspacePath,
-    target: &str,
-) -> Result<Mutated, NamespaceError> {
-    if target.is_empty() || target.len() > 4096 || target.contains('\0') {
-        return Err(NamespaceError::InvalidInput);
-    }
-    Ok(mutated(
-        &create(tx, guard, caller, path, 0o777, "symlink", Some(target)).await?,
-    ))
-}
-pub async fn link(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    existing: &WorkspacePath,
-    path: &WorkspacePath,
-) -> Result<Mutated, NamespaceError> {
-    guard.check_transaction(tx).await?;
-    let w = guard.workspace;
-    let source = resolve(tx, w, Some(existing), caller).await?;
-    if source.kind == "directory" {
-        return Err(NamespaceError::IsDirectory);
-    }
-    let (parent, name) = resolve_parent(tx, w, path, caller).await?;
-    let rows = lock_inodes(tx, w, &[source.id, parent.id]).await?;
-    locked(&rows, source.id)?;
-    parent_access(locked(&rows, parent.id)?, caller)?;
-    if child(tx, w, parent.id, name.as_str()).await?.is_some() {
-        return Err(NamespaceError::Exists);
-    }
-    insert_entry(tx, w, parent.id, name.as_str(), source.id).await?;
-    let row: InodeRow = sqlx::query_as("UPDATE inodes SET nlink=nlink+1,generation=generation+1,ctime=transaction_timestamp() WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(source.id).fetch_one(&mut **tx).await?;
-    touch_parent(tx, w, parent.id, 0).await?;
-    guard.bump(tx).await?;
-    Ok(mutated(&row))
-}
 async fn drop_link(
     tx: &mut Transaction<'_, Postgres>,
     w: WorkspaceId,
@@ -404,177 +299,280 @@ async fn drop_link(
 ) -> Result<InodeRow, sqlx::Error> {
     sqlx::query_as("UPDATE inodes SET nlink=$3,unlinked_at=CASE WHEN $3=0 THEN transaction_timestamp() ELSE NULL END,generation=generation+1,ctime=transaction_timestamp() WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(row.id).bind(if row.kind=="directory" {0} else {row.nlink-1}).fetch_one(&mut **tx).await
 }
-pub async fn rmdir(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    path: &WorkspacePath,
-) -> Result<Mutated, NamespaceError> {
-    remove(tx, guard, caller, path, true).await
-}
-pub async fn unlink(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    path: &WorkspacePath,
-) -> Result<Mutated, NamespaceError> {
-    remove(tx, guard, caller, path, false).await
-}
-async fn remove(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    path: &WorkspacePath,
-    directory: bool,
-) -> Result<Mutated, NamespaceError> {
-    guard.check_transaction(tx).await?;
-    let w = guard.workspace;
-    let (parent, name) = resolve_parent(tx, w, path, caller).await?;
-    let row = child(tx, w, parent.id, name.as_str())
-        .await?
-        .ok_or(NamespaceError::NotFound)?;
-    let rows = lock_inodes(tx, w, &[parent.id, row.id]).await?;
-    parent_access(locked(&rows, parent.id)?, caller)?;
-    let row = locked(&rows, row.id)?;
-    unchanged(tx, w, parent.id, name.as_str(), Some(row.id)).await?;
-    if directory && row.kind != "directory" {
-        return Err(NamespaceError::NotDirectory);
+impl NamespaceMutation<'_, '_> {
+    /// Resolve under the namespace lock; only a missing entry is created.
+    pub(crate) async fn open_create(
+        &mut self,
+        caller: &Caller,
+        path: &WorkspacePath,
+        mode: u32,
+    ) -> Result<(InodeRow, bool), NamespaceError> {
+        let (parent, name) = resolve_parent(self.tx, self.workspace, path, caller).await?;
+        if let Some(row) = child(self.tx, self.workspace, parent.id, name.as_str()).await? {
+            Ok((row, false))
+        } else {
+            Ok((self.create_file(caller, path, mode).await?, true))
+        }
     }
-    if !directory && row.kind == "directory" {
-        return Err(NamespaceError::IsDirectory);
+    /// Shared create path also used by metadata-only open(create).
+    pub async fn create_file(
+        &mut self,
+        caller: &Caller,
+        path: &WorkspacePath,
+        mode: u32,
+    ) -> Result<InodeRow, NamespaceError> {
+        self.create(caller, path, mode, "file", None).await
     }
-    if directory && !empty(tx, w, row.id).await? {
-        return Err(NamespaceError::DirectoryNotEmpty);
-    }
-    delete_entry(tx, w, parent.id, name.as_str()).await?;
-    let row = drop_link(tx, w, row).await?;
-    touch_parent(tx, w, parent.id, if directory { -1 } else { 0 }).await?;
-    crate::quota::release_if_due(tx, w, &row).await?;
-    guard.bump(tx).await?;
-    Ok(mutated(&row))
-}
-pub async fn set_attributes(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    path: Option<&WorkspacePath>,
-    mode: Option<u32>,
-    uid: Option<u32>,
-    gid: Option<u32>,
-) -> Result<Mutated, NamespaceError> {
-    if mode.is_none() && uid.is_none() && gid.is_none() {
-        return Err(NamespaceError::InvalidInput);
-    }
-    if let Some(mode) = mode {
+    async fn create(
+        &mut self,
+        caller: &Caller,
+        path: &WorkspacePath,
+        mode: u32,
+        kind: &str,
+        target: Option<&str>,
+    ) -> Result<InodeRow, NamespaceError> {
         validate_mode(mode)?;
-    }
-    guard.check_transaction(tx).await?;
-    let w = guard.workspace;
-    let row = resolve(tx, w, path, caller).await?;
-    let rows = lock_inodes(tx, w, &[row.id]).await?;
-    let row = locked(&rows, row.id)?;
-    if mode.is_some() && row.kind == "symlink" {
-        return Err(NamespaceError::InvalidInput);
-    }
-    if !caller.admin
-        && ((mode.is_some() && row.uid != i64::from(caller.identity.uid))
-            || uid.is_some()
-            || gid.is_some())
-    {
-        return Err(NamespaceError::Forbidden);
-    }
-    let row: InodeRow=sqlx::query_as("UPDATE inodes SET mode=coalesce($3,mode),uid=coalesce($4,uid),gid=coalesce($5,gid),ctime=transaction_timestamp(),generation=generation+1 WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(row.id).bind(mode.map(|v|v as i32)).bind(uid.map(i64::from)).bind(gid.map(i64::from)).fetch_one(&mut **tx).await?;
-    Ok(mutated(&row))
-}
-pub async fn rename(
-    tx: &mut Transaction<'_, Postgres>,
-    guard: &NamespaceGuard,
-    caller: &Caller,
-    from: &WorkspacePath,
-    to: &WorkspacePath,
-) -> Result<Mutated, NamespaceError> {
-    guard.check_transaction(tx).await?;
-    let w = guard.workspace;
-    let (pf, nf) = resolve_parent(tx, w, from, caller).await?;
-    let (pt, nt) = resolve_parent(tx, w, to, caller).await?;
-    let src = child(tx, w, pf.id, nf.as_str())
-        .await?
-        .ok_or(NamespaceError::NotFound)?;
-    let dst = child(tx, w, pt.id, nt.as_str()).await?;
-    if from == to || dst.as_ref().is_some_and(|d| d.id == src.id) {
-        return Ok(mutated(&src));
-    }
-    let is_dir = src.kind == "directory";
-    if is_dir && pf.id != pt.id {
-        access(
-            &src,
-            caller,
-            Access {
-                write: true,
-                ..Access::default()
+        let w = self.workspace;
+        let tx = &mut *self.tx;
+        let (parent, name) = resolve_parent(tx, w, path, caller).await?;
+        let rows = lock_inodes(tx, w, &[parent.id]).await?;
+        parent_access(locked(&rows, parent.id)?, caller)?;
+        if child(tx, w, parent.id, name.as_str()).await?.is_some() {
+            return Err(NamespaceError::Exists);
+        }
+        let row: InodeRow = sqlx::query_as("INSERT INTO inodes(workspace_id,kind,size,mode,uid,gid,nlink,symlink_target,atime,mtime,ctime) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,transaction_timestamp(),transaction_timestamp(),transaction_timestamp()) RETURNING *")
+        .bind(w.0).bind(kind).bind(target.map_or(0,|t|t.len() as i64)).bind(mode as i32).bind(i64::from(caller.identity.uid)).bind(i64::from(caller.identity.gid)).bind(if kind=="directory" {2_i32} else {1_i32}).bind(target).fetch_one(&mut **tx).await?;
+        insert_entry(tx, w, parent.id, name.as_str(), row.id).await?;
+        touch_parent(tx, w, parent.id, i32::from(kind == "directory")).await?;
+        crate::quota::apply(
+            tx,
+            w,
+            crate::quota::Charge {
+                inodes: 1,
+                bytes: row.size,
             },
-        )?;
-        if ancestors(tx, w, pt.id).await?.contains(&src.id) {
+        )
+        .await?;
+        self.bump().await?;
+        Ok(row)
+    }
+    pub async fn mkdir(
+        &mut self,
+        caller: &Caller,
+        path: &WorkspacePath,
+        mode: u32,
+    ) -> Result<Mutated, NamespaceError> {
+        Ok(mutated(
+            &self.create(caller, path, mode, "directory", None).await?,
+        ))
+    }
+    pub async fn symlink(
+        &mut self,
+        caller: &Caller,
+        path: &WorkspacePath,
+        target: &str,
+    ) -> Result<Mutated, NamespaceError> {
+        if target.is_empty() || target.len() > 4096 || target.contains('\0') {
             return Err(NamespaceError::InvalidInput);
         }
+        Ok(mutated(
+            &self
+                .create(caller, path, 0o777, "symlink", Some(target))
+                .await?,
+        ))
     }
-    if let Some(dst) = &dst {
-        if is_dir && dst.kind != "directory" {
-            return Err(NamespaceError::NotDirectory);
-        }
-        if !is_dir && dst.kind == "directory" {
+    pub async fn link(
+        &mut self,
+        caller: &Caller,
+        existing: &WorkspacePath,
+        path: &WorkspacePath,
+    ) -> Result<Mutated, NamespaceError> {
+        let w = self.workspace;
+        let tx = &mut *self.tx;
+        let source = resolve(tx, w, Some(existing), caller).await?;
+        if source.kind == "directory" {
             return Err(NamespaceError::IsDirectory);
         }
-        if dst.kind == "directory" && !empty(tx, w, dst.id).await? {
+        let (parent, name) = resolve_parent(tx, w, path, caller).await?;
+        let rows = lock_inodes(tx, w, &[source.id, parent.id]).await?;
+        locked(&rows, source.id)?;
+        parent_access(locked(&rows, parent.id)?, caller)?;
+        if child(tx, w, parent.id, name.as_str()).await?.is_some() {
+            return Err(NamespaceError::Exists);
+        }
+        insert_entry(tx, w, parent.id, name.as_str(), source.id).await?;
+        let row: InodeRow = sqlx::query_as("UPDATE inodes SET nlink=nlink+1,generation=generation+1,ctime=transaction_timestamp() WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(source.id).fetch_one(&mut **tx).await?;
+        touch_parent(tx, w, parent.id, 0).await?;
+        self.bump().await?;
+        Ok(mutated(&row))
+    }
+    pub async fn rmdir(
+        &mut self,
+        caller: &Caller,
+        path: &WorkspacePath,
+    ) -> Result<Mutated, NamespaceError> {
+        self.remove(caller, path, true).await
+    }
+    pub async fn unlink(
+        &mut self,
+        caller: &Caller,
+        path: &WorkspacePath,
+    ) -> Result<Mutated, NamespaceError> {
+        self.remove(caller, path, false).await
+    }
+    async fn remove(
+        &mut self,
+        caller: &Caller,
+        path: &WorkspacePath,
+        directory: bool,
+    ) -> Result<Mutated, NamespaceError> {
+        let w = self.workspace;
+        let tx = &mut *self.tx;
+        let (parent, name) = resolve_parent(tx, w, path, caller).await?;
+        let row = child(tx, w, parent.id, name.as_str())
+            .await?
+            .ok_or(NamespaceError::NotFound)?;
+        let rows = lock_inodes(tx, w, &[parent.id, row.id]).await?;
+        parent_access(locked(&rows, parent.id)?, caller)?;
+        let row = locked(&rows, row.id)?;
+        unchanged(tx, w, parent.id, name.as_str(), Some(row.id)).await?;
+        if directory && row.kind != "directory" {
+            return Err(NamespaceError::NotDirectory);
+        }
+        if !directory && row.kind == "directory" {
+            return Err(NamespaceError::IsDirectory);
+        }
+        if directory && !empty(tx, w, row.id).await? {
             return Err(NamespaceError::DirectoryNotEmpty);
         }
+        delete_entry(tx, w, parent.id, name.as_str()).await?;
+        let row = drop_link(tx, w, row).await?;
+        touch_parent(tx, w, parent.id, if directory { -1 } else { 0 }).await?;
+        crate::quota::release_if_due(tx, w, &row).await?;
+        self.bump().await?;
+        Ok(mutated(&row))
     }
-    let mut ids = vec![src.id, pf.id, pt.id];
-    if let Some(dst) = &dst {
-        ids.push(dst.id);
+    pub async fn set_attributes(
+        &mut self,
+        caller: &Caller,
+        path: Option<&WorkspacePath>,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+    ) -> Result<Mutated, NamespaceError> {
+        if mode.is_none() && uid.is_none() && gid.is_none() {
+            return Err(NamespaceError::InvalidInput);
+        }
+        if let Some(mode) = mode {
+            validate_mode(mode)?;
+        }
+        let w = self.workspace;
+        let tx = &mut *self.tx;
+        let row = resolve(tx, w, path, caller).await?;
+        let rows = lock_inodes(tx, w, &[row.id]).await?;
+        let row = locked(&rows, row.id)?;
+        if mode.is_some() && row.kind == "symlink" {
+            return Err(NamespaceError::InvalidInput);
+        }
+        if !caller.admin
+            && ((mode.is_some() && row.uid != i64::from(caller.identity.uid))
+                || uid.is_some()
+                || gid.is_some())
+        {
+            return Err(NamespaceError::Forbidden);
+        }
+        let row: InodeRow=sqlx::query_as("UPDATE inodes SET mode=coalesce($3,mode),uid=coalesce($4,uid),gid=coalesce($5,gid),ctime=transaction_timestamp(),generation=generation+1 WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(row.id).bind(mode.map(|v|v as i32)).bind(uid.map(i64::from)).bind(gid.map(i64::from)).fetch_one(&mut **tx).await?;
+        Ok(mutated(&row))
     }
-    let rows = lock_inodes(tx, w, &ids).await?;
-    parent_access(locked(&rows, pf.id)?, caller)?;
-    parent_access(locked(&rows, pt.id)?, caller)?;
-    let src = locked(&rows, src.id)?;
-    if is_dir && pf.id != pt.id {
-        access(
-            src,
-            caller,
-            Access {
-                write: true,
-                ..Access::default()
-            },
-        )?;
+    pub async fn rename(
+        &mut self,
+        caller: &Caller,
+        from: &WorkspacePath,
+        to: &WorkspacePath,
+    ) -> Result<Mutated, NamespaceError> {
+        let w = self.workspace;
+        let tx = &mut *self.tx;
+        let (pf, nf) = resolve_parent(tx, w, from, caller).await?;
+        let (pt, nt) = resolve_parent(tx, w, to, caller).await?;
+        let src = child(tx, w, pf.id, nf.as_str())
+            .await?
+            .ok_or(NamespaceError::NotFound)?;
+        let dst = child(tx, w, pt.id, nt.as_str()).await?;
+        if from == to || dst.as_ref().is_some_and(|d| d.id == src.id) {
+            return Ok(mutated(&src));
+        }
+        let is_dir = src.kind == "directory";
+        if is_dir && pf.id != pt.id {
+            access(
+                &src,
+                caller,
+                Access {
+                    write: true,
+                    ..Access::default()
+                },
+            )?;
+            if ancestors(tx, w, pt.id).await?.contains(&src.id) {
+                return Err(NamespaceError::InvalidInput);
+            }
+        }
+        if let Some(dst) = &dst {
+            if is_dir && dst.kind != "directory" {
+                return Err(NamespaceError::NotDirectory);
+            }
+            if !is_dir && dst.kind == "directory" {
+                return Err(NamespaceError::IsDirectory);
+            }
+            if dst.kind == "directory" && !empty(tx, w, dst.id).await? {
+                return Err(NamespaceError::DirectoryNotEmpty);
+            }
+        }
+        let mut ids = vec![src.id, pf.id, pt.id];
+        if let Some(dst) = &dst {
+            ids.push(dst.id);
+        }
+        let rows = lock_inodes(tx, w, &ids).await?;
+        parent_access(locked(&rows, pf.id)?, caller)?;
+        parent_access(locked(&rows, pt.id)?, caller)?;
+        let src = locked(&rows, src.id)?;
+        if is_dir && pf.id != pt.id {
+            access(
+                src,
+                caller,
+                Access {
+                    write: true,
+                    ..Access::default()
+                },
+            )?;
+        }
+        unchanged(tx, w, pf.id, nf.as_str(), Some(src.id)).await?;
+        unchanged(tx, w, pt.id, nt.as_str(), dst.as_ref().map(|d| d.id)).await?;
+        // Defer quota release until after all inode and entry updates.
+        let replaced = if let Some(dst) = &dst {
+            let dst = locked(&rows, dst.id)?;
+            delete_entry(tx, w, pt.id, nt.as_str()).await?;
+            Some(drop_link(tx, w, dst).await?)
+        } else {
+            None
+        };
+        sqlx::query("UPDATE directory_entries SET parent_inode_id=$4,name=$5 WHERE workspace_id=$1 AND parent_inode_id=$2 AND name=$3").bind(w.0).bind(pf.id).bind(nf.as_str()).bind(pt.id).bind(nt.as_str()).execute(&mut **tx).await?;
+        let replacement_delta = if dst.as_ref().is_some_and(|d| d.kind == "directory") {
+            -1
+        } else {
+            0
+        };
+        if pf.id == pt.id {
+            touch_parent(tx, w, pf.id, replacement_delta).await?;
+        } else {
+            touch_parent(tx, w, pf.id, if is_dir { -1 } else { 0 }).await?;
+            touch_parent(tx, w, pt.id, i32::from(is_dir) + replacement_delta).await?;
+        }
+        let row: InodeRow=sqlx::query_as("UPDATE inodes SET ctime=transaction_timestamp(),generation=generation+1 WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(src.id).fetch_one(&mut **tx).await?;
+        if let Some(replaced) = replaced {
+            crate::quota::release_if_due(tx, w, &replaced).await?;
+        }
+        self.bump().await?;
+        Ok(mutated(&row))
     }
-    unchanged(tx, w, pf.id, nf.as_str(), Some(src.id)).await?;
-    unchanged(tx, w, pt.id, nt.as_str(), dst.as_ref().map(|d| d.id)).await?;
-    // Defer quota release until after all inode and entry updates.
-    let replaced = if let Some(dst) = &dst {
-        let dst = locked(&rows, dst.id)?;
-        delete_entry(tx, w, pt.id, nt.as_str()).await?;
-        Some(drop_link(tx, w, dst).await?)
-    } else {
-        None
-    };
-    sqlx::query("UPDATE directory_entries SET parent_inode_id=$4,name=$5 WHERE workspace_id=$1 AND parent_inode_id=$2 AND name=$3").bind(w.0).bind(pf.id).bind(nf.as_str()).bind(pt.id).bind(nt.as_str()).execute(&mut **tx).await?;
-    let replacement_delta = if dst.as_ref().is_some_and(|d| d.kind == "directory") {
-        -1
-    } else {
-        0
-    };
-    if pf.id == pt.id {
-        touch_parent(tx, w, pf.id, replacement_delta).await?;
-    } else {
-        touch_parent(tx, w, pf.id, if is_dir { -1 } else { 0 }).await?;
-        touch_parent(tx, w, pt.id, i32::from(is_dir) + replacement_delta).await?;
-    }
-    let row: InodeRow=sqlx::query_as("UPDATE inodes SET ctime=transaction_timestamp(),generation=generation+1 WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(src.id).fetch_one(&mut **tx).await?;
-    if let Some(replaced) = replaced {
-        crate::quota::release_if_due(tx, w, &replaced).await?;
-    }
-    guard.bump(tx).await?;
-    Ok(mutated(&row))
 }
 
 pub async fn list(
