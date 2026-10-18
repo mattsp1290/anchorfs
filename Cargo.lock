@@ -38,17 +38,24 @@ dependencies = [
 name = "anchorfs-conformance"
 version = "0.1.0"
 dependencies = [
+ "anchorfs-backend",
  "anchorfs-core",
  "anchorfs-persistence",
  "anchorfs-service",
+ "aws-sdk-s3",
  "axum",
+ "bytes",
  "cargo_metadata",
+ "futures-core",
+ "rand 0.9.5",
+ "reqwest",
  "serde_json",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
  "toml",
  "tower",
+ "uuid",
 ]
 
 [[package]]

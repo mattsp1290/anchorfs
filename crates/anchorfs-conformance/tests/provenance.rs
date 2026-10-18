@@ -104,6 +104,7 @@ fn crate_edges_match_plan() {
         ("service", "core"),
         ("service", "persistence"),
         ("service", "backend"),
+        ("conformance", "backend"),
         ("conformance", "core"),
         ("conformance", "persistence"),
         ("conformance", "service"),
@@ -112,4 +113,43 @@ fn crate_edges_match_plan() {
     .map(|(from, to)| (format!("anchorfs-{from}"), format!("anchorfs-{to}")))
     .collect();
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn test_image_record_matches_fixtures() {
+    fn digests(text: &str) -> BTreeSet<String> {
+        text.match_indices("sha256:")
+            .map(|(at, _)| {
+                let digest: String = text[at..].chars().take(71).collect();
+                assert_eq!(digest.len(), 71, "full image digest");
+                assert!(
+                    digest[7..].bytes().all(|b| b.is_ascii_hexdigit()),
+                    "valid digest {digest}"
+                );
+                digest
+            })
+            .collect()
+    }
+    let mut fixtures = BTreeSet::new();
+    for file in [
+        "crates/anchorfs-conformance/tests/common/minio.rs",
+        "crates/anchorfs-conformance/tests/common/mod.rs",
+        "crates/anchorfs-persistence/tests/migrations.rs",
+        "crates/anchorfs-service/tests/binary.rs",
+    ] {
+        fixtures.extend(digests(&fs::read_to_string(root().join(file)).unwrap()));
+    }
+    let record = fs::read_to_string(root().join("docs/provenance/dependencies.md")).unwrap();
+    let images = record
+        .split("## Test images\n")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    assert_eq!(
+        fixtures,
+        digests(images),
+        "fixture/image approval digests must match both ways"
+    );
 }

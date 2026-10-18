@@ -22,3 +22,11 @@ testcontainers.workspace = true
 testcontainers-modules.workspace = true
 toml.workspace = true
 cargo_metadata.workspace = true
+
+anchorfs-backend.workspace = true
+aws-sdk-s3.workspace = true
+reqwest.workspace = true
+bytes.workspace = true
+rand.workspace = true
+uuid.workspace = true
+futures-core.workspace = true
