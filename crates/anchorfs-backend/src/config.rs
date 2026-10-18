@@ -16,9 +16,15 @@ pub enum CredentialSource {
     },
     Chain,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChecksumMode {
+    Sha256,
+    None,
+}
 #[derive(Debug, Clone)]
 pub struct S3Config {
     pub endpoint: Url,
+    pub checksum_mode: ChecksumMode,
     pub region: String,
     pub addressing: Addressing,
     pub bucket: String,
@@ -75,6 +81,7 @@ impl S3Config {
 pub(crate) fn local_config() -> S3Config {
     S3Config {
         endpoint: "http://127.0.0.1:1".parse().unwrap(),
+        checksum_mode: ChecksumMode::Sha256,
         region: "local".into(),
         addressing: Addressing::Path,
         bucket: "synthetic-test".into(),

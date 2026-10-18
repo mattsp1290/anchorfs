@@ -69,6 +69,7 @@ impl Config {
             deployment_physical_bytes_limit: 1 << 40,
             deployment_staging_bytes_limit: 1 << 30,
             s3: S3Config {
+                checksum_mode: anchorfs_backend::config::ChecksumMode::Sha256,
                 endpoint: "https://s3.invalid".parse().expect("static URL"),
                 region: "local".into(),
                 addressing: Addressing::Path,

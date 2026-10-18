@@ -33,12 +33,18 @@ pub enum BackendError {
     UncertainOutcome,
     #[error("backend access forbidden")]
     Forbidden,
-    #[error("backend operations are not implemented in stage 0")]
-    NotImplemented,
+    #[error("invalid byte range")]
+    InvalidRange,
+    #[error("bucket not found")]
+    BucketNotFound,
+    #[error("object exceeds single-object bound")]
+    ObjectTooLarge,
     #[error("other backend error")]
     Other,
 }
-/// Immutable object access. Automatic deletion is intentionally unavailable.
+/// Immutable objects bounded by `Limits::default().chunk_size`.
+/// Repeating identical bytes at the same key is idempotent. Callers allocate
+/// unique keys for different bytes. Automatic deletion is intentionally absent.
 #[async_trait]
 pub trait ObjectBackend: Send + Sync {
     async fn put(
@@ -49,6 +55,15 @@ pub trait ObjectBackend: Send + Sync {
     ) -> Result<PutOutcome, BackendError>;
     /// Half-open byte interval, with an exclusive upper bound.
     async fn get_range(&self, key: &ObjectKey, range: Range<u64>) -> Result<Bytes, BackendError>;
+    /// Whole-object digest and length verification; ranged reads verify framing only.
+    async fn get_verified(
+        &self,
+        key: &ObjectKey,
+        expected_sha256: Sha256Digest,
+        expected_length: u64,
+    ) -> Result<Bytes, BackendError>;
+    /// Reachability and list permission under the deployment prefix, not write permission.
+    async fn probe(&self) -> Result<(), BackendError>;
     async fn head(&self, key: &ObjectKey) -> Result<ObjectMeta, BackendError>;
     async fn list(
         &self,
