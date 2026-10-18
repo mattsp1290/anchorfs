@@ -684,3 +684,104 @@ async fn cross_session_renew_surfaces_40p01() {
     .unwrap();
     tx.commit().await.unwrap();
 }
+
+#[tokio::test]
+async fn sibling_revocation_during_parent_cascade_surfaces_40p01() {
+    let db = Database::migrated().await;
+    let root = administrator(&db).await;
+    let mut tx = db.pool.begin().await.unwrap();
+    let root_actor = authority::load_actor(&mut tx, &root, LockMode::Share)
+        .await
+        .unwrap();
+    let parent = issue(
+        &mut tx,
+        &root_actor,
+        new_credential(None, Kind::Administrator),
+    )
+    .await;
+    let parent_actor = authority::load_actor(&mut tx, &parent, LockMode::Share)
+        .await
+        .unwrap();
+    let child_a = issue(
+        &mut tx,
+        &parent_actor,
+        new_credential(None, Kind::Administrator),
+    )
+    .await;
+    let child_b = issue(
+        &mut tx,
+        &parent_actor,
+        new_credential(None, Kind::Administrator),
+    )
+    .await;
+    tx.commit().await.unwrap();
+    let (small, large) = if child_a.id < child_b.id {
+        (child_a, child_b)
+    } else {
+        (child_b, child_a)
+    };
+    let mut sibling_tx = db.pool.begin().await.unwrap();
+    let sibling_actor = authority::load_actor(&mut sibling_tx, &large, LockMode::Share)
+        .await
+        .unwrap();
+    let mut cascade_tx = db.pool.begin().await.unwrap();
+    let root_actor = authority::load_actor(&mut cascade_tx, &root, LockMode::Share)
+        .await
+        .unwrap();
+    // Pause the top-down cascade after locking its parent and first ascending child.
+    for id in [parent.id, small.id] {
+        sqlx::query("SELECT id FROM credentials WHERE id=$1 FOR UPDATE")
+            .bind(id.0)
+            .execute(&mut *cascade_tx)
+            .await
+            .unwrap();
+    }
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+    let sibling_barrier = barrier.clone();
+    let target = small.id;
+    let sibling = tokio::spawn(async move {
+        sibling_barrier.wait().await;
+        let result = credentials::revoke(&mut sibling_tx, &sibling_actor, target).await;
+        if result.is_ok() {
+            sibling_tx.commit().await.unwrap();
+        } else {
+            sibling_tx.rollback().await.unwrap();
+        }
+        result
+    });
+    let cascade = tokio::spawn(async move {
+        barrier.wait().await;
+        let result = credentials::revoke(&mut cascade_tx, &root_actor, parent.id).await;
+        if result.is_ok() {
+            cascade_tx.commit().await.unwrap();
+        } else {
+            cascade_tx.rollback().await.unwrap();
+        }
+        result
+    });
+    let (sibling, cascade) = (sibling.await.unwrap(), cascade.await.unwrap());
+    let error = match (&sibling, &cascade) {
+        (Err(AuthorityError::Database(e)), Ok(_)) | (Ok(_), Err(AuthorityError::Database(e))) => e,
+        _ => panic!("one deadlock victim expected"),
+    };
+    assert_eq!(
+        error.as_database_error().unwrap().code().as_deref(),
+        Some("40P01")
+    );
+    let mut retry = db.pool.begin().await.unwrap();
+    if cascade.is_err() {
+        let actor = authority::load_actor(&mut retry, &root, LockMode::Share)
+            .await
+            .unwrap();
+        credentials::revoke(&mut retry, &actor, parent.id)
+            .await
+            .unwrap();
+        retry.commit().await.unwrap();
+    } else {
+        // The successful cascade revoked the other actor: its retry is correctly fenced.
+        assert!(matches!(
+            authority::load_actor(&mut retry, &large, LockMode::Share).await,
+            Err(AuthorityError::Unauthenticated)
+        ));
+    }
+}

@@ -72,3 +72,65 @@ expiry, rotation freeing all slots, rebind clearing its binding and fencing old
 epochs, own-session same-key renew replay without deadlock, and cross-session
 renew producing exactly one 40P01 followed by successful retry. All five
 OpenAPI snapshot tests passed after regeneration.
+
+## HTTP conformance and records
+
+CP2–CP13 execute through the real Axum router and metadata transactions in
+separate disposable PostgreSQL containers. The counting stub implements all six
+backend methods; zero calls are asserted for each fixture. This is a regression
+guard, not network/process isolation evidence. Readiness keeps the existing MinIO
+suite. The HTTP suite covers secret-free receipt replay, authority/scope failures,
+64-session HTTP limits, rotation revoking all 64 sessions, self-fencing exceptions,
+lazy tombstone writes, concurrent same-key smoke and the pending-owner budget.
+CP13a observes publication after response abandonment. CP13b installs a test-only
+deferred trigger in its disposable database, observes a real COMMIT waiting at an
+advisory barrier through pg_stat_activity, terminates that connection, and checks
+outcome_unknown plus matching state/receipt counts. No production fault hook or
+trigger is introduced.
+
+The contract test now explicitly names the thirteen implemented operation IDs
+and asserts 13 authenticated routes plus 25 stubs. Body/header shape regressions
+send a well-formed unknown bearer so they exercise validation before database
+authentication. The fake backend and client helpers live in the planned common
+modules; each HTTP scenario gets its own container for isolation rather than
+sharing mutable administrator state.
+
+Observed pre-review gates:
+
+- `cargo test --workspace --locked -- --test-threads=4`: passed all 116 tests
+  present at invocation, including 10 control-plane HTTP tests, 12 transaction
+  tests, 17 schema tests, 9 binary tests, and 5 OpenAPI tests. No ignored tests.
+- The additional sibling-cascade deadlock test passed separately. It observes
+  exactly one 40P01. If the cascade loses, a current administrator retries
+  successfully; if it wins, its revoked sibling actor correctly fails
+  authentication on retry. This corrects the plan's unconditional “successful
+  retry” wording without relaxing the authority matrix.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: passed.
+- `cargo deny check licenses bans advisories sources`: passed all four gates;
+  duplicate-version warnings remain from the existing dependency graph.
+- Toolchain: `1.95.0-aarch64-apple-darwin`; Docker server `29.2.1`.
+- PostgreSQL and MinIO image digests remain the reviewed pins in dependencies.md.
+- Design coverage still checks exactly 152 columns; workspace-member dependency
+  edges and original imported baselines remain unchanged.
+
+The CLI recovery check and direct tests of all four retryable SQLSTATE mappings
+were added after that full-suite invocation and are verified in their targeted
+runs and the subsequent review checkpoint gates.
+
+## Limits retained
+
+TLS remains unimplemented (durable HTTP binds loopback). Namespace, bytes,
+workflow leases, Linux mounts, byte quota accounting and production provider
+acceptance remain later milestones. Expiry is lazy, with no sweeper; receipt
+expiry does not revoke/increment sessions until the byte-path lock-order decision.
+A lost self-rotation response requires administrator/issuer recovery. A lost sole
+unrevoked administrator secret requires explicit database maintenance before
+bootstrap. Administrators may revoke themselves and every administrator; bootstrap
+recovers when none remain. Detached jobs keep their semaphore permits but may
+hold a connection beyond the response budget for ordinary lock waits. No rate
+limiting is implemented. Cross-actor deadlocks surface retryable errors under
+current authority; self-fencing replays can instead fail authentication/fencing.
+No competitor parity, provider compatibility or storage durability claim follows
+from these control-plane tests.
+
+Fresh review verdicts and remote CI evidence remain pending at this checkpoint.

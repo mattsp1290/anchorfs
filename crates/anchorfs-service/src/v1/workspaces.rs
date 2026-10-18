@@ -1,9 +1,40 @@
 use crate::{dto::*, error::ApiError, extract::*};
 use uuid::Uuid;
-#[utoipa::path(post, path="/v1/workspaces", operation_id="createWorkspace",
+#[utoipa::path(post,
+ path="/v1/workspaces",
+ operation_id="createWorkspace",
  request_body = CreateWorkspace,
- params(("Idempotency-Key" = String, Header, description = "Required retry key, 1–256 visible ASCII bytes")),
- responses((status=201,description="Committed workspace metadata",body=CreatedWorkspace), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate", body = ErrorBody)), security(("credential" = [])))]
+ params(("Idempotency-Key" = String,
+ Header,
+ description = "Required retry key, 1–256 visible ASCII bytes")),
+ responses((status=201,
+description="Committed workspace metadata",
+body=CreatedWorkspace),
+ (status=404,
+description="not_found",
+body=ErrorBody),
+(status=507,
+description="quota_exceeded or capacity_exhausted",
+body=ErrorBody),
+(status = 501,
+ description = "Stage 0 declared operation",
+ body = ErrorBody),
+(status = 400,
+ description = "invalid_input",
+ body = ErrorBody),
+(status = 401,
+ description = "unauthenticated",
+ body = ErrorBody),
+(status = 403,
+ description = "forbidden",
+ body = ErrorBody),
+(status = 503,
+ description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)",
+ body = ErrorBody),
+(status = 409,
+ description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate",
+ body = ErrorBody)),
+ security(("credential" = [])))]
 pub async fn create_workspace(
     axum::extract::State(state): axum::extract::State<crate::app::AppState>,
     axum::Extension(trace): axum::Extension<crate::middleware::TraceId>,
@@ -39,22 +70,89 @@ pub async fn create_workspace(
         Some(&serde_json::to_value(&body).expect("request JSON")),
     );
     let retention = state.config.receipt_retention;
-    let result = control::run(&state, start, trace.clone(), Kind::Mutation, move |tx, budget| Box::pin(async move {
-        let actor = authority::load_actor(tx, &proof, LockMode::Share).await?;
-        if actor.kind != CredentialKind::Administrator { return Err(authority::AuthorityError::Forbidden.into()); }
-        let scope = ReceiptScope::Admin { credential: actor.id };
-        let operation = match receipt::begin(tx, scope, anchorfs_persistence::receipts::ReceiptRequest { key: &key, op_type: "workspace_create", digest, credential_epoch: actor.epoch, retention, wait_bound: budget.remaining() }).await? { Start::Fresh(id) => id, Start::Complete(result) => return Ok(result) };
-        let workspace = workspaces::create(tx, workspaces::NewWorkspace { logical_bytes_limit: body.logical_bytes_limit as i64, logical_inodes_limit: body.logical_inodes_limit as i64, physical_bytes_limit: body.physical_bytes_limit as i64, staging_bytes_limit: body.staging_bytes_limit as i64, root_uid: body.root_uid, root_gid: body.root_gid, root_mode: body.root_mode.unwrap_or(0o755) }).await?;
-        let result = serde_json::json!({"operation_id": operation.0, "workspace": workspace_json(workspace)});
-        receipts::commit_result(tx, scope, operation, &result).await?;
-        Ok(Ok(result))
-    })).await;
+    let result = control::run(
+        &state,
+        start,
+        trace.clone(),
+        Kind::Mutation,
+        move |tx, budget| {
+            Box::pin(async move {
+                let actor = authority::load_actor(tx, &proof, LockMode::Share).await?;
+                if actor.kind != CredentialKind::Administrator {
+                    return Err(authority::AuthorityError::Forbidden.into());
+                }
+                let scope = ReceiptScope::Admin {
+                    credential: actor.id,
+                };
+                let operation = match receipt::begin(
+                    tx,
+                    scope,
+                    anchorfs_persistence::receipts::ReceiptRequest {
+                        key: &key,
+                        op_type: "workspace_create",
+                        digest,
+                        credential_epoch: actor.epoch,
+                        retention,
+                        wait_bound: budget.remaining(),
+                    },
+                )
+                .await?
+                {
+                    Start::Fresh(id) => id,
+                    Start::Complete(result) => return Ok(result),
+                };
+                let workspace = workspaces::create(
+                    tx,
+                    workspaces::NewWorkspace {
+                        logical_bytes_limit: body.logical_bytes_limit as i64,
+                        logical_inodes_limit: body.logical_inodes_limit as i64,
+                        physical_bytes_limit: body.physical_bytes_limit as i64,
+                        staging_bytes_limit: body.staging_bytes_limit as i64,
+                        root_uid: body.root_uid,
+                        root_gid: body.root_gid,
+                        root_mode: body.root_mode.unwrap_or(0o755),
+                    },
+                )
+                .await?;
+                let result = serde_json::json!({
+                "operation_id": operation.0,
+                 "workspace": workspace_json(workspace)}
+                );
+                receipts::commit_result(tx, scope, operation, &result).await?;
+                Ok(Ok(result))
+            })
+        },
+    )
+    .await;
     receipt::response(result, axum::http::StatusCode::CREATED, &trace.0)
 }
-#[utoipa::path(get, path="/v1/workspaces/{workspace_id}", operation_id="getWorkspace",
-
- params(("workspace_id" = Uuid, Path)),
- responses((status=200,description="Committed workspace metadata",body=WorkspaceInfo), (status=404,description="not_found",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody)), security(("credential" = [])))]
+#[utoipa::path(get,
+ path="/v1/workspaces/{workspace_id}",
+ operation_id="getWorkspace",
+ params(("workspace_id" = Uuid,
+ Path)),
+ responses((status=200,
+description="Committed workspace metadata",
+body=WorkspaceInfo),
+ (status=404,
+description="not_found",
+body=ErrorBody),
+(status = 501,
+ description = "Stage 0 declared operation",
+ body = ErrorBody),
+(status = 400,
+ description = "invalid_input",
+ body = ErrorBody),
+(status = 401,
+ description = "unauthenticated",
+ body = ErrorBody),
+(status = 403,
+ description = "forbidden",
+ body = ErrorBody),
+(status = 503,
+ description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)",
+ body = ErrorBody)),
+ security(("credential" = [])))]
 pub async fn get_workspace(
     axum::extract::State(state): axum::extract::State<crate::app::AppState>,
     axum::Extension(trace): axum::Extension<crate::middleware::TraceId>,
@@ -90,6 +188,22 @@ pub async fn get_workspace(
     crate::receipt::response(result, axum::http::StatusCode::OK, &trace.0)
 }
 fn workspace_json(view: anchorfs_persistence::workspaces::WorkspaceView) -> serde_json::Value {
-    serde_json::json!({"workspace_id":view.id,"authorization_epoch":view.authorization_epoch,"mutation_epoch":view.mutation_epoch,
-        "root":{"inode_id":view.inode_id,"generation":view.generation,"kind":view.kind,"size":view.size,"mode":view.mode,"uid":view.uid,"gid":view.gid,"nlink":view.nlink,"atime":crate::control::timestamp(view.atime),"mtime":crate::control::timestamp(view.mtime),"ctime":crate::control::timestamp(view.ctime)}})
+    serde_json::json!({
+    "workspace_id":view.id,
+    "authorization_epoch":view.authorization_epoch,
+    "mutation_epoch":view.mutation_epoch,
+            "root":{
+    "inode_id":view.inode_id,
+    "generation":view.generation,
+    "kind":view.kind,
+    "size":view.size,
+    "mode":view.mode,
+    "uid":view.uid,
+    "gid":view.gid,
+    "nlink":view.nlink,
+    "atime":crate::control::timestamp(view.atime),
+    "mtime":crate::control::timestamp(view.mtime),
+    "ctime":crate::control::timestamp(view.ctime)}
+    }
+    )
 }

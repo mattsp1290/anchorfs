@@ -21,9 +21,9 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | rand | 0.9.5 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | random secrets; conformance fixtures |
 | reqwest | 0.12.28 | MIT OR Apache-2.0 | https://github.com/seanmonstar/reqwest | binary HTTP tests and the conformance fault proxy |
 | serde | 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde | serialization |
-| serde_json | 1.0.154 | MIT OR Apache-2.0 | https://github.com/serde-rs/json | JSON |
+| serde_json | 1.0.154 | MIT OR Apache-2.0 | https://github.com/serde-rs/json | JSON and persistence receipt payloads |
 | sha2 | 0.11.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | SHA-256 integrity |
-| sqlx | 0.9.0 | MIT OR Apache-2.0 | https://github.com/launchbadge/sqlx | PostgreSQL and migrations |
+| sqlx | 0.9.0 | MIT OR Apache-2.0 | https://github.com/launchbadge/sqlx | PostgreSQL, migrations and JSON receipt payloads |
 | testcontainers-modules | 0.15.0 | MIT | https://github.com/testcontainers/testcontainers-rs-modules-community | PostgreSQL test image module |
 | testcontainers | 0.27.3 | MIT OR Apache-2.0 | https://github.com/testcontainers/testcontainers-rs | disposable test infrastructure |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror | typed errors |
@@ -78,3 +78,12 @@ Conformance uses the already reviewed axum pin as a direct dev dependency to con
 | bitnamilegacy/minio | 2025.7.23-debian-12-r5 | sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20 | MinIO server AGPL-3.0; Bitnami container packaging Apache-2.0 (label org.opencontainers.image.source = github.com/bitnami/containers); Debian base packages under their respective licenses | disposable S3-compatible object store for tests; separate container process, never linked, vendored, mirrored or distributed by this repository | user decision E1, 2026-10-17, after the official minio/minio images were found unavailable |
 
 Test images are pinned by digest and recorded before first use. Mirroring an image is redistribution and needs its own license review. Image origin and license observations above come from the approved Stage 1 plan's E1 provider diagnosis. The futures-core registry manifest was checked before adding its direct dependency. Fixtures and proxy logic are independently authored from the approved WP2 plan; no competitor material or research archive was consulted.
+
+## Stage 1a feature additions
+
+The SQLx json feature and persistence → serde_json edge use already reviewed,
+locked packages. Service directly names SQLx for transaction types and error
+mapping; conformance directly names SQLx, time and async-trait for disposable
+metadata coordination, clock comparisons and the synthetic counting backend.
+All sources/versions/licenses remain in the table above. No new crate or
+workspace-member edge was introduced. `Cargo.lock` records the new direct edges.

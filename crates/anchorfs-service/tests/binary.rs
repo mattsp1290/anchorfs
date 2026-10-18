@@ -368,4 +368,24 @@ async fn bootstrap_admin_once() {
         .trim(),
         "12345"
     );
+    sql(&container,"UPDATE credentials SET revoked_at=clock_timestamp(),epoch=epoch+1 WHERE revoked_at IS NULL").await;
+    let recovery = command()
+        .args(["bootstrap-admin", "--uid", "1000", "--gid", "1000"])
+        .env("ANCHORFS_DATABASE_URL", &url)
+        .output()
+        .unwrap();
+    assert!(
+        recovery.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovery.stderr)
+    );
+    assert_eq!(
+        sql(
+            &container,
+            "SELECT count(*) FROM credentials WHERE revoked_at IS NULL"
+        )
+        .await
+        .trim(),
+        "1"
+    );
 }

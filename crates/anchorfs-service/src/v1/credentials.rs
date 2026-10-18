@@ -13,10 +13,41 @@ use anchorfs_persistence::{
 };
 use axum::{http::StatusCode, response::Response};
 use uuid::Uuid;
-#[utoipa::path(post, path="/v1/credentials", operation_id="createCredential",
+#[utoipa::path(post,
+ path="/v1/credentials",
+ operation_id="createCredential",
  request_body = CreateCredential,
- params(("Idempotency-Key" = String, Header, description = "Required retry key, 1–256 visible ASCII bytes")),
- responses((status=201,description="Committed credential authority change",body=IssuedCredential), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate", body = ErrorBody)), security(("credential" = [])))]
+ params(("Idempotency-Key" = String,
+ Header,
+ description = "Required retry key, 1–256 visible ASCII bytes")),
+ responses((status=201,
+description="Committed credential authority change",
+body=IssuedCredential),
+ (status=404,
+description="not_found",
+body=ErrorBody),
+(status=507,
+description="quota_exceeded or capacity_exhausted",
+body=ErrorBody),
+(status = 501,
+ description = "Stage 0 declared operation",
+ body = ErrorBody),
+(status = 400,
+ description = "invalid_input",
+ body = ErrorBody),
+(status = 401,
+ description = "unauthenticated",
+ body = ErrorBody),
+(status = 403,
+ description = "forbidden",
+ body = ErrorBody),
+(status = 503,
+ description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)",
+ body = ErrorBody),
+(status = 409,
+ description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate",
+ body = ErrorBody)),
+ security(("credential" = [])))]
 pub async fn create_credential(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::Extension(trace): axum::Extension<TraceId>,
@@ -108,10 +139,42 @@ pub async fn create_credential(
     .await;
     secret_response(result, StatusCode::CREATED, &trace.0)
 }
-#[utoipa::path(post, path="/v1/credentials/{credential_id}/rotate", operation_id="rotateCredential",
-
- params(("credential_id" = Uuid, Path),("Idempotency-Key" = String, Header, description = "Required retry key, 1–256 visible ASCII bytes")),
- responses((status=200,description="Committed credential authority change",body=IssuedCredential), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate", body = ErrorBody)), security(("credential" = [])))]
+#[utoipa::path(post,
+ path="/v1/credentials/{credential_id}/rotate",
+ operation_id="rotateCredential",
+ params(("credential_id" = Uuid,
+ Path),
+("Idempotency-Key" = String,
+ Header,
+ description = "Required retry key, 1–256 visible ASCII bytes")),
+ responses((status=200,
+description="Committed credential authority change",
+body=IssuedCredential),
+ (status=404,
+description="not_found",
+body=ErrorBody),
+(status=507,
+description="quota_exceeded or capacity_exhausted",
+body=ErrorBody),
+(status = 501,
+ description = "Stage 0 declared operation",
+ body = ErrorBody),
+(status = 400,
+ description = "invalid_input",
+ body = ErrorBody),
+(status = 401,
+ description = "unauthenticated",
+ body = ErrorBody),
+(status = 403,
+ description = "forbidden",
+ body = ErrorBody),
+(status = 503,
+ description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)",
+ body = ErrorBody),
+(status = 409,
+ description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate",
+ body = ErrorBody)),
+ security(("credential" = [])))]
 pub async fn rotate_credential(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::Extension(trace): axum::Extension<TraceId>,
@@ -131,10 +194,42 @@ pub async fn rotate_credential(
     )
     .await
 }
-#[utoipa::path(delete, path="/v1/credentials/{credential_id}", operation_id="revokeCredential",
-
- params(("credential_id" = Uuid, Path),("Idempotency-Key" = String, Header, description = "Required retry key, 1–256 visible ASCII bytes")),
- responses((status=200,description="Committed credential authority change",body=MutationResult), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate", body = ErrorBody)), security(("credential" = [])))]
+#[utoipa::path(delete,
+ path="/v1/credentials/{credential_id}",
+ operation_id="revokeCredential",
+ params(("credential_id" = Uuid,
+ Path),
+("Idempotency-Key" = String,
+ Header,
+ description = "Required retry key, 1–256 visible ASCII bytes")),
+ responses((status=200,
+description="Committed credential authority change",
+body=MutationResult),
+ (status=404,
+description="not_found",
+body=ErrorBody),
+(status=507,
+description="quota_exceeded or capacity_exhausted",
+body=ErrorBody),
+(status = 501,
+ description = "Stage 0 declared operation",
+ body = ErrorBody),
+(status = 400,
+ description = "invalid_input",
+ body = ErrorBody),
+(status = 401,
+ description = "unauthenticated",
+ body = ErrorBody),
+(status = 403,
+ description = "forbidden",
+ body = ErrorBody),
+(status = 503,
+ description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)",
+ body = ErrorBody),
+(status = 409,
+ description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate",
+ body = ErrorBody)),
+ security(("credential" = [])))]
 pub async fn revoke_credential(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::Extension(trace): axum::Extension<TraceId>,
@@ -154,7 +249,6 @@ pub async fn revoke_credential(
     )
     .await
 }
-
 async fn mutate_credential(
     state: AppState,
     start: RequestStart,
@@ -171,25 +265,83 @@ async fn mutate_credential(
     };
     let digest = receipt::request_digest(op_type, &[&target.to_string()], None);
     let retention = state.config.receipt_retention;
-    let result = control::run(&state,start,trace.clone(),control::Kind::Mutation,move |tx,budget| Box::pin(async move {
-        let workspace: Option<Option<Uuid>> = sqlx::query_scalar("SELECT workspace_id FROM credentials WHERE id=$1").bind(target.0).fetch_optional(&mut **tx).await?;
-        if let Some(Some(workspace)) = workspace { authority::lock_workspace(tx,WorkspaceId(workspace)).await?; }
-        let update = if rotation { target == proof.id } else { credentials::is_ancestor_or_self(tx,target,proof.id).await? };
-        let actor = authority::load_actor(tx,&proof,if update { LockMode::Update } else { LockMode::Share }).await?;
-        if workspace.is_none() { return Err(authority::AuthorityError::NotFound.into()); }
-        let scope = ReceiptScope::Admin { credential: actor.id };
-        let operation = match receipt::begin(tx, scope, anchorfs_persistence::receipts::ReceiptRequest { key: &key, op_type, digest, credential_epoch: actor.epoch, retention, wait_bound: budget.remaining() }).await? { Start::Fresh(id) => id, Start::Complete(result) => return Ok(result) };
-        if rotation {
-            let issued = credentials::rotate(tx,&actor,target).await?;
-            receipts::commit_result(tx,scope,operation,&issued_json(operation,&issued,false)).await?;
-            Ok(Ok(issued_json(operation,&issued,true)))
-        } else {
-            credentials::revoke(tx,&actor,target).await?;
-            let result = serde_json::json!({"operation_id":operation.0,"inode_id":null,"generation":null});
-            receipts::commit_result(tx,scope,operation,&result).await?;
-            Ok(Ok(result))
-        }
-    })).await;
+    let result = control::run(
+        &state,
+        start,
+        trace.clone(),
+        control::Kind::Mutation,
+        move |tx, budget| {
+            Box::pin(async move {
+                let workspace: Option<Option<Uuid>> =
+                    sqlx::query_scalar("SELECT workspace_id FROM credentials WHERE id=$1")
+                        .bind(target.0)
+                        .fetch_optional(&mut **tx)
+                        .await?;
+                if let Some(Some(workspace)) = workspace {
+                    authority::lock_workspace(tx, WorkspaceId(workspace)).await?;
+                }
+                let update = if rotation {
+                    target == proof.id
+                } else {
+                    credentials::is_ancestor_or_self(tx, target, proof.id).await?
+                };
+                let actor = authority::load_actor(
+                    tx,
+                    &proof,
+                    if update {
+                        LockMode::Update
+                    } else {
+                        LockMode::Share
+                    },
+                )
+                .await?;
+                if workspace.is_none() {
+                    return Err(authority::AuthorityError::NotFound.into());
+                }
+                let scope = ReceiptScope::Admin {
+                    credential: actor.id,
+                };
+                let operation = match receipt::begin(
+                    tx,
+                    scope,
+                    anchorfs_persistence::receipts::ReceiptRequest {
+                        key: &key,
+                        op_type,
+                        digest,
+                        credential_epoch: actor.epoch,
+                        retention,
+                        wait_bound: budget.remaining(),
+                    },
+                )
+                .await?
+                {
+                    Start::Fresh(id) => id,
+                    Start::Complete(result) => return Ok(result),
+                };
+                if rotation {
+                    let issued = credentials::rotate(tx, &actor, target).await?;
+                    receipts::commit_result(
+                        tx,
+                        scope,
+                        operation,
+                        &issued_json(operation, &issued, false),
+                    )
+                    .await?;
+                    Ok(Ok(issued_json(operation, &issued, true)))
+                } else {
+                    credentials::revoke(tx, &actor, target).await?;
+                    let result = serde_json::json!({
+                    "operation_id":operation.0,
+                    "inode_id":null,
+                    "generation":null}
+                    );
+                    receipts::commit_result(tx, scope, operation, &result).await?;
+                    Ok(Ok(result))
+                }
+            })
+        },
+    )
+    .await;
     secret_response(result, StatusCode::OK, &trace.0)
 }
 fn issued_json(
@@ -197,7 +349,17 @@ fn issued_json(
     issued: &credentials::Issued,
     expose: bool,
 ) -> serde_json::Value {
-    serde_json::json!({"operation_id":operation.0,"credential_id":issued.id.0,"secret":if expose { Some(issued.secret.expose()) } else { None },"credential_epoch":issued.epoch,"expires_at":issued.expires_at.map(control::timestamp)})
+    serde_json::json!({
+    "operation_id":operation.0,
+    "credential_id":issued.id.0,
+    "secret":if expose {
+     Some(issued.secret.expose()) }
+     else {
+     None }
+    ,
+    "credential_epoch":issued.epoch,
+    "expires_at":issued.expires_at.map(control::timestamp)}
+    )
 }
 fn secret_response(
     result: Result<Result<serde_json::Value, ApiError>, ApiError>,
