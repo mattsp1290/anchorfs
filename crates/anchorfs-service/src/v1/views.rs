@@ -73,3 +73,39 @@ pub fn operation(view: ReceiptView) -> Result<OperationStatus, ApiError> {
         result: view.result,
     })
 }
+pub fn attributes(
+    row: &anchorfs_persistence::namespace::InodeRow,
+) -> Result<InodeAttributes, ApiError> {
+    Ok(InodeAttributes {
+        inode_id: row.id,
+        generation: row.generation,
+        kind: match row.kind.as_str() {
+            "file" => InodeKindDto::File,
+            "directory" => InodeKindDto::Directory,
+            "symlink" => InodeKindDto::Symlink,
+            _ => return Err(invalid_record()),
+        },
+        size: row.size.try_into().map_err(|_| invalid_record())?,
+        mode: row.mode.try_into().map_err(|_| invalid_record())?,
+        uid: row.uid.try_into().map_err(|_| invalid_record())?,
+        gid: row.gid.try_into().map_err(|_| invalid_record())?,
+        nlink: row.nlink.try_into().map_err(|_| invalid_record())?,
+        atime: timestamp(row.atime),
+        mtime: timestamp(row.mtime),
+        ctime: timestamp(row.ctime),
+    })
+}
+pub fn handle(
+    operation: OperationId,
+    handle: &anchorfs_persistence::handles::HandleRow,
+    inode: &anchorfs_persistence::namespace::InodeRow,
+) -> Result<HandleGrant, ApiError> {
+    Ok(HandleGrant {
+        operation_id: operation.0,
+        handle_id: handle.id,
+        attributes: attributes(inode)?,
+        access_read: handle.access_read,
+        access_write: handle.access_write,
+        expires_at: timestamp(handle.expires_at),
+    })
+}

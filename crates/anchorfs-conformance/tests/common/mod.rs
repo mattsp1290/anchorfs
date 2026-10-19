@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 pub mod client;
 pub mod fake_backend;
+pub mod fixture;
 pub mod minio;
 pub mod proxy;
 use anchorfs_core::{DeploymentId, Secret};
@@ -77,6 +78,8 @@ pub fn state_with(pool: PgPool, s3: anchorfs_backend::config::S3Config) -> AppSt
     config.deployment_id = s3.deployment_id.clone();
     config.s3 = s3;
     AppState {
+        cursor_key: anchorfs_core::decode_hex_32(config.cursor_signing_key.expose())
+            .expect("validated cursor signing key"),
         control_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(
             config.db_max_connections.saturating_sub(2).max(1) as usize,
         )),
@@ -94,6 +97,10 @@ pub fn unavailable() -> AppState {
 pub fn state_fake(pool: PgPool) -> (AppState, Arc<fake_backend::FakeBackend>) {
     let backend = Arc::new(fake_backend::FakeBackend::default());
     let state = AppState {
+        cursor_key: anchorfs_core::decode_hex_32(
+            Config::contract_defaults().cursor_signing_key.expose(),
+        )
+        .unwrap(),
         pool,
         config: Arc::new(Config::contract_defaults()),
         backend: backend.clone(),

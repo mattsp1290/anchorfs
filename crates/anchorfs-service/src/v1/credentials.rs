@@ -80,7 +80,8 @@ pub async fn create_credential(
     if body.max_reservation_bytes == 0
         || body.max_reservation_bytes > i64::MAX as u64
         || (kind == Kind::Administrator && (body.workspace_id.is_some() || role != Role::Admin))
-        || (kind != Kind::Administrator && (body.workspace_id.is_none() || role == Role::Admin))
+        || (kind != Kind::Administrator
+            && (body.workspace_id.is_none() || (kind == Kind::Worker && role == Role::Admin)))
     {
         return Err(ApiError::new(ErrorCode::InvalidInput, trace.0));
     }
@@ -116,6 +117,7 @@ pub async fn create_credential(
                 receipt::execute(
                     tx,
                     Authority {
+                        workflow: None,
                         actor: &actor,
                         session: None,
                     },
@@ -308,6 +310,7 @@ async fn mutate_credential(
                 receipt::execute(
                     tx,
                     Authority {
+                        workflow: None,
                         actor: &actor,
                         session: None,
                     },

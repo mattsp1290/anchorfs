@@ -87,6 +87,7 @@ pub async fn create_workspace(
                 receipt::execute(
                     tx,
                     Authority {
+                        workflow: None,
                         actor: &actor,
                         session: None,
                     },

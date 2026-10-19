@@ -61,6 +61,15 @@ impl WorkspacePath {
         }
         Ok(Self(value.to_owned()))
     }
+    pub fn components(&self) -> impl Iterator<Item = &str> {
+        self.0.split('/')
+    }
+    pub fn split_parent(&self) -> (Option<WorkspacePath>, Name) {
+        match self.0.rsplit_once('/') {
+            Some((parent, name)) => (Some(Self(parent.to_owned())), Name(name.to_owned())),
+            None => (None, Name(self.0.clone())),
+        }
+    }
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -93,5 +102,20 @@ mod tests {
         assert_eq!(long.len(), 4097);
         assert_eq!(WorkspacePath::parse(long), Err(PathError::TooLong));
         assert!(Name::parse(&"é".repeat(128)).is_err());
+    }
+}
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+    #[test]
+    fn split_parent_and_components() {
+        let path = WorkspacePath::parse("a/b/c").unwrap();
+        assert_eq!(path.components().collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        let (parent, name) = path.split_parent();
+        assert_eq!(parent.unwrap().as_str(), "a/b");
+        assert_eq!(name.as_str(), "c");
+        let (parent, name) = WorkspacePath::parse("a").unwrap().split_parent();
+        assert!(parent.is_none());
+        assert_eq!(name.as_str(), "a");
     }
 }

@@ -5,6 +5,7 @@ use utoipa_axum::router::OpenApiRouter;
 pub type ProbeCache = Arc<tokio::sync::Mutex<Option<(std::time::Instant, Result<(), String>)>>>;
 #[derive(Clone)]
 pub struct AppState {
+    pub cursor_key: [u8; 32],
     pub control_permits: Arc<tokio::sync::Semaphore>,
     pub pool: anchorfs_persistence::pool::PgPool,
     pub config: Arc<Config>,
@@ -52,6 +53,7 @@ pub fn contract_router(config: &Config) -> OpenApiRouter<AppState> {
         .routes(utoipa_axum::routes!(crate::v1::namespace::list_directory))
         .routes(utoipa_axum::routes!(crate::v1::namespace::create_directory))
         .routes(utoipa_axum::routes!(crate::v1::namespace::remove_directory))
+        .routes(utoipa_axum::routes!(crate::v1::namespace::unlink))
         .routes(utoipa_axum::routes!(crate::v1::namespace::create_link))
         .routes(utoipa_axum::routes!(crate::v1::namespace::create_symlink))
         .routes(utoipa_axum::routes!(crate::v1::namespace::read_symlink))
@@ -90,7 +92,6 @@ pub fn contract_router(config: &Config) -> OpenApiRouter<AppState> {
         config.metadata_call_deadline,
     );
     let data = OpenApiRouter::new()
-        .routes(utoipa_axum::routes!(crate::v1::namespace::unlink))
         .routes(utoipa_axum::routes!(crate::v1::bytes::read_range))
         .routes(utoipa_axum::routes!(crate::v1::bytes::write_at))
         .routes(utoipa_axum::routes!(crate::v1::bytes::append));
@@ -105,6 +106,11 @@ pub fn contract_router(config: &Config) -> OpenApiRouter<AppState> {
     metadata.merge(data).merge(replacement)
 }
 pub fn build_router(state: AppState) -> Router {
+    assert!(
+        Some(state.cursor_key)
+            == anchorfs_core::decode_hex_32(state.config.cursor_signing_key.expose()),
+        "invalid cursor signing key configuration"
+    );
     let (router, _) = contract_router(&state.config).split_for_parts();
     let auxiliary = Router::new()
         .route("/healthz", axum::routing::get(crate::health::healthz))
@@ -171,6 +177,8 @@ mod tests {
             config.metadata_call_deadline = Duration::from_millis(metadata);
             config.data_call_deadline = Duration::from_millis(data);
             let state = AppState {
+                cursor_key: anchorfs_core::decode_hex_32(config.cursor_signing_key.expose())
+                    .expect("validated cursor signing key"),
                 control_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(6)),
                 pool: anchorfs_persistence::pool::PgPool::connect_lazy(
                     "postgres://unused:unused@127.0.0.1:1/unused",
@@ -203,7 +211,7 @@ mod tests {
                 (
                     "DELETE",
                     format!("/v1/workspaces/{id}/files?path=file"),
-                    true,
+                    false,
                 ),
             ] {
                 let request = Request::builder()

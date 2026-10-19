@@ -107,3 +107,31 @@ mod proof_tests {
         }
     }
 }
+
+/// Decode exactly 32 bytes; accepts either ASCII hex case, never partial input.
+pub fn decode_hex_32(text: &str) -> Option<[u8; 32]> {
+    if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut result = [0; 32];
+    for (i, byte) in result.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(result)
+}
+#[cfg(test)]
+mod hex_tests {
+    use super::*;
+    #[test]
+    fn strict_hex() {
+        assert_eq!(decode_hex_32(&"aF".repeat(32)), Some([175; 32]));
+        for invalid in [
+            "a".repeat(63),
+            "g".repeat(64),
+            "é".repeat(32),
+            "a".repeat(65),
+        ] {
+            assert_eq!(decode_hex_32(&invalid), None);
+        }
+    }
+}

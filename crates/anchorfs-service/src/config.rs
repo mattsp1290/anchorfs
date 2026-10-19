@@ -21,6 +21,10 @@ pub struct Config {
     pub shutdown_drain: Duration,
     pub max_request_bytes: usize,
     pub max_replace_bytes: usize,
+    pub handle_ttl: Duration,
+    pub max_handles_per_session: u32,
+    pub cursor_ttl: Duration,
+    pub max_list_page: u32,
     pub cursor_signing_key: Secret<String>,
     pub deployment_physical_bytes_limit: i64,
     pub deployment_staging_bytes_limit: i64,
@@ -74,7 +78,12 @@ impl Config {
             shutdown_drain: timers.shutdown_drain,
             max_request_bytes: limits.max_api_write as usize,
             max_replace_bytes: limits.max_replace_bytes as usize,
-            cursor_signing_key: Secret::new(String::new()),
+            handle_ttl: timers.handle_ttl,
+            max_handles_per_session: limits.max_handles_per_session,
+            cursor_ttl: timers.cursor_ttl,
+            max_list_page: limits.max_list_page,
+            // Fixed test-only key; from_env always replaces it.
+            cursor_signing_key: Secret::new("0123456789abcdef".repeat(4)),
             deployment_physical_bytes_limit: 1 << 40,
             deployment_staging_bytes_limit: 1 << 30,
             backend_probe_deadline: Duration::from_secs(1),
@@ -128,6 +137,12 @@ impl Config {
             }
             None => return Err(invalid("CURSOR_SIGNING_KEY")),
         };
+        c.handle_ttl =
+            Duration::from_millis(parse("HANDLE_TTL_MS", c.handle_ttl.as_millis() as u64)?);
+        c.cursor_ttl =
+            Duration::from_millis(parse("CURSOR_TTL_MS", c.cursor_ttl.as_millis() as u64)?);
+        c.max_handles_per_session = parse("MAX_HANDLES_PER_SESSION", c.max_handles_per_session)?;
+        c.max_list_page = parse("MAX_LIST_PAGE", c.max_list_page)?;
         c.db_max_connections = parse("DB_MAX_CONNECTIONS", c.db_max_connections)?;
         c.metadata_call_deadline = Duration::from_millis(parse(
             "METADATA_CALL_DEADLINE_MS",
@@ -159,7 +174,11 @@ impl Config {
             "DEPLOYMENT_STAGING_BYTES_LIMIT",
             c.deployment_staging_bytes_limit,
         )?;
-        if c.client_session_ttl.is_zero()
+        if c.handle_ttl.is_zero()
+            || c.cursor_ttl.is_zero()
+            || c.max_handles_per_session == 0
+            || c.max_list_page == 0
+            || c.client_session_ttl.is_zero()
             || c.receipt_retention.is_zero()
             || c.db_lock_timeout.is_zero()
             || c.db_max_connections == 0

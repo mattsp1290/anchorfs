@@ -116,7 +116,8 @@ pub async fn issue(
         || (new.kind == CredentialKind::Administrator
             && (new.workspace_id.is_some() || new.role != CredentialRole::Admin))
         || (new.kind != CredentialKind::Administrator
-            && (new.workspace_id.is_none() || new.role == CredentialRole::Admin))
+            && (new.workspace_id.is_none()
+                || (new.kind == CredentialKind::Worker && new.role == CredentialRole::Admin)))
     {
         return Err(AuthorityError::InvalidInput);
     }

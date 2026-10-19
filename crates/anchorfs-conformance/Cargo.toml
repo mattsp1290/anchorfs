@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 
 [dev-dependencies]
+proptest.workspace = true
 axum.workspace = true
 anchorfs-core.workspace = true
 anchorfs-persistence.workspace = true

@@ -22,6 +22,8 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | reqwest | 0.12.28 | MIT OR Apache-2.0 | https://github.com/seanmonstar/reqwest | binary HTTP tests and the conformance fault proxy |
 | serde | 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde | serialization |
 | serde_json | 1.0.154 | MIT OR Apache-2.0 | https://github.com/serde-rs/json | JSON and persistence receipt payloads |
+| proptest | 1.12.0 | MIT OR Apache-2.0 | https://github.com/proptest-rs/proptest | namespace model/property tests (dev-dependency) |
+| hmac | 0.13.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/MACs | list-cursor message authentication |
 | sha2 | 0.11.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | SHA-256 integrity |
 | sqlx | 0.9.0 | MIT OR Apache-2.0 | https://github.com/launchbadge/sqlx | PostgreSQL, migrations and JSON receipt payloads |
 | testcontainers-modules | 0.15.0 | MIT | https://github.com/testcontainers/testcontainers-rs-modules-community | PostgreSQL test image module |
@@ -87,3 +89,7 @@ mapping; conformance directly names SQLx, time and async-trait for disposable
 metadata coordination, clock comparisons and the synthetic counting backend.
 All sources/versions/licenses remain in the table above. No new crate or
 workspace-member edge was introduced. `Cargo.lock` records the new direct edges.
+
+Stage 1b: hmac 0.13.0 direct use checked with `cargo info --registry crates-io hmac@0.13.0` on 2026-10-18 (MSRV 1.85). Already present transitively; this adds no new package.
+
+Stage 1b: proptest 1.12.0 metadata checked on 2026-10-18 with `cargo info --registry crates-io proptest@1.12.0` (MSRV 1.88). Default features disabled; std only, without fork/timeout. New transitive origins/licenses are recorded by Cargo.lock and verified by cargo-deny; planned additions are core_detect, rand_xorshift and unarray (MIT OR Apache-2.0).
