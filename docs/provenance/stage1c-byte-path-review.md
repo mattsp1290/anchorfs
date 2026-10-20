@@ -3,9 +3,9 @@
 This record is incremental. Stage 1c is **not complete**. All eight planned
 byte/pin routes are connected, with 34 implemented routes and four workflow-lease
 stubs verified by the service sweep. The native byte path is exercised against
-disposable PostgreSQL/MinIO. The full acceptance matrix, model and process-restart
-evidence, review gauntlet, PR and hosted CI remain incomplete; no provider storage
-durability or Linux mount capability is claimed.
+disposable PostgreSQL/MinIO, with local acceptance, model and process-restart
+evidence mapped below. The review gauntlet, PR and hosted CI remain incomplete;
+no provider storage durability or Linux mount capability is claimed.
 
 ## Approved inputs and origin
 
@@ -27,11 +27,11 @@ review/fix/push stages remain pending until implementation and validation are
 complete. Independent reviewers must receive fresh approved-input packets and
 report the cleanroom checklist verdict separately from technical findings.
 
-No dependency was added or updated in this checkpoint. All direct dependencies
+At the initial foundation checkpoint, no dependency was added or updated. All direct dependencies
 remain the reviewed workspace pins; `Cargo.lock` is unchanged. The planned
 service `futures-core` dependency edge has not yet been introduced.
 
-## Implemented foundation so far
+## Foundation checkpoint 933ac5e (historical)
 
 - Pure chunk write/read/truncate/replace planners and materialization, mapped
   to spec 02 components, truncate and read requirements and plan W2/W8/W9/W19.
@@ -63,7 +63,7 @@ distinguish those rows from tombstones of `pending`/`committed` operations after
 a crash. The plan's two-column migration alone does not encode that distinction;
 D-C1 below records the implemented resolution for the B11 follow-ups.
 
-## Observed local validation
+## Foundation checkpoint validation
 
 - `cargo test -p anchorfs-core --locked`: 11 existing unit tests and 12 new
   chunk planner tests passed.
