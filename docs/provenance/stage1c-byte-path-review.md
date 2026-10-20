@@ -366,7 +366,7 @@ a new deferred check-constraint test exercises that distinction. Ordinary
 statement errors are unaffected.
 
 Inputs: independently authored fault tests following the approved BY3c/CP13b
-pattern; the existing source/license-reviewed sqlx-postgres 0.8.6 error API for
+pattern; the existing source/license-reviewed sqlx-postgres 0.9.0 error API for
 severity; and the permitted [PostgreSQL 17 SQLSTATE reference](https://www.postgresql.org/docs/17/errcodes-appendix.html).
 No new crate or dependency edge is introduced. The classifier is an independent
 AnchorFS error-handling decision implementing receipt-based ambiguity recovery,
@@ -395,3 +395,101 @@ Clippy passes with warnings denied. The complete expanded byte suite exited 0:
 37 tests passed in 40.23 seconds, including the new definite-constraint rejection
 case and all provider/pool/recovery variants. Formatting and diff checks pass.
 The remaining acceptance/review/PR work is still pending.
+
+## Extended fencing and mixed-history acceptance (2026-10-20)
+
+The BY9 rotation schedule found that a previously admitted upload resumed by
+validating its old bearer secret first, returning 401 after rotation instead of
+the planned 409 fenced. Owned byte continuations now carry the credential epoch
+captured at admission. The shared prologue resumes only those private operations
+with that epoch, preserving workspace → credential → session lock order and all
+role/workflow/publication checks. Revocation/expiry still return unauthenticated;
+rotation rejects the old continuation as fenced. New requests still authenticate
+the bearer normally. Retry snapshots/swaps and replacement publication use the
+same resumed-authority path. This is independently authored from BY9 and the
+existing authority model, with no external source or dependency change.
+
+The explicit oversized-truncate case also found that the outer request layer
+rewrote every 413 into payload_too_large, discarding the handler's file_too_large
+code. ApiError responses now carry an internal structured-envelope marker;
+framework body-limit rejections are normalized only when that marker is absent.
+The marker is not a wire header or authority input. Existing body-limit tests
+remain regression gates.
+
+Targeted observed results:
+
+- BY9's two tests pass all publication schedules: rotation, authorization epoch,
+  actual one-second handle TTL, SQL reservation expiry, a new active lease,
+  owner proof acceptance and bound-worker lease expiry. Rejected uploads retain
+  physical charges, release staging and store terminal failed receipts.
+- BY10/BY10b/BY11 pass: shrink within/across chunks/to zero, grow/no-op, no PUT or
+  object-row growth for truncate, oversized size rejection, unlink-open byte
+  writes, truncate-on-open quota release with an old pin intact, and far writes
+  and trimmed-tail zeros.
+- BY7b passes: an active reservation in one workspace consumes deployment staging
+  headroom for a second workspace; after publication the second can write. The
+  same test proves a real pin id cannot cross workspaces. Both workspaces and the
+  deployment/bucket oracles are checked.
+- BY14b now uploads its first chunk before the client stalls, then verifies the
+  terminal failed reservation and 4,096-byte orphan charge. With max_data_ops=1,
+  a following write succeeds after cleanup. Both disconnect and hard deadline
+  branches pass.
+- BY3b passes committed byte receipt expiry and failed receipt exclusion,
+  including terminal session/handle renewal and rebind fencing and an authorized
+  replacement session. The initial failed-case test used the detail string as
+  the error code; the established envelope uses invalid_input with a
+  content_digest_mismatch message. Correcting that test expectation passed;
+  mutation behavior and imported baselines were unchanged.
+- BY20 passed on its first execution: eight tasks for 20 seconds, three paths,
+  two sessions, 1,179 acknowledged byte mutations and 278 parked publications,
+  with proxy delays, duplicate same-key requests, receipt inspection, close/open,
+  unlink/recreate and quota-pressure fencing. PostgreSQL deadlocks stayed 0→0.
+  Every acknowledged write appears once in its immutable publication manifest;
+  final bytes for every inode match replay of committed mutations. All pending
+  reservations are expired and every issued byte key inspected, leaving no
+  pending receipt. The final SQL/deployment/bucket oracles pass. D-C4 records
+  the destructive-mutation oracle clarification without changing product scope.
+
+Clippy with warnings denied and diff checks pass. The first broad regression
+attempt still contained the failed-case test's incorrect error-code expectation
+and stopped after 43 byte successes and that failure. After the targeted fix,
+BY20 and the extended conditional-replacement race, a new full workspace run is
+in progress. No full-run success is inferred from targeted results.
+
+
+Acceptance refinements after the BY20 run: the complete 45-test byte suite
+passed in 79.33 seconds, including the explicit cross-session sequential
+overlap, lost-response findOperation lookup, replay at a full logical quota,
+other-file readability during raw corruption/deletion, and conditional replace
+against both a write and chmod. A separately added truncate response-abandonment
+test passed: middleware holds the response only after the real transaction has
+committed, the consumer is cancelled, and receipt lookup plus same-key replay
+return the original result and bytes. This brings the byte suite to 46 tests.
+The running workspace binary predates that final test and a few additional
+assertions; its result and the targeted refinement run are recorded separately.
+
+Record correction: the COMMIT classifier's API lookup initially opened the
+locally installed sqlx-postgres 0.8.6 public error API; the selected dependency
+is 0.9.0. Both registry manifests identify launchbadge/sqlx and MIT OR Apache-2.0;
+the 0.9.0 public severity API was then checked directly. No source implementation
+was copied, no package/edge changed, and the compiled/tested classifier uses the
+pinned 0.9.0 dependency. The source/version attribution above is corrected.
+
+
+Final pre-review checkpoint: `cargo test --workspace --locked --
+--test-threads=4` exited 0 with 269 passing tests (its binary included 45 byte
+tests). The final expanded byte suite then exited 0 with 48 passing tests in
+74.88 seconds, including positional lost-response replay, path/size key binding,
+truncate response abandonment and the final assertion refinements. The direct
+raw orphan GET assertion was added afterward and its BY5 test passed in 9.10
+seconds. Clippy with warnings denied, formatting and diff checks pass. All
+planned local evidence is mapped in [the acceptance map](stage1c-byte-path-acceptance.md).
+Fresh independent review stages and hosted CI remain unperformed at this point;
+passing local tests do not substitute for them.
+
+Manifest cost remains O(retained chunks): the executed persistence manifest
+fixture observes all three rows in the new manifest when one of three chunks
+is replaced, and the old manifest stays intact. No large-file throughput
+benchmark is claimed. Deployment quota updates retain a singleton row lock;
+BY19a's observed two-file wall time is not a contention/scale guarantee. Model
+and fixture timings above are local measurements, not operational SLOs.

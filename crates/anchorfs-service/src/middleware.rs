@@ -21,7 +21,12 @@ pub async fn request(mut req: Request, next: Next) -> Response {
         .unwrap_or_else(|| "unmatched".into());
     let method = req.method().clone();
     let mut response = next.run(req).await;
-    if response.status() == StatusCode::PAYLOAD_TOO_LARGE {
+    if response.status() == StatusCode::PAYLOAD_TOO_LARGE
+        && response
+            .extensions()
+            .get::<crate::error::StructuredError>()
+            .is_none()
+    {
         response = ApiError::new(anchorfs_core::ErrorCode::PayloadTooLarge, &trace).into_response();
     }
     response.headers_mut().insert(

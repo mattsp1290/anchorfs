@@ -250,39 +250,50 @@ SQL type/nullability/checks below are structural invariants; the semantic invari
 
 | Column | Owner transaction (conceptual, Stage 1+) | Invariant | Crash boundary | Recovery rule |
 |---|---|---|---|---|
-| deletion_candidates.workspace_id | reconcile_uncertain / offline_collect | `uuid NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
-| deletion_candidates.object_id | reconcile_uncertain / offline_collect | `uuid NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
-| deletion_candidates.reason | reconcile_uncertain / offline_collect | `text NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
-| deletion_candidates.physical_bytes | reconcile_uncertain / offline_collect | `bigint NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
-| deletion_candidates.recorded_at | reconcile_uncertain / offline_collect | `timestamptz NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
+| deletion_candidates.workspace_id | reconcile_uncertain / offline_collect (implemented: objects::orphan, receipts::fence_expired_pending; collection deferred) | `uuid NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
+| deletion_candidates.object_id | reconcile_uncertain / offline_collect (implemented: objects::orphan, receipts::fence_expired_pending; collection deferred) | `uuid NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
+| deletion_candidates.reason | reconcile_uncertain / offline_collect (implemented: objects::orphan, receipts::fence_expired_pending; collection deferred) | `text NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
+| deletion_candidates.physical_bytes | reconcile_uncertain / offline_collect (implemented: objects::orphan, receipts::fence_expired_pending; collection deferred) | `bigint NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
+| deletion_candidates.recorded_at | reconcile_uncertain / offline_collect (implemented: objects::orphan, receipts::fence_expired_pending; collection deferred) | `timestamptz NOT NULL`; single orphan record; bytes remain physically charged until deletion confirmed; automatic deletion disabled | B3, B9, B12 | offline collector freezes all writers and proves live/pinned/recovery reachability before deletion |
 
 ## Crash boundaries
 
-All scenarios below remain unverified until their Stage 1–3 acceptance tests exist.
+The baseline descriptions below state intended recovery boundaries. Dated
+verification notes identify the implemented/tested portions; collection and
+isolated restore remain later work.
 
 ### B1 — Reservation committed, upload not started
 
 operation, reservation and staged object rows exist; the prior manifest is visible. The client may have no operation response. Reconciliation checks owner heartbeat and reservation expiry; no data is published and reserved capacity remains charged. Required scenario: T8, T22.
 
+Stage 1c verifies staged admission and old-manifest visibility with BY4, and
+reservation/charge recovery before publication with BY5/BY5b/BY5c/BY5d.
+
 ### B2 — Upload acknowledged, publication not committed
 
 verified objects and reservation may exist while the inode still names its old manifest. The client has no durable success. Recheck every publication predicate; an abandoned upload is unreachable and retained as a charged orphan. Required scenario: T8.
+
+Stage 1c verifies charged unpublished objects and durable expiry fencing with
+BY5/BY5b/BY5c/BY5d and native old-generation reads.
 
 ### B3 — Upload response lost
 
 object state is uncertain; the object may or may not exist. No success is acknowledged. Verify digest/length or repeat the same immutable upload; never publish an unconfirmed object or erase its conservative charge. Required scenario: T10, T22.
 
+Stage 1c verifies BY6 provider request/reply loss and integrity failures, with
+raw object observations and conservative orphan charges.
+
 ### B4 — Publication committed, response lost
 
 new manifest, generation, quotas and receipt committed together. The client sees an ambiguous transport error. Retrieve the receipt under current authorization; do not repeat append or create. Required scenario: T9, T3, T18.
 
-CP13a verifies a control-plane commit surviving response abandonment; CP13b tests connection loss during COMMIT. File publication remains later work.
+CP13a verifies a control-plane commit surviving response abandonment; CP13b tests connection loss during COMMIT. Stage 1c verifies file publication and lost responses with BY3/BY3c/BY3d/BY19, including actual connection termination during COMMIT.
 
 ### B5 — Publication fenced
 
 uploaded objects can exist but the transaction aborts on an epoch, lease, session, handle or reservation predicate. The old manifest remains visible; client receives fenced/stale/conflict. Reconciliation retains orphan charges and an obsolete operation cannot publish later. Required scenario: T12, T13, T19.
 
-CP8/CP11 verify control-plane session fencing; uploads remain later work.
+CP8/CP11 verify control-plane session fencing. Stage 1c verifies upload publication fences with BY8/BY9, including reservation expiry and fixture workflow leases.
 
 ### B6 — Namespace commit, response lost
 
@@ -294,17 +305,20 @@ Stage 1b verifies B6 through NS2 receipt replay/mismatch, NS3 lost-response reco
 
 directory entry is gone; zero-link inode and reachable manifests remain. Existing live handles may still access the inode. handle_close or reservation_expire reclaims only after all handles/read/upload pins expire or close, then releases retained logical bytes/inode charge atomically. Physical charge survives until offline deletion. Required scenario: T5, T12.
 
-Stage 1b verifies metadata retention through NS6/NS6b and the namespace_tx handle release/renewal schedules. Read pins, manifests, sweepers and physical collection remain future work.
+Stage 1b verifies metadata retention through NS6/NS6b and the namespace_tx handle release/renewal schedules. Stage 1c verifies manifests/pins and unlink-open byte publication with BY10/BY10b/BY13; sweepers and physical collection remain future work.
 
 ### B8 — Credential/session revoked during upload
 
 revocation and new epoch are durable while uploaded objects may be pending. Old worker may observe a successful object request but cannot commit. Publication rechecks epochs/revoked_at and marks or reconciles the abandoned upload; issuer revocation cascades through credentials/sessions. Required scenario: T13.
 
-CP9/CP10 verify credential rotation/revocation and session cascade; uploads remain later work.
+CP9/CP10 verify credential rotation/revocation and session cascade. Stage 1c verifies rejection after upload with BY9 credential revocation/rotation and epoch schedules.
 
 ### B9 — Reservation expires
 
 expired reservation fences publication, but staging/physical charge cannot disappear. The client may be paused. Reconciliation verifies uncertain storage outcomes, transfers accounting conservatively and records deletion_candidates; offline confirmed deletion alone releases physical charge. Required scenario: T22.
+
+Stage 1c verifies expiry fencing, failed receipts and physical/staging transfers
+with BY5/BY5b/BY5d/BY7/BY9 and the deployment/bucket oracles.
 
 ### B10 — Workflow takeover
 
@@ -343,6 +357,9 @@ consistent metadata plus retained objects forms a recovery set; transient sessio
 ### B13 — Truncate shrink then regrow
 
 manifest publication atomically discards extents past EOF and clips the boundary logical_length. Client sees either committed generation, never a mix. Extension/far writes expose zeros for absent extents and invalid tails; inode locking/generation recheck serializes truncate with writes. Required scenario: T23.
+
+Stage 1c verifies clipped-prefix reads, zero fill and retry after a racing
+truncate with BY10/BY11/BY8 and the sequential byte model.
 
 ## Transaction locks and time
 
@@ -426,5 +443,5 @@ inode → handle → quota order used by close. The Stage 0 deployment-quota-fir
 placement is superseded. Namespace operations otherwise retain their relative
 order. The persistence primitives and handle blocking schedules are tested;
 service-level schedules verify overlapping writes, append retry and quota races
-without holding transactions across backend I/O. The randomized deadlock-oracle
-test remains pending.
+without holding transactions across backend I/O. BY20 verifies the eight-task randomized workload against the database deadlock
+counter and committed-history model.

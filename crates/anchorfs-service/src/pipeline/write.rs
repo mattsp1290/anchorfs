@@ -73,11 +73,14 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    async fn snapshot(&self, peek: bool) -> Result<Observed, ApiError> {
+    async fn snapshot(&self, operation: Option<&Operation>) -> Result<Observed, ApiError> {
         let ctx = &self.req.context;
         let mut tx = self.db.begin().await?;
-        let p = ctx.prologue(&mut tx).await?;
-        if peek
+        let p = match operation {
+            Some(operation) => ctx.resume(&mut tx, operation).await?,
+            None => ctx.prologue(&mut tx).await?,
+        };
+        if operation.is_none()
             && let Some(entry) =
                 receipts::peek(&mut tx, common::scope(&p), &ctx.key, ctx.digest).await?
         {
@@ -248,6 +251,7 @@ impl Writer<'_> {
                             id: operation_id,
                             owner,
                             scope,
+                            credential_epoch: p.actor.epoch,
                         },
                         upload,
                     ));
@@ -268,7 +272,7 @@ impl Writer<'_> {
     ) -> Result<Swap, ApiError> {
         let ctx = &self.req.context;
         let mut tx = self.db.begin_final().await?;
-        let p = ctx.prologue(&mut tx).await?;
+        let p = ctx.resume(&mut tx, operation).await?;
         let op = receipts::lock_pending(&mut tx, operation.scope, operation.id, &operation.owner)
             .await?;
         if op.authorization_epoch_at_start != p.workspace.authorization_epoch
@@ -360,7 +364,7 @@ impl Writer<'_> {
     ) -> Result<Publication, ApiError> {
         let ctx = &self.req.context;
         let mut tx = self.db.begin_final().await?;
-        let p = ctx.prologue(&mut tx).await?;
+        let p = ctx.resume(&mut tx, operation).await?;
         let op = receipts::lock_pending(&mut tx, operation.scope, operation.id, &operation.owner)
             .await?;
         if op.authorization_epoch_at_start != p.workspace.authorization_epoch
@@ -472,7 +476,7 @@ pub async fn write(
         state: &state,
         req: &req,
     };
-    let mut snapshot = match writer.snapshot(true).await? {
+    let mut snapshot = match writer.snapshot(None).await? {
         Observed::Receipt(entry) => {
             return req.context.resolve(&db, entry).await.map(Outcome::Done);
         }
@@ -574,7 +578,7 @@ pub async fn write(
             .await;
         }
         let next = async {
-            let Observed::Snapshot(next) = writer.snapshot(false).await? else {
+            let Observed::Snapshot(next) = writer.snapshot(Some(&operation)).await? else {
                 return Err(unavailable());
             };
             if !faults::hit(faults.as_ref(), FaultPoint::AfterPeek, Some(operation.id)).await

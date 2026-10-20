@@ -183,6 +183,7 @@ impl Replacer<'_> {
                             id: operation_id,
                             owner,
                             scope,
+                            credential_epoch: p.actor.epoch,
                         },
                         Upload {
                             reservation,
@@ -207,7 +208,7 @@ impl Replacer<'_> {
         snapshot: &InodeRow,
     ) -> Result<Published, ApiError> {
         let mut tx = self.db.begin_final().await?;
-        let p = self.context.prologue(&mut tx).await?;
+        let p = self.context.resume(&mut tx, operation).await?;
         let op = receipts::lock_pending(&mut tx, operation.scope, operation.id, &operation.owner)
             .await?;
         if op.authorization_epoch_at_start != p.workspace.authorization_epoch

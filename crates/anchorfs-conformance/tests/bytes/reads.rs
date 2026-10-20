@@ -142,6 +142,10 @@ async fn by12_reads_verify_whole_objects_including_discarded_tails() {
             .fetch_one(&f.pool)
             .await
             .unwrap();
+    let unaffected = open(&f, &f.worker, &f.worker_session, "unaffected", true).await;
+    write(&f, &unaffected, "unaffected", 0, b"healthy")
+        .await
+        .status(200);
     let Backend::Minio {
         endpoint,
         deployment,
@@ -156,6 +160,10 @@ async fn by12_reads_verify_whole_objects_including_discarded_tails() {
     let failed = read(&f, &handle, 0, 1, None).await.status(503).json();
     assert_eq!(failed["message"], "backend_integrity");
     assert!(failed["retry_after_ms"].is_null());
+    assert_eq!(
+        read(&f, &unaffected, 0, 4096, None).await.status(200).bytes,
+        b"healthy".as_slice()
+    );
     client
         .delete_object()
         .bucket(minio::BUCKET)
@@ -165,6 +173,10 @@ async fn by12_reads_verify_whole_objects_including_discarded_tails() {
         .unwrap();
     let missing = read(&f, &handle, 0, 1, None).await.status(503).json();
     assert_eq!(missing["message"], "backend_integrity");
+    assert_eq!(
+        read(&f, &unaffected, 0, 4096, None).await.status(200).bytes,
+        b"healthy".as_slice()
+    );
     minio::raw_put(&client, &key, b"abSECRET".to_vec()).await;
     assert_eq!(
         read(&f, &handle, 0, 8, None).await.status(200).bytes,

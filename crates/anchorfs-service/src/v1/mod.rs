@@ -93,6 +93,30 @@ pub async fn prologue(
 ) -> Result<Prologue, ApiError> {
     let lock = authority::lock_workspace(tx, workspace).await?;
     let actor = authority::load_actor(tx, proof, LockMode::Share).await?;
+    authenticated_prologue(tx, actor, lock, workspace, binding, workflow, gate).await
+}
+pub(crate) async fn resume_prologue(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    proof: &CredentialProof,
+    workspace: WorkspaceId,
+    binding: &SessionBinding,
+    workflow: Option<&WorkflowProof>,
+    gate: Gate,
+    admitted_epoch: i64,
+) -> Result<Prologue, ApiError> {
+    let lock = authority::lock_workspace(tx, workspace).await?;
+    let actor = authority::resume_actor(tx, proof, admitted_epoch).await?;
+    authenticated_prologue(tx, actor, lock, workspace, binding, workflow, gate).await
+}
+async fn authenticated_prologue(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: ActorCredential,
+    lock: Option<WorkspaceLock>,
+    workspace: WorkspaceId,
+    binding: &SessionBinding,
+    workflow: Option<&WorkflowProof>,
+    gate: Gate,
+) -> Result<Prologue, ApiError> {
     if !authority::same_workspace(&actor, workspace) {
         return Err(AuthorityError::NotFound.into());
     }

@@ -266,65 +266,82 @@ async fn by14_replace_uploads_before_the_body_ends_and_replay_does_not_poll() {
 }
 
 #[tokio::test]
-async fn by8_conditional_replace_rejects_a_metadata_generation_change_without_retry() {
-    let (faults, release) = GateFault::new(FaultPoint::BeforePublish, 1);
-    let f = Fixture::with_bytes(workspace_body(), configure, faults.clone(), true).await;
-    let handle = open(&f, &f.worker, &f.worker_session, "f", true).await;
-    let task = stream_task(
-        &f,
-        1,
-        "conditional",
-        4,
-        anchorfs_core::sha256(b"data").to_string(),
-        Body::from("data"),
-    );
-    faults.wait().await;
-    f.client
-        .call(
-            "PATCH",
-            &format!("{}/attributes", f.workspace_path()),
-            Some(&f.worker),
-            Some(&f.worker_session),
-            Some("chmod"),
-            Some(json!({"path":"f","mode":384})),
-        )
-        .await
-        .status(200);
-    release.send(true).unwrap();
-    let failed = error(task.await.unwrap(), 409, "generation_conflict");
-    assert!(
-        read(&f, &handle, 0, 1, None)
+async fn by8_conditional_replace_rejects_data_and_metadata_changes_without_retry() {
+    for metadata_only in [true, false] {
+        let (faults, release) = GateFault::new(FaultPoint::BeforePublish, 1);
+        let f = Fixture::with_bytes(workspace_body(), configure, faults.clone(), true).await;
+        let handle = open(&f, &f.worker, &f.worker_session, "f", true).await;
+        let task = stream_task(
+            &f,
+            1,
+            "conditional",
+            4,
+            anchorfs_core::sha256(b"data").to_string(),
+            Body::from("data"),
+        );
+        faults.wait().await;
+        if metadata_only {
+            f.client
+                .call(
+                    "PATCH",
+                    &format!("{}/attributes", f.workspace_path()),
+                    Some(&f.worker),
+                    Some(&f.worker_session),
+                    Some("chmod"),
+                    Some(json!({"path":"f","mode":384})),
+                )
+                .await
+                .status(200);
+        } else {
+            write(&f, &handle, "racer", 0, b"other").await.status(200);
+        }
+        release.send(true).unwrap();
+        let failed = error(task.await.unwrap(), 409, "generation_conflict");
+        assert_eq!(
+            read(&f, &handle, 0, 4096, None).await.status(200).bytes,
+            if metadata_only {
+                b"".as_slice()
+            } else {
+                b"other".as_slice()
+            }
+        );
+        let view = f
+            .client
+            .call(
+                "GET",
+                &format!(
+                    "{}/operations/{}",
+                    f.workspace_path(),
+                    failed["operation_id"].as_str().unwrap()
+                ),
+                Some(&f.host),
+                None,
+                None,
+                None,
+            )
             .await
             .status(200)
-            .bytes
-            .is_empty()
-    );
-    let view = f
-        .client
-        .call(
-            "GET",
-            &format!(
-                "{}/operations/{}",
-                f.workspace_path(),
-                failed["operation_id"].as_str().unwrap()
-            ),
-            Some(&f.host),
-            None,
-            None,
-            None,
-        )
-        .await
-        .status(200)
-        .body;
-    assert_eq!(view["result"]["code"], "generation_conflict");
-    let Backend::Minio {
-        proxy: Some(proxy), ..
-    } = &f.backend
-    else {
-        panic!("proxy expected");
-    };
-    assert_eq!(proxy.count(proxy::is_put), 1);
-    f.invariants().await;
+            .body;
+        assert_eq!(view["result"]["code"], "generation_conflict");
+        let Backend::Minio {
+            proxy: Some(proxy), ..
+        } = &f.backend
+        else {
+            panic!("proxy expected");
+        };
+        assert_eq!(
+            proxy.count(proxy::is_put),
+            if metadata_only { 1 } else { 2 }
+        );
+        let candidates: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM deletion_candidates WHERE workspace_id=$1")
+                .bind(f.workspace)
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(candidates, 1);
+        f.invariants().await;
+    }
 }
 
 #[tokio::test]
@@ -447,6 +464,7 @@ async fn by14b_stream_error_and_hard_deadline_finalize_the_owned_reservation() {
             workspace_body(),
             |c| {
                 configure(c);
+                c.max_data_ops = 1;
                 if deadline {
                     c.data_call_deadline = Duration::from_millis(1500);
                     c.db_lock_timeout = Duration::from_millis(100);
@@ -469,7 +487,7 @@ async fn by14b_stream_error_and_hard_deadline_finalize_the_owned_reservation() {
         );
         faults.wait().await;
         release.send(true).unwrap();
-        if !deadline {
+        {
             send.send(Ok(Bytes::copy_from_slice(&data[..4096])))
                 .await
                 .unwrap();
@@ -484,9 +502,11 @@ async fn by14b_stream_error_and_hard_deadline_finalize_the_owned_reservation() {
                     .wait_forwarded(proxy::is_put, 1, Duration::from_secs(20))
                     .await
             );
-            send.send(Err(io::Error::other("synthetic stream disconnect")))
-                .await
-                .unwrap();
+            if !deadline {
+                send.send(Err(io::Error::other("synthetic stream disconnect")))
+                    .await
+                    .unwrap();
+            }
         }
         let failure = task.await.unwrap().status(503).json();
         assert_eq!(
@@ -513,7 +533,15 @@ async fn by14b_stream_error_and_hard_deadline_finalize_the_owned_reservation() {
                 .is_empty()
         );
         let counters:(i64,i64)=sqlx::query_as("SELECT physical_bytes_used,staging_bytes_reserved FROM workspace_quotas WHERE workspace_id=$1").bind(f.workspace).fetch_one(&f.pool).await.unwrap();
-        assert_eq!(counters, (if deadline { 0 } else { 4096 }, 0));
+        assert_eq!(counters, (4096, 0));
+        let reservation_state: String =
+            sqlx::query_scalar("SELECT state FROM upload_reservations WHERE workspace_id=$1")
+                .bind(f.workspace)
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(reservation_state, "failed");
+        write(&f, &handle, "following", 0, b"ok").await.status(200);
         f.invariants().await;
     }
 }

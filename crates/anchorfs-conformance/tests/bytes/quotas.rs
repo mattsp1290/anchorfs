@@ -2,6 +2,136 @@ use super::support::*;
 use crate::common::proxy;
 
 #[tokio::test]
+async fn by7b_deployment_staging_is_shared_and_by13_pins_do_not_cross_workspaces() {
+    let (faults, release) = GateFault::new(FaultPoint::BeforePublish, 1);
+    let f = Fixture::with_bytes(
+        workspace_body(),
+        |c| {
+            configure(c);
+            c.deployment_staging_bytes_limit = 4;
+        },
+        faults.clone(),
+        false,
+    )
+    .await;
+    let first = open(&f, &f.worker, &f.worker_session, "f", true).await;
+    let pin = pin(&f, "f", "pin").await;
+    let created = f
+        .client
+        .call(
+            "POST",
+            "/v1/workspaces",
+            Some(&f.admin),
+            None,
+            Some("second-workspace"),
+            Some(workspace_body()),
+        )
+        .await
+        .status(201)
+        .body;
+    let workspace: Uuid = created["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let prefix = format!("/v1/workspaces/{workspace}");
+    let grant=f.client.call("POST","/v1/credentials",Some(&f.admin),None,Some("second-worker"),Some(json!({"workspace_id":workspace,"kind":"worker","role":"write","uid":1000,"gid":1000,"max_reservation_bytes":4096}))).await.status(201).body;
+    let actor = Credential::from_grant(&grant);
+    let session = f
+        .client
+        .call(
+            "POST",
+            &format!("{prefix}/sessions"),
+            Some(&f.admin),
+            None,
+            Some("second-session"),
+            Some(json!({"credential_id":actor.id})),
+        )
+        .await
+        .status(201)
+        .body;
+    let handle=f.client.call("POST",&format!("{prefix}/handles"),Some(&actor),Some(&session),Some("second-handle"),Some(json!({"path":"f","read":true,"write":true,"create":true,"exclusive":false,"truncate":false,"mode":420}))).await.status(201).body;
+    let path = format!(
+        "{prefix}/handles/{}/bytes",
+        handle["handle_id"].as_str().unwrap()
+    );
+    error(
+        f.client
+            .binary(
+                "GET",
+                &format!(
+                    "{path}?offset=0&length=4&read_pin={}",
+                    pin["read_pin_id"].as_str().unwrap()
+                ),
+                Some(&actor),
+                Some(&session),
+                None,
+                &[],
+                Body::empty(),
+            )
+            .await,
+        404,
+        "not_found",
+    );
+    let pending = append_task(&f, &first, "first", b"AAAA");
+    faults.wait().await;
+    error(
+        f.client
+            .binary(
+                "PUT",
+                &format!("{path}?offset=0"),
+                Some(&actor),
+                Some(&session),
+                Some("second"),
+                &[],
+                Body::from("BBBB"),
+            )
+            .await,
+        507,
+        "quota_exceeded",
+    );
+    f.invariants().await;
+    release.send(true).unwrap();
+    pending.await.unwrap().status(200);
+    f.client
+        .binary(
+            "PUT",
+            &format!("{path}?offset=0"),
+            Some(&actor),
+            Some(&session),
+            Some("second"),
+            &[],
+            Body::from("BBBB"),
+        )
+        .await
+        .status(200);
+    assert_eq!(
+        f.client
+            .binary(
+                "GET",
+                &format!("{path}?offset=0&length=4"),
+                Some(&actor),
+                Some(&session),
+                None,
+                &[],
+                Body::empty()
+            )
+            .await
+            .status(200)
+            .bytes,
+        b"BBBB".as_slice()
+    );
+    assert!(
+        anchorfs_persistence::invariants::check(&f.pool, anchorfs_core::WorkspaceId(workspace))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    f.backend.reconcile(&f.pool, workspace).await;
+    f.invariants().await;
+}
+
+#[tokio::test]
 async fn by7_physical_staging_principal_and_logical_limits_reject_before_upload() {
     let mut body = workspace_body();
     body["physical_bytes_limit"] = json!(12288);

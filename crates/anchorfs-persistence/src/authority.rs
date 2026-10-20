@@ -106,6 +106,7 @@ async fn credential(
     tx: &mut Transaction<'_, Postgres>,
     proof: &CredentialProof,
     lock: &str,
+    admitted_epoch: Option<i64>,
 ) -> Result<ActorCredential, AuthorityError> {
     // The expired flag is evaluated by the database clock, including after lock waits.
     let row = sqlx::query_as::<_, CredentialRow>(sqlx::AssertSqlSafe(format!(
@@ -120,10 +121,15 @@ async fn credential(
             .bind(row.expires_at)
             .fetch_one(&mut **tx)
             .await?;
-    if !constant_time_eq(&secret_hash(proof.secret.expose()).0, &row.secret_hash)
-        || row.revoked_at.is_some()
-        || expired
-    {
+    if row.revoked_at.is_some() || expired {
+        return Err(AuthorityError::Unauthenticated);
+    }
+    // Only an already authenticated, privately owned operation may supply this
+    // epoch. Rotation must fence its continuation before checking the old secret.
+    if admitted_epoch.is_some_and(|epoch| epoch != row.epoch) {
+        return Err(AuthorityError::Fenced);
+    }
+    if !constant_time_eq(&secret_hash(proof.secret.expose()).0, &row.secret_hash) {
         return Err(AuthorityError::Unauthenticated);
     }
     row.try_into()
@@ -133,8 +139,18 @@ pub async fn load_actor(
     proof: &CredentialProof,
     mode: LockMode,
 ) -> Result<ActorCredential, AuthorityError> {
-    credential(tx, proof, "").await?;
-    credential(tx, proof, mode.clause()).await
+    credential(tx, proof, "", None).await?;
+    credential(tx, proof, mode.clause(), None).await
+}
+/// Resume a private operation whose bearer was authenticated at admission.
+/// This never grants authority across an epoch change.
+pub async fn resume_actor(
+    tx: &mut Transaction<'_, Postgres>,
+    proof: &CredentialProof,
+    admitted_epoch: i64,
+) -> Result<ActorCredential, AuthorityError> {
+    credential(tx, proof, "", Some(admitted_epoch)).await?;
+    credential(tx, proof, "FOR SHARE", Some(admitted_epoch)).await
 }
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct SessionRow {

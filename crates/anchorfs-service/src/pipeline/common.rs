@@ -30,6 +30,25 @@ pub struct Context {
     pub op_type: &'static str,
 }
 impl Context {
+    pub async fn resume(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        operation: &Operation,
+    ) -> Result<Prologue, ApiError> {
+        v1::resume_prologue(
+            tx,
+            &self.authority.proof,
+            self.workspace,
+            &self.authority.binding,
+            self.authority.workflow.as_ref(),
+            Gate {
+                role_mutation: true,
+                lease: LeaseMode::Mutation,
+            },
+            operation.credential_epoch,
+        )
+        .await
+    }
     pub async fn prologue(&self, tx: &mut Transaction<'_, Postgres>) -> Result<Prologue, ApiError> {
         v1::prologue(
             tx,
@@ -179,6 +198,7 @@ pub struct Operation {
     pub id: OperationId,
     pub owner: Secret<String>,
     pub scope: ReceiptScope,
+    pub credential_epoch: i64,
 }
 #[derive(Clone)]
 pub struct Prepared {

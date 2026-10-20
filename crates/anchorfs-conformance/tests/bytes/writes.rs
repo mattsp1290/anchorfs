@@ -2,6 +2,108 @@ use super::support::*;
 use crate::common::proxy::{self, Fault};
 
 #[tokio::test]
+async fn by3_lost_positional_write_response_replays_the_original_offset() {
+    let f = Fixture::with_bytes(
+        workspace_body(),
+        configure,
+        Arc::new(CrashOnce::at(FaultPoint::AfterPublish)),
+        false,
+    )
+    .await;
+    let handle = open(&f, &f.worker, &f.worker_session, "f", true).await;
+    let lost = error(
+        write(&f, &handle, "positional", 7, b"once").await,
+        503,
+        "outcome_unknown",
+    );
+    let found = f
+        .client
+        .call(
+            "GET",
+            &format!(
+                "{}/operations?idempotency_key=positional",
+                f.workspace_path()
+            ),
+            Some(&f.worker),
+            None,
+            None,
+            None,
+        )
+        .await
+        .status(200)
+        .body;
+    assert_eq!(found["state"], "committed");
+    assert_eq!(found["operation_id"], lost["operation_id"]);
+    assert_eq!(found["result"]["offset"], 7);
+    assert_eq!(
+        write(&f, &handle, "positional", 7, b"once")
+            .await
+            .status(200)
+            .json(),
+        found["result"]
+    );
+    assert_eq!(
+        read(&f, &handle, 0, 4096, None).await.status(200).bytes,
+        b"\0\0\0\0\0\0\0once".as_slice()
+    );
+    f.invariants().await;
+}
+
+#[tokio::test]
+async fn by2_replace_paths_and_truncate_sizes_bind_receipts() {
+    let f = Fixture::with_bytes(workspace_body(), configure, Arc::new(NoFaults), false).await;
+    let handle = open(&f, &f.worker, &f.worker_session, "f", true).await;
+    let replacement = replace(&f, "f", 1, "replacement", b"data")
+        .await
+        .status(200)
+        .json();
+    error(
+        replace(&f, "missing", 1, "replacement", b"data").await,
+        409,
+        "idempotency_mismatch",
+    );
+    error(
+        replace(&f, "f", 2, "replacement", b"data").await,
+        409,
+        "idempotency_mismatch",
+    );
+    let path = format!("{}/truncate", handle_path(&f, &handle));
+    let shrunk = f
+        .client
+        .call(
+            "POST",
+            &path,
+            Some(&f.worker),
+            Some(&f.worker_session),
+            Some("size"),
+            Some(json!({"size":2})),
+        )
+        .await
+        .status(200)
+        .body;
+    f.client
+        .call(
+            "POST",
+            &path,
+            Some(&f.worker),
+            Some(&f.worker_session),
+            Some("size"),
+            Some(json!({"size":3})),
+        )
+        .await
+        .error(409, "idempotency_mismatch");
+    assert_eq!(
+        shrunk["generation"].as_i64().unwrap(),
+        replacement["generation"].as_i64().unwrap() + 1
+    );
+    assert_eq!(
+        read(&f, &handle, 0, 4096, None).await.status(200).bytes,
+        b"da".as_slice()
+    );
+    f.invariants().await;
+}
+
+#[tokio::test]
 async fn by1_writes_append_and_sparse_truncate_publish_complete_manifests() {
     let f = Fixture::with_bytes(workspace_body(), configure, Arc::new(NoFaults), true).await;
     let handle = open(&f, &f.worker, &f.worker_session, "f", true).await;
@@ -139,6 +241,35 @@ async fn by3_lost_write_response_replays_before_handle_and_quota_validation() {
         .body;
     assert_eq!(receipt["state"], "committed");
     assert_eq!(receipt["result"]["offset"], 0);
+    let found = f
+        .client
+        .call(
+            "GET",
+            &format!("{}/operations?idempotency_key=lost", f.workspace_path()),
+            Some(&f.worker),
+            None,
+            None,
+            None,
+        )
+        .await
+        .status(200)
+        .body;
+    assert_eq!(found, receipt);
+    sqlx::query(
+        "UPDATE workspace_quotas SET logical_bytes_limit=logical_bytes_used WHERE workspace_id=$1",
+    )
+    .bind(f.workspace)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        append(&f, &handle, "lost", b"once")
+            .await
+            .status(200)
+            .json(),
+        receipt["result"],
+        "replay precedes growth admission at a full logical quota"
+    );
     assert_eq!(committed(&f, &handle).await, b"once");
     f.client
         .call(

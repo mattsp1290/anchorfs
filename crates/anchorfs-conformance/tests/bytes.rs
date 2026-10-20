@@ -6,6 +6,8 @@ mod backend_faults;
 mod common;
 #[path = "bytes/concurrency.rs"]
 mod concurrency;
+#[path = "bytes/fencing.rs"]
+mod fencing;
 #[path = "bytes/fixture.rs"]
 mod fixture;
 #[path = "bytes/pool.rs"]
@@ -18,7 +20,11 @@ mod reads;
 mod recovery;
 #[path = "bytes/replace.rs"]
 mod replace;
+#[path = "bytes/stress.rs"]
+mod stress;
 #[path = "bytes/support.rs"]
 mod support;
+#[path = "bytes/truncate.rs"]
+mod truncate;
 #[path = "bytes/writes.rs"]
 mod writes;

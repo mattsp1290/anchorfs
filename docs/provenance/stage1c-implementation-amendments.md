@@ -58,3 +58,21 @@ The stream owns one application chunk buffer, one pending incoming body frame,
 the running hasher and bounded manifest descriptors. Incoming transport frames
 are not rebuffered as a whole file; their allocation is owned by the body
 transport. This qualifies the plan's one-chunk memory shorthand explicitly.
+
+## D-C4 — Concurrent-history verification under destructive mutations
+
+BY20 combines overwrite, truncate and unlink/recreate with a requirement that
+acknowledged writes appear exactly once in final bytes. A later successful
+truncate or overwrite can intentionally remove an earlier acknowledged payload;
+an unlink/recreate can replace its inode. The executable oracle therefore checks
+every acknowledged write exactly once in its immutable publication manifest,
+then replays all committed byte mutations by inode generation into an independent
+dense model and compares each final inode byte-for-byte. Surviving markers must
+have exactly the model's final occurrences. This retains all eight tasks, the
+20-second run, three paths, two sessions, destructive mutations, parked same-key
+retries, receipt inspection, quota-pressure fencing, proxy delays, deadlock
+counter and final receipt/accounting/bucket checks. It clarifies the verification
+oracle; it does not change mutation behavior or permit acknowledged writes to
+vanish without a later committed mutation explaining their removal. Origin:
+independent reasoning from the approved mutation semantics and BY20 requirements.
+The fresh reviewers must assess this clarification with the test itself.

@@ -199,6 +199,26 @@ async fn by5_crash_is_durably_fenced_by_same_key_or_quota_pressure() {
         .await
         .unwrap();
         assert_eq!(state, ("staged".into(), true));
+        let object: Uuid = sqlx::query_scalar("SELECT id FROM objects WHERE workspace_id=$1")
+            .bind(f.workspace)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        let Backend::Minio {
+            endpoint,
+            deployment,
+            ..
+        } = &f.backend
+        else {
+            panic!("MinIO expected")
+        };
+        let raw = crate::common::minio::raw_client(endpoint).await;
+        assert_eq!(
+            crate::common::minio::raw_get(&raw, &format!("{deployment}/{}/{object}", f.workspace))
+                .await
+                .unwrap(),
+            b"lost"
+        );
         f.invariants().await;
         sqlx::query("UPDATE upload_reservations SET expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1").bind(f.workspace).execute(&f.pool).await.unwrap();
         if same_key {

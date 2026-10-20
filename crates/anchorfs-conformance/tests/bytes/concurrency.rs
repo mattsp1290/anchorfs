@@ -49,6 +49,27 @@ async fn by1c_overlapping_writers_preserve_unrelated_bytes_after_retry() {
     let a = open(&f, &f.worker, &f.worker_session, "f", true).await;
     let b = open(&f, &f.host, &f.host_session, "f", false).await;
     write(&f, &a, "seed", 0, b"abcdefghij").await.status(200);
+    f.client
+        .binary(
+            "PUT",
+            &format!("{}/bytes?offset=2", handle_path(&f, &b)),
+            Some(&f.host),
+            Some(&f.host_session),
+            Some("sequential-host"),
+            &[],
+            Body::from("12"),
+        )
+        .await
+        .status(200);
+    write(&f, &a, "sequential-worker", 3, b"3")
+        .await
+        .status(200);
+    assert_eq!(
+        read(&f, &a, 0, 4096, None).await.status(200).bytes,
+        b"ab13efghij".as_slice()
+    );
+    f.invariants().await;
+    write(&f, &a, "reset", 0, b"abcdefghij").await.status(200);
     let (faults, release) = GateFault::new(FaultPoint::BeforePublish, 1);
     let first = put_task(&f, client_with(&f, faults.clone()), &a, "first", 2, b"AAAA");
     faults.wait().await;

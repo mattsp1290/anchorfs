@@ -5,6 +5,10 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+/// Marks our envelope so middleware can normalize framework rejections without
+/// discarding an API error's specific code or receipt identity.
+#[derive(Clone, Copy)]
+pub(crate) struct StructuredError;
 #[derive(Debug)]
 pub struct ApiError {
     pub code: ErrorCode,
@@ -46,6 +50,7 @@ impl IntoResponse for ApiError {
             }),
         )
             .into_response();
+        response.extensions_mut().insert(StructuredError);
         if unauthenticated {
             response.headers_mut().insert(
                 axum::http::header::WWW_AUTHENTICATE,
