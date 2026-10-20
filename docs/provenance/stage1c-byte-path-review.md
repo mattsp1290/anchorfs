@@ -493,3 +493,55 @@ is replaced, and the old manifest stays intact. No large-file throughput
 benchmark is claimed. Deployment quota updates retain a singleton row lock;
 BY19a's observed two-file wall time is not a contention/scale guarantee. Model
 and fixture timings above are local measurements, not operational SLOs.
+
+
+<!-- independent-review-history:start -->
+## Standard review and fixes (2026-10-20)
+
+The requested canonical dotfiles review gauntlet began from clean HEAD
+19f643f65720596f044c1f0bc35139aec53f9c5c on feat/stage1c-byte-path, base main.
+Origin was fetched and matched local main; push preflight returned READY with
+repo scope and ADMIN permission. The branch had no upstream and no PR existed.
+The exact review directory is
+`reviews/feat-stage1c-byte-path-2026-10-20-125826-19f643f65720`.
+
+Two fresh reviewers received the full 99-file snapshots/diff/history and an
+explicit approved-input packet, with normative plan decisions and cleanroom
+checklist. Prior independent review conclusions, research archives and prohibited
+sources were excluded. Both confirmed complete changed-file coverage and
+independently passed the 48-test byte suite. Publication Correctness returned
+REQUEST_CHANGES (0 Critical, 1 Important, 0 Suggestions); Boundary Maintainability
+returned APPROVE (0 Critical, 0 Important, 1 Suggestion). Both separately returned
+no blocking provenance findings, with no legal clearance claim. The canonical
+skill-requested Opus model is unavailable in this runtime: these are explicitly
+disclosed available-model reviews, with fresh contexts, not Opus reviews.
+
+PC-1 reproduced write/replace publication after the reservation expired during
+a later quota lock wait. The canonical fixer manual pass added the shared
+reservations::assert_unexpired database-clock helper after final waits and before
+COMMIT in both upload publication paths. Finalization remains expiry-independent.
+The new disposable quota-lock regression failed before the production fix (200
+instead of 409), then passed for positional write, append and replacement,
+including failed receipt/reservation, old bytes/generation, zero staging and
+charged orphan checks with SQL/deployment/bucket reconciliation. S1 clarified
+stale implementation-status prose while preserving workflow/collection/restore
+and provider/durability deferrals. No dependency or imported baseline changed.
+
+The first canonical fix-review --auto pass flagged both items for manual
+handling under its auth/security-pattern guardrail (fixed:0, skipped:0,
+needs-manual:2) and stopped before commit/push. The canonical manual-fixer pass
+reviewed and applied both scoped items under the existing implementation request.
+The repeated exact-directory automatic audit found both already resolved
+(fixed:0, skipped:2, needs-manual:0). No security edits were made in auto mode;
+research-cache access was excluded by the repository's cleanroom instructions.
+Original reviewer verdicts remain tied to their reviewed SHA; the PC-1 author's
+fix recheck is separate and is not a fresh independent review.
+
+The PC-1 author's labeled recheck confirmed resolution, independently passed
+the focused three-mode test, found no new issue and reported no blocking
+provenance findings. It is a recheck of the author's own finding, not a new
+fresh-context review. Stage 1 gates passed: 273 workspace tests (49 byte tests),
+workspace build, clippy with warnings denied, formatting, deny licenses/bans/
+advisories/sources, diff checks and all seven unchanged imported hashes. The
+first push and second pinned-rubric review remain pending at this record point.
+<!-- independent-review-history:end -->

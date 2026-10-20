@@ -286,6 +286,7 @@ impl Replacer<'_> {
             return Err(ApiError::new(ErrorCode::OperationFailed, ""));
         }
         self.context.check(&mut tx, &p).await?;
+        reservations::assert_unexpired(&mut tx, &reservation).await?;
         match tx.commit().await {
             Ok(()) => Ok(Published::Done(Answer::metadata(result)?)),
             Err(error) if !common::commit_outcome_unknown(&error) => Err(error.into()),

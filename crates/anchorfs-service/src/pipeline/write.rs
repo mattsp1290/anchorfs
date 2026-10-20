@@ -446,6 +446,7 @@ impl Writer<'_> {
         }
         ctx.check(&mut tx, &p).await?;
         handles::assert_live(&mut tx, &handle).await?;
+        reservations::assert_unexpired(&mut tx, &reservation).await?;
         match tx.commit().await {
             Ok(()) => Ok(Publication::Written(Answer::metadata(result)?)),
             Err(error) if !common::commit_outcome_unknown(&error) => Err(error.into()),

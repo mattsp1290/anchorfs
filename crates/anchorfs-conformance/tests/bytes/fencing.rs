@@ -1,6 +1,92 @@
 use super::support::*;
 
 #[tokio::test]
+async fn by9_reservation_expiry_during_quota_wait_fences_every_upload_publication() {
+    for mode in ["write", "append", "replace"] {
+        let (faults, release) = GateFault::new(FaultPoint::BeforePublish, 1);
+        let f = Fixture::with_bytes(workspace_body(), configure, faults.clone(), false).await;
+        let handle = open(&f, &f.worker, &f.worker_session, "f", true).await;
+        let client = Client {
+            app: f.client.app.clone(),
+        };
+        let actor = f.worker.clone();
+        let session = f.worker_session.clone();
+        let path = match mode {
+            "write" => format!("{}/bytes?offset=0", handle_path(&f, &handle)),
+            "append" => format!("{}/append", handle_path(&f, &handle)),
+            _ => format!("{}/files?path=f&expected_generation=1", f.workspace_path()),
+        };
+        let pending = tokio::spawn(async move {
+            let digest = anchorfs_core::sha256(b"late").to_string();
+            let headers = if mode == "replace" {
+                vec![
+                    ("Content-Length", "4"),
+                    ("X-Anchorfs-Content-SHA256", digest.as_str()),
+                ]
+            } else {
+                vec![]
+            };
+            client
+                .binary(
+                    if mode == "append" { "POST" } else { "PUT" },
+                    &path,
+                    Some(&actor),
+                    Some(&session),
+                    Some("late"),
+                    &headers,
+                    Body::from("late"),
+                )
+                .await
+        });
+        faults.wait().await;
+        let expiry: time::OffsetDateTime = sqlx::query_scalar(
+            "UPDATE upload_reservations SET expires_at=clock_timestamp()+interval '2 seconds' WHERE workspace_id=$1 AND state='active' RETURNING expires_at"
+        ).bind(f.workspace).fetch_one(&f.pool).await.unwrap();
+        let mut quota_lock = f.pool.begin().await.unwrap();
+        sqlx::query("SELECT workspace_id FROM workspace_quotas WHERE workspace_id=$1 FOR UPDATE")
+            .bind(f.workspace)
+            .execute(&mut *quota_lock)
+            .await
+            .unwrap();
+        release.send(true).unwrap();
+        // This statement is reached after lock_active and consume. The clock
+        // must still be checked after this later lock wait, before COMMIT.
+        wait_for_lock(&f.pool, "UPDATE workspace_quotas").await;
+        wait_until_expired(&f.pool, expiry).await;
+        quota_lock.rollback().await.unwrap();
+        let failed = error(pending.await.unwrap(), 409, "fenced");
+        assert_eq!(failed["message"], "reservation_expired");
+        let old = read(&f, &handle, 0, 4096, None).await.status(200);
+        assert!(old.bytes.is_empty());
+        assert_eq!(old.headers["X-Anchorfs-Generation"], "1");
+        let receipt = f
+            .client
+            .call(
+                "GET",
+                &format!(
+                    "{}/operations/{}",
+                    f.workspace_path(),
+                    failed["operation_id"].as_str().unwrap()
+                ),
+                Some(&f.host),
+                None,
+                None,
+                None,
+            )
+            .await
+            .status(200)
+            .body;
+        assert_eq!(receipt["state"], "failed");
+        assert_eq!(receipt["result"]["code"], "reservation_expired");
+        let charges: (String, i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT r.state,q.physical_bytes_used,q.staging_bytes_reserved,(SELECT count(*) FROM deletion_candidates WHERE workspace_id=$1),(SELECT count(*) FROM manifests WHERE workspace_id=$1) FROM upload_reservations r JOIN workspace_quotas q USING(workspace_id) WHERE r.workspace_id=$1"
+        ).bind(f.workspace).fetch_one(&f.pool).await.unwrap();
+        assert_eq!(charges, ("failed".into(), 4, 0, 1, 1), "{mode}");
+        f.invariants().await;
+    }
+}
+
+#[tokio::test]
 async fn by3b_expired_byte_receipts_fence_sessions_but_failed_receipts_do_not() {
     for failed in [false, true] {
         let f = Fixture::with_bytes(workspace_body(), configure, Arc::new(NoFaults), false).await;

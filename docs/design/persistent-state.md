@@ -1,6 +1,6 @@
 # Persistent state ownership
 
-Schema contract version 1. [Migrations](../../crates/anchorfs-persistence/migrations/) define the database constraints. Inputs are approved specs 02, 03, 04 and 07 and the independently selected Stage 0 plan. Stage 0 recorded conceptual transactions. Stage 1a implements the control-plane transactions annotated below; lease, byte publication, quota accounting and storage recovery remain conceptual. Schema coverage alone proves only structural constraints.
+Schema contract version 1. [Migrations](../../crates/anchorfs-persistence/migrations/) define the database constraints. Inputs are approved specs 02, 03, 04 and 07 and the independently selected Stage 0 plan. Stage 0 recorded conceptual transactions. Stage 1a implements control-plane transactions, Stage 1b namespace transactions, and Stage 1c byte publication plus logical/staging/physical quota accounting, as annotated below. Workflow lease routes, object reclamation and isolated storage restore remain deferred. Schema coverage alone proves structural constraints; the named executable tests supply behavioral evidence.
 
 Deployment-scope createWorkspace, createCredential, rotateCredential, revokeCredential and createSession use admin_operations receipts. All session-bound workspace mutations use operations. Both bind a request digest and credential epoch; workspace operations additionally bind session and workspace epochs. A receipt permits outcome retrieval, never new authority.
 
@@ -8,7 +8,7 @@ The issuer FK on credentials.id is the documented exception to composite tenant 
 
 ## Column ownership
 
-SQL type/nullability/checks below are structural invariants; the semantic invariant in each row is a future transaction obligation. Coverage checks enforce an exact table.column set, not the correctness of future recovery logic.
+SQL type/nullability/checks below are structural invariants; semantic invariants are enforced by the annotated implemented owners or remain obligations of the explicitly deferred transactions. Coverage checks enforce an exact table.column set, not behavioral correctness; see the [byte acceptance map](../provenance/stage1c-byte-path-acceptance.md) for executable evidence.
 
 ## schema_meta
 

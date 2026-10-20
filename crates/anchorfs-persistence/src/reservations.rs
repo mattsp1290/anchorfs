@@ -87,15 +87,24 @@ async fn locked(
         return Err(ReservationError::NotActive);
     }
     if check_expiry {
-        let expired: bool = sqlx::query_scalar("SELECT $1::timestamptz <= clock_timestamp()")
-            .bind(row.expires_at)
-            .fetch_one(&mut **tx)
-            .await?;
-        if expired {
-            return Err(ReservationError::Expired);
-        }
+        assert_unexpired(tx, &row).await?;
     }
     Ok(row)
+}
+/// The caller holds the reservation lock. Recheck its captured lifetime after
+/// publication's later waits, even if this transaction has marked it consumed.
+pub async fn assert_unexpired(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &ReservationRow,
+) -> Result<(), ReservationError> {
+    let live: bool = sqlx::query_scalar("SELECT $1::timestamptz > clock_timestamp()")
+        .bind(row.expires_at)
+        .fetch_one(&mut **tx)
+        .await?;
+    if !live {
+        return Err(ReservationError::Expired);
+    }
+    Ok(())
 }
 pub async fn lock_active(
     tx: &mut Transaction<'_, Postgres>,
