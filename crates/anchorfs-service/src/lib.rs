@@ -15,3 +15,4 @@ pub mod receipt;
 pub mod bootstrap;
 
 pub mod cursor;
+pub mod pipeline;

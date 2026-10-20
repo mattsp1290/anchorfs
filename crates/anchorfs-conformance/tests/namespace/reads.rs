@@ -235,6 +235,8 @@ async fn ns8_cursor_expiry_workspace_and_key_scope() {
             config: Arc::new(config),
             backend: f.backend.clone(),
             probe_cache: Default::default(),
+            data_permits: Arc::new(tokio::sync::Semaphore::new(6)),
+            faults: Arc::new(anchorfs_service::pipeline::faults::NoFaults),
             control_permits: Arc::new(tokio::sync::Semaphore::new(2)),
         }),
     };

@@ -18,6 +18,7 @@ SQL type/nullability/checks below are structural invariants; the semantic invari
 | schema_meta.schema_version | deployment_initialize / restore | `integer NOT NULL`; one deployment owns the database and prefix; versions must match binary | B12 | reject identity/version mismatch before serving |
 | schema_meta.object_format_version | deployment_initialize / restore | `integer NOT NULL`; one deployment owns the database and prefix; versions must match binary | B12 | reject identity/version mismatch before serving |
 | schema_meta.deployment_id | deployment_initialize / restore | `text NOT NULL CHECK (deployment_id ~ '^[a-z0-9-]{1,64}$')`; one deployment owns the database and prefix; versions must match binary | B12 | reject identity/version mismatch before serving |
+| schema_meta.chunk_size | deployment_initialize | `integer NOT NULL`; fixed per deployment; startup refuses differing configuration | B12 | compare before serving |
 | schema_meta.created_at | deployment_initialize / restore | `timestamptz NOT NULL`; one deployment owns the database and prefix; versions must match binary | B12 | reject identity/version mismatch before serving |
 
 ## deployment_quotas
@@ -181,6 +182,7 @@ SQL type/nullability/checks below are structural invariants; the semantic invari
 | manifests.size | write_commit / truncate_commit / offline_collect | `bigint NOT NULL CHECK (size>=0)`; immutable published description belongs to one inode; every referenced object persisted before commit | B2, B4, B13 | serve only complete committed manifest; preserve recovery-set reachability before offline collection |
 | manifests.chunk_size | write_commit / truncate_commit / offline_collect | `integer NOT NULL CHECK (chunk_size>0)`; immutable published description belongs to one inode; every referenced object persisted before commit | B2, B4, B13 | serve only complete committed manifest; preserve recovery-set reachability before offline collection |
 | manifests.created_by_operation_id | write_commit / truncate_commit / offline_collect | `uuid NOT NULL`; immutable published description belongs to one inode; every referenced object persisted before commit | B2, B4, B13 | serve only complete committed manifest; preserve recovery-set reachability before offline collection |
+| manifests.generation | write_commit / truncate_commit / replace_commit / handle_open (publication implementation pending) | `bigint NOT NULL CHECK (generation >= 1)`; inode generation at publication; <= inodes.generation | B4, B13 | immutable generation of content |
 | manifests.created_at | write_commit / truncate_commit / offline_collect | `timestamptz NOT NULL`; immutable published description belongs to one inode; every referenced object persisted before commit | B2, B4, B13 | serve only complete committed manifest; preserve recovery-set reachability before offline collection |
 
 ## manifest_chunks

@@ -78,17 +78,7 @@ async fn serve() -> Result<(), (i32, String)> {
             .map_err(|_| (2, "listener address unavailable".into()))?
     );
     let drain = config.shutdown_drain;
-    let state = AppState {
-        cursor_key: anchorfs_core::decode_hex_32(config.cursor_signing_key.expose())
-            .expect("validated cursor signing key"),
-        control_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(
-            config.db_max_connections.saturating_sub(2).max(1) as usize,
-        )),
-        pool: pool.clone(),
-        backend: std::sync::Arc::new(backend),
-        probe_cache: Default::default(),
-        config: config.shared(),
-    };
+    let state = AppState::production(config, pool.clone(), std::sync::Arc::new(backend));
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     let server = axum::serve(listener, build_router(state)).with_graceful_shutdown(async {
         let _ = stop_rx.await;
@@ -148,9 +138,14 @@ async fn initialize_metadata(config: &Config) -> Result<pool::PgPool, (i32, Stri
     migrate::apply(&pool)
         .await
         .map_err(|_| (2, "database migration failed".into()))?;
-    meta::initialize(&pool, &config.deployment_id, &config.quota_config())
-        .await
-        .map_err(|err| (6, err.to_string()))?;
+    meta::initialize(
+        &pool,
+        &config.deployment_id,
+        &config.quota_config(),
+        config.chunk_size,
+    )
+    .await
+    .map_err(|err| (6, err.to_string()))?;
     let versions = meta::read_versions(&pool)
         .await
         .map_err(|_| (5, "schema versions unavailable".into()))?;

@@ -73,6 +73,7 @@ impl Database {
             &db.pool,
             &DeploymentId::parse("test-deployment").unwrap(),
             &quotas(),
+            anchorfs_core::Limits::default().chunk_size,
         )
         .await
         .unwrap();
@@ -147,7 +148,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
     ] {
         sqlx::query("INSERT INTO inodes(workspace_id,id,kind,mode,uid,gid,atime,mtime,ctime,current_manifest_id) VALUES ($1,$2,$3,493,1000,1000,now(),now(),now(),$4)").bind(f.workspace).bind(id).bind(kind).bind(current).execute(&mut *tx).await.unwrap();
     }
-    sqlx::query("INSERT INTO manifests(workspace_id,id,inode_id,size,chunk_size,created_by_operation_id,created_at) VALUES ($1,$2,$3,4,4096,$4,now())").bind(f.workspace).bind(f.manifest).bind(f.file).bind(operation).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO manifests(workspace_id,id,inode_id,size,chunk_size,created_by_operation_id,created_at,generation) VALUES ($1,$2,$3,4,4096,$4,now(),1)").bind(f.workspace).bind(f.manifest).bind(f.file).bind(operation).execute(&mut *tx).await.unwrap();
     sqlx::query("INSERT INTO manifest_chunks(workspace_id,manifest_id,chunk_index,chunk_size,object_id,sha256,logical_length) VALUES ($1,$2,0,4096,$3,decode(repeat('ab',32),'hex'),4)").bind(f.workspace).bind(f.manifest).bind(object).execute(&mut *tx).await.unwrap();
     sqlx::query("INSERT INTO directory_entries(workspace_id,parent_inode_id,name,inode_id) VALUES ($1,$2,'ok',$3)").bind(f.workspace).bind(root).bind(f.file).execute(&mut *tx).await.unwrap();
     sqlx::query("INSERT INTO handles(workspace_id,id,inode_id,client_session_id,credential_id,access_read,access_write,opened_at,expires_at) VALUES ($1,$2,$3,$4,$5,true,true,now(),now()+interval '1 hour')").bind(f.workspace).bind(Uuid::new_v4()).bind(f.file).bind(f.session).bind(f.host).execute(&mut *tx).await.unwrap();
@@ -182,6 +183,7 @@ async fn migrations_apply_revert_reapply() {
         &db.pool,
         &DeploymentId::parse("test-deployment").unwrap(),
         &quotas(),
+        anchorfs_core::Limits::default().chunk_size,
     )
     .await
     .unwrap();
@@ -209,9 +211,14 @@ async fn migrations_apply_revert_reapply() {
     }
     migrate::apply(&db.pool).await.unwrap();
     let deployment = DeploymentId::parse("test-deployment").unwrap();
-    meta::initialize(&db.pool, &deployment, &quotas())
-        .await
-        .unwrap();
+    meta::initialize(
+        &db.pool,
+        &deployment,
+        &quotas(),
+        anchorfs_core::Limits::default().chunk_size,
+    )
+    .await
+    .unwrap();
     assert_tables(&db.pool).await;
     let versions = meta::read_versions(&db.pool).await.unwrap();
     assert_eq!(
@@ -238,7 +245,8 @@ async fn migrations_apply_revert_reapply() {
         meta::initialize(
             &db.pool,
             &DeploymentId::parse("another").unwrap(),
-            &quotas()
+            &quotas(),
+            anchorfs_core::Limits::default().chunk_size,
         )
         .await,
         Err(meta::Error::DeploymentMismatch { .. })
@@ -250,6 +258,7 @@ async fn migrations_apply_revert_reapply() {
             physical_bytes_limit: 2,
             staging_bytes_limit: 3,
         },
+        anchorfs_core::Limits::default().chunk_size,
     )
     .await
     .unwrap();

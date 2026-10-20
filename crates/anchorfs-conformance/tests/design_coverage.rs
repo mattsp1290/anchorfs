@@ -58,7 +58,7 @@ async fn persistent_state_covers_every_column() {
         .lines()
         .map(str::to_owned)
         .collect();
-    assert_eq!(actual.len(), 153);
+    assert_eq!(actual.len(), 155);
     let doc = fs::read_to_string(root().join("docs/design/persistent-state.md")).unwrap();
     let mut table = "";
     let mut documented = BTreeSet::new();

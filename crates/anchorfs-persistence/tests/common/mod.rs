@@ -45,6 +45,7 @@ impl Database {
             &db.pool,
             &DeploymentId::parse("test-deployment").unwrap(),
             &quotas(),
+            anchorfs_core::Limits::default().chunk_size,
         )
         .await
         .unwrap();

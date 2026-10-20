@@ -21,6 +21,12 @@ pub struct Config {
     pub shutdown_drain: Duration,
     pub max_request_bytes: usize,
     pub max_replace_bytes: usize,
+    pub chunk_size: u32,
+    pub max_data_ops: u32,
+    pub upload_reservation_ttl: Duration,
+    pub read_pin_ttl: Duration,
+    pub max_read_pins_per_session: u32,
+    pub max_retry_attempts: u32,
     pub handle_ttl: Duration,
     pub max_handles_per_session: u32,
     pub cursor_ttl: Duration,
@@ -78,6 +84,12 @@ impl Config {
             shutdown_drain: timers.shutdown_drain,
             max_request_bytes: limits.max_api_write as usize,
             max_replace_bytes: limits.max_replace_bytes as usize,
+            chunk_size: limits.chunk_size,
+            max_data_ops: 6,
+            upload_reservation_ttl: timers.upload_reservation_ttl,
+            read_pin_ttl: timers.read_pin_ttl,
+            max_read_pins_per_session: limits.max_read_pins_per_session,
+            max_retry_attempts: limits.max_retry_attempts,
             handle_ttl: timers.handle_ttl,
             max_handles_per_session: limits.max_handles_per_session,
             cursor_ttl: timers.cursor_ttl,
@@ -166,6 +178,21 @@ impl Config {
         )?);
         c.max_request_bytes = parse("MAX_REQUEST_BYTES", c.max_request_bytes)?;
         c.max_replace_bytes = parse("MAX_REPLACE_BYTES", c.max_replace_bytes)?;
+        c.chunk_size = parse("CHUNK_SIZE", c.chunk_size)?;
+        c.max_data_ops = parse(
+            "MAX_DATA_OPS",
+            c.db_max_connections.saturating_sub(2).max(1),
+        )?;
+        c.upload_reservation_ttl = Duration::from_millis(parse(
+            "UPLOAD_RESERVATION_TTL_MS",
+            c.upload_reservation_ttl.as_millis() as u64,
+        )?);
+        c.read_pin_ttl =
+            Duration::from_millis(parse("READ_PIN_TTL_MS", c.read_pin_ttl.as_millis() as u64)?);
+        c.max_read_pins_per_session =
+            parse("MAX_READ_PINS_PER_SESSION", c.max_read_pins_per_session)?;
+        c.max_retry_attempts = parse("MAX_RETRY_ATTEMPTS", c.max_retry_attempts)?;
+        c.validate_byte_path()?;
         c.deployment_physical_bytes_limit = parse(
             "DEPLOYMENT_PHYSICAL_BYTES_LIMIT",
             c.deployment_physical_bytes_limit,
@@ -186,8 +213,6 @@ impl Config {
             || c.data_call_deadline.is_zero()
             || c.max_request_bytes == 0
             || c.max_replace_bytes == 0
-            || c.max_request_bytes > Limits::default().chunk_size as usize
-            || c.max_replace_bytes > Limits::default().max_file_size as usize
             || c.deployment_physical_bytes_limit <= 0
             || c.deployment_staging_bytes_limit <= 0
         {
@@ -263,6 +288,8 @@ impl Config {
             _ => return Err(invalid("DURABILITY_PROFILE")),
         };
         c.db_max_connections = parse("DB_MAX_CONNECTIONS", c.db_max_connections)?;
+        c.chunk_size = parse("CHUNK_SIZE", c.chunk_size)?;
+        c.validate_chunk_size()?;
         c.deployment_physical_bytes_limit = parse(
             "DEPLOYMENT_PHYSICAL_BYTES_LIMIT",
             c.deployment_physical_bytes_limit,
@@ -285,6 +312,39 @@ impl Config {
             max_connections: self.db_max_connections,
             acquire_timeout: Duration::from_secs(2),
         }
+    }
+    fn validate_chunk_size(&self) -> Result<(), ConfigError> {
+        if !(4096..=Limits::default().chunk_size).contains(&self.chunk_size) {
+            return Err(invalid("CHUNK_SIZE"));
+        }
+        Ok(())
+    }
+    fn validate_byte_path(&self) -> Result<(), ConfigError> {
+        self.validate_chunk_size()?;
+        let limits = Limits {
+            chunk_size: self.chunk_size,
+            ..Limits::default()
+        };
+        let geometry = anchorfs_core::ChunkGeometry::from_limits(&limits);
+        let minimum_ttl = self
+            .db_lock_timeout
+            .checked_mul(10)
+            .and_then(|locks| locks.checked_add(self.data_call_deadline))
+            .and_then(|time| time.checked_add(self.pool_config().acquire_timeout))
+            .ok_or_else(|| invalid("UPLOAD_RESERVATION_TTL_MS"))?;
+        if self.max_request_bytes > self.chunk_size as usize
+            || self.max_replace_bytes as u64 > geometry.max_file_size
+            || self.max_data_ops == 0
+            || self.max_data_ops > self.db_max_connections.saturating_sub(2).max(1)
+            || self.upload_reservation_ttl <= minimum_ttl
+            || self.upload_reservation_ttl >= self.receipt_retention
+            || self.read_pin_ttl.is_zero()
+            || self.max_read_pins_per_session == 0
+            || self.max_retry_attempts == 0
+        {
+            return Err(invalid("BYTE_PATH_LIMITS"));
+        }
+        Ok(())
     }
     pub fn quota_config(&self) -> DeploymentQuotaConfig {
         DeploymentQuotaConfig {

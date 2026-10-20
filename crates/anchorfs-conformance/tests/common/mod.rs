@@ -48,6 +48,7 @@ pub async fn database(settings: &[&str]) -> (ContainerAsync<Postgres>, PgPool, S
             physical_bytes_limit: 1 << 40,
             staging_bytes_limit: 1 << 30,
         },
+        anchorfs_core::Limits::default().chunk_size,
     )
     .await
     .unwrap();
@@ -86,6 +87,8 @@ pub fn state_with(pool: PgPool, s3: anchorfs_backend::config::S3Config) -> AppSt
         pool,
         backend: Arc::new(anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap()),
         probe_cache: Default::default(),
+        data_permits: Arc::new(tokio::sync::Semaphore::new(6)),
+        faults: Arc::new(anchorfs_service::pipeline::faults::NoFaults),
         config: Arc::new(config),
     }
 }
@@ -105,6 +108,8 @@ pub fn state_fake(pool: PgPool) -> (AppState, Arc<fake_backend::FakeBackend>) {
         config: Arc::new(Config::contract_defaults()),
         backend: backend.clone(),
         probe_cache: Default::default(),
+        data_permits: Arc::new(tokio::sync::Semaphore::new(6)),
+        faults: Arc::new(anchorfs_service::pipeline::faults::NoFaults),
         control_permits: Arc::new(tokio::sync::Semaphore::new(2)),
     };
     (state, backend)

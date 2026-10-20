@@ -7,10 +7,34 @@ pub type ProbeCache = Arc<tokio::sync::Mutex<Option<(std::time::Instant, Result<
 pub struct AppState {
     pub cursor_key: [u8; 32],
     pub control_permits: Arc<tokio::sync::Semaphore>,
+    pub data_permits: Arc<tokio::sync::Semaphore>,
+    pub faults: Arc<dyn crate::pipeline::faults::FaultInjector>,
     pub pool: anchorfs_persistence::pool::PgPool,
     pub config: Arc<Config>,
     pub backend: Arc<dyn anchorfs_backend::traits::ObjectBackend>,
     pub probe_cache: ProbeCache,
+}
+
+impl AppState {
+    pub fn production(
+        config: Config,
+        pool: anchorfs_persistence::pool::PgPool,
+        backend: Arc<dyn anchorfs_backend::traits::ObjectBackend>,
+    ) -> Self {
+        Self {
+            cursor_key: anchorfs_core::decode_hex_32(config.cursor_signing_key.expose())
+                .expect("validated cursor signing key"),
+            control_permits: Arc::new(tokio::sync::Semaphore::new(
+                config.db_max_connections.saturating_sub(2).max(1) as usize,
+            )),
+            data_permits: Arc::new(tokio::sync::Semaphore::new(config.max_data_ops as usize)),
+            faults: Arc::new(crate::pipeline::faults::NoFaults),
+            pool,
+            config: config.shared(),
+            backend,
+            probe_cache: Default::default(),
+        }
+    }
 }
 
 /// Policies belong to the route groups, independently of URL spelling or handler order.
@@ -153,6 +177,36 @@ pub fn build_router(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn production_state_installs_no_faults() {
+        use crate::pipeline::faults::{FaultAction, FaultPoint};
+        let mut config = Config::contract_defaults();
+        config.max_data_ops = 3;
+        let backend = Arc::new(anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap());
+        let pool = anchorfs_persistence::pool::PgPool::connect_lazy(
+            "postgres://unused:unused@127.0.0.1:1/unused",
+        )
+        .unwrap();
+        let state = AppState::production(config, pool, backend);
+        assert_eq!(state.data_permits.available_permits(), 3);
+        for point in [
+            FaultPoint::AfterPeek,
+            FaultPoint::BeforeGet,
+            FaultPoint::BeforeReserve,
+            FaultPoint::AfterReserve,
+            FaultPoint::BeforeUpload,
+            FaultPoint::AfterUpload,
+            FaultPoint::BeforePublish,
+            FaultPoint::AfterPublish,
+            FaultPoint::BeforeFinalize,
+            FaultPoint::BeforeFollowUp,
+        ] {
+            assert!(matches!(
+                state.faults.at(point, None),
+                FaultAction::Continue
+            ));
+        }
+    }
     use super::*;
     use axum::{
         body::{Body, to_bytes},
@@ -188,6 +242,8 @@ mod tests {
                     anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap(),
                 ),
                 probe_cache: Default::default(),
+                data_permits: Arc::new(tokio::sync::Semaphore::new(6)),
+                faults: Arc::new(crate::pipeline::faults::NoFaults),
                 config: config.shared(),
             };
             let app = build_router(state);
