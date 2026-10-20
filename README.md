@@ -1,7 +1,7 @@
 # anchorfs
 durable state independent of compute
 
-AnchorFS is an independent Rust storage project for persistent workspaces shared by agent harnesses and replaceable tool workers. The service implements authenticated workspace/session control, transactional namespace metadata, file-byte operations and read pins against PostgreSQL and a locally verified S3 backend adapter. The route suite verifies 34 implemented operations; four workflow-lease routes remain stubs. Stage 1c local acceptance and review gates passed; hosted CI is pending and Linux mounts remain later work. See [Stage 1c evidence](docs/provenance/stage1c-byte-path-review.md).
+AnchorFS is an independent Rust storage project for persistent workspaces shared by agent harnesses and replaceable tool workers. The service implements authenticated workspace/session control, transactional namespace metadata, file-byte operations and read pins against PostgreSQL and a locally verified S3 backend adapter. The route suite verifies 34 implemented operations; four workflow-lease routes remain stubs. Stage 1c local acceptance, independent review and hosted Linux/macOS gates passed. Linux mounts remain later work. See [Stage 1c evidence](docs/provenance/stage1c-byte-path-review.md).
 
 Start with [the implementation documents](docs/README.md) and [cleanroom policy](docs/cleanroom.md).
 

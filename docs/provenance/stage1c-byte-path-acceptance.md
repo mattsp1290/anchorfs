@@ -52,4 +52,4 @@ once the synthetic corruption is restored and concurrent tasks have quiesced.
 
 This milestone does not prove Linux mounts, Spaces/AWS provider behavior,
 container/storage crash durability, collection, a sweeper or historical legal
-isolation. Reviewer and hosted-CI stages must be recorded after they return.
+isolation. Completed reviewer and hosted-CI results are recorded in the evidence record.

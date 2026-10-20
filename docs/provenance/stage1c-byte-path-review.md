@@ -1,12 +1,14 @@
-# Stage 1c byte path — implementation evidence (in progress)
+# Stage 1c byte path — implementation and verification evidence
 
-This record is incremental. Stage 1c is **not complete**. All eight planned
-byte/pin routes are connected, with 34 implemented routes and four workflow-lease
-stubs verified by the service sweep. The native byte path is exercised against
-disposable PostgreSQL/MinIO, with local acceptance, model and process-restart
-evidence mapped below. Both independent review stages and local fixer gates have passed; the final
-push, PR and hosted CI remain incomplete;
-no provider storage durability or Linux mount capability is claimed.
+Stage 1c implements all eight planned byte/pin routes plus truncate-on-open,
+with 34 implemented routes and four workflow-lease stubs verified by the service
+sweep. Local disposable PostgreSQL/MinIO acceptance, models, fault schedules and
+actual service-process restart passed. Both independent review stages returned,
+all findings were fixed and rechecked, both ordered commit/push checkpoints were
+verified, and the five hosted CI jobs passed at the reviewed implementation SHA.
+The dated sections retain earlier incomplete checkpoints as historical evidence.
+[The acceptance map](stage1c-byte-path-acceptance.md) connects the plan to execution.
+No provider storage durability or Linux mount capability is claimed.
 
 ## Approved inputs and origin
 
@@ -622,5 +624,43 @@ namespace, migration and persistence regressions all passed. `git diff --check`
 passed; all seven import hashes match and the protected baseline diff is empty.
 No production source changed after the author's seven-file fix recheck. The
 Stage 2 push and hosted-CI outcomes are recorded only after execution below.
+
+## Push checkpoints, PR and hosted CI
+
+Both checkpoints used base main without branch switching or force pushes.
+
+| Stage | Review directory | Original verdict / final fixer | Commit and push |
+|---|---|---|---|
+| Standard | `reviews/feat-stage1c-byte-path-2026-10-20-125826-19f643f65720` | Publication Correctness REQUEST_CHANGES (1 Important); Boundary Maintainability APPROVE (1 Suggestion). Both manually fixed; auto audit fixed:0 skipped:2 needs-manual:0. | `152e4169e0c9517f2de4de9cb7a79c57e4219bdc`; first push succeeded and remote SHA equaled local HEAD before Stage 2. |
+| Thermonuclear | `reviews/feat-stage1c-byte-path-2026-10-20-132211-152e4169e0c9-thermonuclear` | REQUEST_CHANGES (2 Important). Both manually fixed and author-rechecked; auto audit fixed:0 skipped:2 needs-manual:0. | `38d62c85e75e22f53d32def1f870f9d244b0ccb2`; regular push succeeded and remote SHA equaled local HEAD. |
+
+All three fresh reviewers separately reported no blocking provenance findings;
+original verdicts are preserved at their reviewed SHAs and fix rechecks are
+labeled. Review artifacts remain local/ignored under the normal repository
+convention. No review artifacts or unrelated drift were committed. Both stages
+passed fmt, clippy with warnings denied, workspace tests/build, deny, diff and
+unchanged imported-baseline checks; exact outcomes and model limitations are
+recorded above.
+
+The post-Stage-2 status was exactly
+`## feat/stage1c-byte-path...origin/feat/stage1c-byte-path`, with no changed or
+untracked nonignored paths. Local HEAD and `git ls-remote` both returned the full
+38d62c85e75e22f53d32def1f870f9d244b0ccb2 SHA.
+
+[PR #5](https://github.com/mattsp1290/anchorfs/pull/5) was opened against main
+after both push checkpoints. The actual
+[completed CI run 39468600244](https://github.com/mattsp1290/anchorfs/actions/runs/39468600244)
+reported success at that exact implementation SHA. All five jobs completed
+successfully: lint, deny, test (Ubuntu), build-linux-arm64 and build-macos.
+The Ubuntu job log independently confirms 274 passing tests, including all 49
+byte tests (74.17 seconds), the byte model (22.90 seconds), chunk property,
+actual SIGKILL/restart, changed-geometry refusal and config-bound tests. The
+one-test difference from 273 local macOS tests is the existing Linux-only
+`platform::linux::tests::rejects_relaxed_profile`; it does not demonstrate a
+mount implementation. macOS completed build, clippy, all-workspace test
+compilation, and core/backend/mount tests. The run URL was added only after
+GitHub reported the run and all five jobs completed successfully. This final
+records update changes documentation only; the final PR revision is verified
+separately before delivery.
 
 <!-- independent-review-history:end -->
