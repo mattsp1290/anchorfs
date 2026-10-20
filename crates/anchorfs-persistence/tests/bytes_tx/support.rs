@@ -124,7 +124,9 @@ pub async fn operation(
     .await
     .unwrap();
     match entry {
-        ReceiptEntry::Fresh(id) => id,
+        ReceiptEntry::Fresh {
+            operation_id: id, ..
+        } => id,
         _ => panic!("fresh operation expected"),
     }
 }

@@ -214,6 +214,7 @@ SQL type/nullability/checks below are structural invariants; the semantic invari
 | operations.idempotency_key | namespace_mutation / write_commit / truncate_commit / reconcile_uncertain (implemented: receipts (session_* operations only)) | `text NOT NULL CHECK (octet_length(idempotency_key) BETWEEN 1 AND 256)`; unique workspace/credential/key binds digest, owner, epochs and receipt | B1, B4, B5, B6, B11 | resolve durable receipt first; heartbeat takeover serializes and cannot duplicate publication |
 | operations.op_type | namespace_mutation / write_commit / truncate_commit / reconcile_uncertain (implemented: receipts (session_* operations only)) | `text NOT NULL`; unique workspace/credential/key binds digest, owner, epochs and receipt | B1, B4, B5, B6, B11 | resolve durable receipt first; heartbeat takeover serializes and cannot duplicate publication |
 | operations.request_digest | namespace_mutation / write_commit / truncate_commit / reconcile_uncertain (implemented: receipts (session_* operations only)) | `bytea NOT NULL CHECK (octet_length(request_digest)=32)`; unique workspace/credential/key binds digest, owner, epochs and receipt | B1, B4, B5, B6, B11 | resolve durable receipt first; heartbeat takeover serializes and cannot duplicate publication |
+| operations.expiry_fences_session | receipt_expire (implemented: receipts::tombstone) | `boolean NOT NULL DEFAULT false`; true only for tombstones of pending/committed receipts; durable B11 follow-up eligibility | B11 | retry session fencing after process death; failed receipts excluded |
 | operations.state | namespace_mutation / write_commit / truncate_commit / reconcile_uncertain / receipt_expire (implemented: receipts (session_* operations only)) | `text NOT NULL CHECK (state IN ('pending','committed','failed','indeterminate'))`; unique workspace/credential/key binds digest, owner, epochs and receipt | B1, B4, B5, B6, B11 | resolve durable receipt first; heartbeat takeover serializes and cannot duplicate publication |
 | operations.result | namespace_mutation / write_commit / truncate_commit / reconcile_uncertain / receipt_expire (implemented: receipts (session_* operations only)) | `jsonb`; unique workspace/credential/key binds digest, owner, epochs and receipt | B1, B4, B5, B6, B11 | resolve durable receipt first; heartbeat takeover serializes and cannot duplicate publication |
 | operations.created_at | namespace_mutation / write_commit / truncate_commit / reconcile_uncertain (implemented: receipts (session_* operations only)) | `timestamptz`; unique workspace/credential/key binds digest, owner, epochs and receipt | B1, B4, B5, B6, B11 | resolve durable receipt first; heartbeat takeover serializes and cannot duplicate publication |
@@ -323,6 +324,18 @@ expiry is deferred to the byte-path milestone: acquiring a session update lock
 after the receipt would invert the Stage 1a order and can deadlock against
 concurrent replays. No sweeper or receipt deletion is implemented.
 
+Stage 1c amendment, 2026-10-20 (W35): the deferred session fence is implemented.
+The tombstone transaction first fences expired pending reservations and clears
+the receipt result. A separate idempotent transaction locks the session FOR
+UPDATE, verifies the receipt's indeterminate state and durable
+expiry_fences_session flag, then revokes the session and increments its epoch
+once. Every subsequent encounter repeats eligibility and retries the follow-up.
+This supersedes the conceptual single-transaction revocation above; it preserves
+session-before-receipt ordering. Failed receipts persist false eligibility when
+tombstoned and never revoke their session. Administrative receipts have no
+session. Verified by expired_receipt_tombstone_then_session_fence_once and the
+HTTP crash/follow-up test; no sweeper is introduced.
+
 ### B12 — Isolated restore
 
 consistent metadata plus retained objects forms a recovery set; transient sessions, handles, read pins and upload reservations are invalidated. Clients may remember old successes/identities. Restore into an isolated database/prefix, explicitly remap/copy namespace identity, verify every referenced digest/length before writes, fence old identities and preserve recovery-set objects during collection. Required scenario: T15, T21.
@@ -389,3 +402,27 @@ rebind, and a blocked-minter regression verifies the MVCC interval.
 Namespace and handle transactions use this relative order: workspace FOR SHARE → actor credential FOR SHARE → actor session FOR SHARE → operations receipt → namespace_locks FOR UPDATE (entry mutations) → all affected inodes FOR UPDATE in a single ascending-id statement → directory_entries → workspace_quotas FOR UPDATE (charge changes) → handles FOR UPDATE → session-keyed advisory lock 7002 (open/renew admission). This resolves the Stage 1a reconciliation requirement and supersedes the Stage 0 quota-before-inode order for namespace and future byte transactions; the baseline text above remains historical.
 
 Reads and open-without-create do not take the namespace lock. Reads use committed, non-snapshot path walks. The inode lock serializes handle renewal against charge release. A persisted charge_released_at marker makes release idempotent and accounting independently checkable; the root inode is uncharged.
+
+## Stage 1c byte lock amendment — 2026-10-20
+
+The byte publication order is workspace FOR SHARE → actor credential FOR SHARE
+→ actor session FOR SHARE → operations FOR UPDATE → namespace_locks FOR UPDATE
+(entry operations only) → inodes FOR UPDATE in ascending order → handles (plain
+validation read; FOR UPDATE in close/renew) → upload_reservations FOR UPDATE
+→ manifests/chunks/objects/deletion_candidates → workspace_quotas FOR UPDATE
+→ deployment_quotas FOR UPDATE → read_pins → session-keyed advisory locks
+(7002 handles, 7003 pins). Admission inserts private reservation/object rows
+before charging quotas. Retry swaps release the old reservation before charging
+the new one within a savepoint; quota rows may be touched twice. Every
+transaction taking two or more of operations, reservations FOR UPDATE and quota
+rows locks the operation first. Replace's per-chunk stage transaction takes
+only its reservation FOR SHARE and inserts its private object row. Lazy fences
+act on operation identity without actor/session locks. B11 follow-ups take the
+session FOR UPDATE and then read their operation. No backend I/O may run in an
+open database transaction.
+
+The Stage 1b quota-before-handles wording above is corrected to the implemented
+inode → handle → quota order used by close. The Stage 0 deployment-quota-first
+placement is superseded. Namespace operations otherwise retain their relative
+order. The persistence primitives and handle blocking schedules are tested;
+service-level byte lock ordering and deadlock-oracle tests remain pending.

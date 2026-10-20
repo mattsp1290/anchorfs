@@ -38,7 +38,74 @@ impl Credential {
 pub struct Client {
     pub app: Router,
 }
+pub struct RawReply {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub bytes: bytes::Bytes,
+}
+impl RawReply {
+    pub fn status(self, expected: u16) -> Self {
+        assert_eq!(
+            self.status.as_u16(),
+            expected,
+            "{}",
+            String::from_utf8_lossy(&self.bytes)
+        );
+        self
+    }
+    pub fn json(&self) -> Value {
+        serde_json::from_slice(&self.bytes).unwrap()
+    }
+}
 impl Client {
+    /// Explicit wire controls keep streaming and framing tests on the real router.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn binary(
+        &self,
+        method: &str,
+        path: &str,
+        credential: Option<&Credential>,
+        session: Option<&Value>,
+        key: Option<&str>,
+        headers: &[(&str, &str)],
+        body: Body,
+    ) -> RawReply {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("Content-Type", "application/octet-stream");
+        if let Some(c) = credential {
+            request = request.header("Authorization", format!("Bearer {}.{}", c.id, c.secret));
+        }
+        if let Some(s) = session {
+            request = request
+                .header("X-Anchorfs-Session-Id", s["session_id"].as_str().unwrap())
+                .header(
+                    "X-Anchorfs-Session-Epoch",
+                    s["session_epoch"].as_i64().unwrap(),
+                );
+        }
+        if let Some(key) = key {
+            request = request.header("Idempotency-Key", key);
+        }
+        for &(name, value) in headers {
+            request = request.header(name, value);
+        }
+        let response = self
+            .app
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), 1 << 29).await.unwrap();
+        RawReply {
+            status,
+            headers,
+            bytes,
+        }
+    }
     pub async fn call(
         &self,
         method: &str,

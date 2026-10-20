@@ -1,4 +1,5 @@
 DROP INDEX read_pins_session_idx;
+ALTER TABLE operations DROP COLUMN expiry_fences_session;
 DROP INDEX upload_reservations_active_expiry_idx;
 DROP INDEX upload_reservations_operation_idx;
 DROP INDEX objects_reservation_idx;

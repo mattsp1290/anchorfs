@@ -1,7 +1,10 @@
 // SQL audit: interpolated identifiers/clauses come only from private enum/static choices.
 // All request data uses bind parameters.
-//! Receipts share their transaction with publication; no pending row is committed.
-use anchorfs_core::{CredentialId, OperationId, SessionId, WorkspaceId, random_token, sha256};
+//! Metadata receipts publish in one transaction; byte receipts retain a durable
+//! owner across upload transactions. Every terminal transition is conditional.
+use anchorfs_core::{
+    CredentialId, OperationId, Secret, SessionId, WorkspaceId, random_token, sha256,
+};
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 use std::time::Duration;
@@ -50,7 +53,17 @@ pub struct ReceiptRequest<'a> {
 }
 #[derive(Debug)]
 pub enum ReceiptEntry {
-    Fresh(OperationId),
+    Fresh {
+        operation_id: OperationId,
+        owner: Secret<String>,
+    },
+    Pending {
+        operation_id: OperationId,
+        reservation_overdue: bool,
+    },
+    Failed {
+        operation_id: OperationId,
+    },
     Replay {
         operation_id: OperationId,
         result: Value,
@@ -60,64 +73,191 @@ pub enum ReceiptEntry {
     },
     Expired {
         operation_id: OperationId,
+        tombstoned: Option<Tombstoned>,
     },
 }
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiptError {
     #[error("pending receipt owner")]
     PendingOwner,
+    #[error("operation owner no longer holds publication authority")]
+    NotOwner,
     #[error("database unavailable")]
     Database(#[from] sqlx::Error),
 }
-#[derive(sqlx::FromRow)]
-struct Stored {
-    id: uuid::Uuid,
-    request_digest: Vec<u8>,
-    state: String,
-    result: Option<Value>,
-    expires_at: OffsetDateTime,
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Stored {
+    pub id: uuid::Uuid,
+    pub credential_id: uuid::Uuid,
+    pub client_session_id: Option<uuid::Uuid>,
+    pub request_digest: Vec<u8>,
+    pub state: String,
+    pub result: Option<Value>,
+    pub expires_at: OffsetDateTime,
+    pub expiry_fences_session: bool,
+}
+#[derive(Debug, Clone)]
+pub struct Tombstoned {
+    pub operation_id: OperationId,
+    pub prior_state: String,
+    pub session: Option<SessionId>,
 }
 #[derive(Debug)]
 pub struct ReceiptView {
     pub operation_id: OperationId,
     pub state: String,
     pub result: Option<Value>,
+    pub tombstoned: Option<Tombstoned>,
 }
-
-async fn tombstone(
-    tx: &mut Transaction<'_, Postgres>,
-    table: &str,
-    row: &mut Stored,
-) -> Result<(), sqlx::Error> {
-    let expired: bool = sqlx::query_scalar("SELECT $1::timestamptz <= clock_timestamp()")
+fn columns(workspace: bool) -> &'static str {
+    if workspace {
+        "id,credential_id,client_session_id,request_digest,state,result,expires_at,expiry_fences_session"
+    } else {
+        "id,credential_id,NULL::uuid AS client_session_id,request_digest,state,result,expires_at,false AS expiry_fences_session"
+    }
+}
+async fn is_expired(tx: &mut Transaction<'_, Postgres>, row: &Stored) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar("SELECT $1::timestamptz <= clock_timestamp()")
         .bind(row.expires_at)
         .fetch_one(&mut **tx)
-        .await?;
-    if expired && row.state != "indeterminate" {
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "UPDATE {table} SET state='indeterminate', result=NULL WHERE id=$1"
-        )))
-        .bind(row.id)
-        .execute(&mut **tx)
-        .await?;
-        row.state = "indeterminate".into();
-        row.result = None;
+        .await
+}
+fn followup(row: &Stored, prior_state: &str) -> Tombstoned {
+    Tombstoned {
+        operation_id: OperationId(row.id),
+        prior_state: prior_state.into(),
+        session: if row.expiry_fences_session {
+            row.client_session_id.map(SessionId)
+        } else {
+            None
+        },
     }
-    Ok(())
+}
+async fn tombstone(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: Option<WorkspaceId>,
+    row: &mut Stored,
+) -> Result<Option<Tombstoned>, sqlx::Error> {
+    if row.state == "indeterminate" {
+        return Ok(Some(followup(row, "indeterminate")));
+    }
+    if !is_expired(tx, row).await? {
+        return Ok(None);
+    }
+    let prior_state = row.state.clone();
+    if let Some(w) = workspace {
+        if row.state == "pending" {
+            match fence_expired_pending(tx, w, OperationId(row.id)).await? {
+                FenceOutcome::Fenced => {
+                    row.state = "failed".into();
+                    row.result = Some(serde_json::json!({"code":"reservation_expired"}));
+                }
+                FenceOutcome::StillActive => {
+                    return Err(sqlx::Error::Protocol(
+                        "expired receipt has live reservation".into(),
+                    ));
+                }
+                FenceOutcome::AlreadyResolved(resolved) => *row = resolved,
+            }
+        }
+        let affected = sqlx::query("UPDATE operations SET state='indeterminate',result=NULL,expiry_fences_session=$4 WHERE workspace_id=$1 AND id=$2 AND state=$3")
+            .bind(w.0).bind(row.id).bind(&row.state)
+            .bind(matches!(prior_state.as_str(), "pending" | "committed"))
+            .execute(&mut **tx).await?.rows_affected();
+        if affected != 1 {
+            return Err(sqlx::Error::RowNotFound);
+        }
+        row.expiry_fences_session = matches!(prior_state.as_str(), "pending" | "committed");
+    } else {
+        let affected = sqlx::query("UPDATE admin_operations SET state='indeterminate',result=NULL WHERE id=$1 AND state=$2")
+            .bind(row.id).bind(&row.state).execute(&mut **tx).await?.rows_affected();
+        if affected != 1 {
+            return Err(sqlx::Error::RowNotFound);
+        }
+    }
+    row.state = "indeterminate".into();
+    row.result = None;
+    Ok(Some(followup(row, &prior_state)))
 }
 async fn existing(
     tx: &mut Transaction<'_, Postgres>,
     scope: ReceiptScope,
     key: &str,
+    share: bool,
 ) -> Result<Option<Stored>, sqlx::Error> {
-    // $3 always has an explicit type, even in the administrator table branch.
     let filter = if scope.workspace().is_some() {
         "workspace_id=$3"
     } else {
         "$3::uuid IS NULL"
     };
-    sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT id, request_digest, state, result, expires_at FROM {} WHERE credential_id=$1 AND idempotency_key=$2 AND {filter} FOR UPDATE", scope.table())))
-        .bind(scope.credential().0).bind(key).bind(scope.workspace()).fetch_optional(&mut **tx).await
+    let lock = if share { "FOR SHARE" } else { "FOR UPDATE" };
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {} FROM {} WHERE credential_id=$1 AND idempotency_key=$2 AND {filter} {lock}",
+        columns(scope.workspace().is_some()),
+        scope.table()
+    )))
+    .bind(scope.credential().0)
+    .bind(key)
+    .bind(scope.workspace())
+    .fetch_optional(&mut **tx)
+    .await
+}
+async fn reservation_overdue(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: Option<WorkspaceId>,
+    operation: OperationId,
+) -> Result<bool, sqlx::Error> {
+    let Some(w) = workspace else {
+        return Ok(true);
+    };
+    sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM upload_reservations WHERE workspace_id=$1 AND operation_id=$2 AND state='active' AND expires_at>clock_timestamp())")
+        .bind(w.0).bind(operation.0).fetch_one(&mut **tx).await
+}
+async fn classify(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: Option<WorkspaceId>,
+    row: Stored,
+    digest: &[u8; 32],
+    tombstoned: Option<Tombstoned>,
+) -> Result<ReceiptEntry, sqlx::Error> {
+    let operation_id = OperationId(row.id);
+    if row.request_digest != digest {
+        return Ok(ReceiptEntry::Mismatch { operation_id });
+    }
+    if row.state == "indeterminate" || is_expired(tx, &row).await? {
+        return Ok(ReceiptEntry::Expired {
+            operation_id,
+            tombstoned,
+        });
+    }
+    match (row.state.as_str(), row.result) {
+        ("committed", Some(result)) => Ok(ReceiptEntry::Replay {
+            operation_id,
+            result,
+        }),
+        ("failed", _) => Ok(ReceiptEntry::Failed { operation_id }),
+        ("pending", _) => Ok(ReceiptEntry::Pending {
+            operation_id,
+            reservation_overdue: reservation_overdue(tx, workspace, operation_id).await?,
+        }),
+        _ => Err(sqlx::Error::Protocol(
+            "invalid persisted receipt state".into(),
+        )),
+    }
+}
+/// Read-only receipt classification. End this transaction before taking any fence locks.
+pub async fn peek(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: ReceiptScope,
+    key: &str,
+    digest: [u8; 32],
+) -> Result<Option<ReceiptEntry>, sqlx::Error> {
+    let Some(row) = existing(tx, scope, key, true).await? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        classify(tx, scope.workspace().map(WorkspaceId), row, &digest, None).await?,
+    ))
 }
 async fn entry(
     tx: &mut Transaction<'_, Postgres>,
@@ -125,24 +265,26 @@ async fn entry(
     mut row: Stored,
     digest: &[u8; 32],
 ) -> Result<ReceiptEntry, sqlx::Error> {
-    let operation_id = OperationId(row.id);
     if row.request_digest != digest {
-        return Ok(ReceiptEntry::Mismatch { operation_id });
+        return Ok(ReceiptEntry::Mismatch {
+            operation_id: OperationId(row.id),
+        });
     }
-    tombstone(tx, scope.table(), &mut row).await?;
-    if row.state == "indeterminate" {
-        return Ok(ReceiptEntry::Expired { operation_id });
+    let workspace = scope.workspace().map(WorkspaceId);
+    let tombstoned = tombstone(tx, workspace, &mut row).await?;
+    if row.state == "pending"
+        && let Some(w) = workspace
+    {
+        match fence_expired_pending(tx, w, OperationId(row.id)).await? {
+            FenceOutcome::Fenced => {
+                row.state = "failed".into();
+                row.result = Some(serde_json::json!({"code":"reservation_expired"}));
+            }
+            FenceOutcome::AlreadyResolved(resolved) => row = resolved,
+            FenceOutcome::StillActive => (),
+        }
     }
-    match (row.state.as_str(), row.result) {
-        ("committed", Some(result)) => Ok(ReceiptEntry::Replay {
-            operation_id,
-            result,
-        }),
-        // A visible pending/failed row is outside this milestone's publication model.
-        _ => Err(sqlx::Error::Protocol(
-            "invalid persisted receipt state".into(),
-        )),
-    }
+    classify(tx, workspace, row, digest, tombstoned).await
 }
 
 /// Bound only the insertion wait; restore the job's general lock timeout afterwards.
@@ -151,7 +293,7 @@ pub async fn begin(
     scope: ReceiptScope,
     request: ReceiptRequest<'_>,
 ) -> Result<ReceiptEntry, ReceiptError> {
-    if let Some(row) = existing(tx, scope, request.key).await? {
+    if let Some(row) = existing(tx, scope, request.key, false).await? {
         return Ok(entry(tx, scope, row, &request.digest).await?);
     }
     let previous: String = sqlx::query_scalar("SHOW lock_timeout")
@@ -163,7 +305,8 @@ pub async fn begin(
         .execute(&mut **tx)
         .await?;
     let id = OperationId::new();
-    let token = sha256(random_token().expose());
+    let owner = random_token();
+    let token = sha256(owner.expose());
     let retention_seconds = request.retention.as_secs_f64();
     let inserted = match scope {
         ReceiptScope::Admin { credential } => sqlx::query_scalar::<_, uuid::Uuid>("INSERT INTO admin_operations (id, credential_id, credential_epoch_at_start, idempotency_key, op_type, request_digest, owner_token, heartbeat_at, state, created_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,clock_timestamp(),'pending',transaction_timestamp(),clock_timestamp()+$8*interval '1 second') ON CONFLICT (credential_id,idempotency_key) DO NOTHING RETURNING id")
@@ -182,22 +325,136 @@ pub async fn begin(
         .execute(&mut **tx)
         .await?;
     if inserted.is_some() {
-        return Ok(ReceiptEntry::Fresh(id));
+        return Ok(ReceiptEntry::Fresh {
+            operation_id: id,
+            owner,
+        });
     }
-    let row = existing(tx, scope, request.key)
+    let row = existing(tx, scope, request.key, false)
         .await?
         .ok_or_else(|| sqlx::Error::Protocol("conflicting receipt missing".into()))?;
     Ok(entry(tx, scope, row, &request.digest).await?)
 }
+/// Conditional terminal writes cannot overwrite a resolved receipt.
 pub async fn commit_result(
     tx: &mut Transaction<'_, Postgres>,
     scope: ReceiptScope,
     operation: OperationId,
     result: &Value,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE {} SET state='committed', result=$2, committed_at=transaction_timestamp() WHERE id=$1", scope.table())))
-        .bind(operation.0).bind(result).execute(&mut **tx).await?;
-    Ok(())
+) -> Result<bool, sqlx::Error> {
+    terminal(tx, scope, operation, "committed", result).await
+}
+pub async fn fail_result(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: ReceiptScope,
+    operation: OperationId,
+    code: &str,
+) -> Result<bool, sqlx::Error> {
+    terminal(
+        tx,
+        scope,
+        operation,
+        "failed",
+        &serde_json::json!({"code":code}),
+    )
+    .await
+}
+async fn terminal(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: ReceiptScope,
+    operation: OperationId,
+    state: &str,
+    result: &Value,
+) -> Result<bool, sqlx::Error> {
+    let filter = if scope.workspace().is_some() {
+        "workspace_id=$5"
+    } else {
+        "$5::uuid IS NULL"
+    };
+    Ok(sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE {} SET state=$3,result=$2,committed_at=transaction_timestamp() WHERE id=$1 AND credential_id=$4 AND {filter} AND state='pending'", scope.table())))
+        .bind(operation.0).bind(result).bind(state).bind(scope.credential().0).bind(scope.workspace())
+        .execute(&mut **tx).await?.rows_affected() == 1)
+}
+#[derive(Debug, sqlx::FromRow)]
+pub struct PendingOperation {
+    #[sqlx(rename = "id")]
+    pub operation_id: uuid::Uuid,
+    pub mutation_epoch_at_start: i64,
+    pub authorization_epoch_at_start: i64,
+}
+pub async fn lock_pending(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: ReceiptScope,
+    operation: OperationId,
+    owner: &Secret<String>,
+) -> Result<PendingOperation, ReceiptError> {
+    let Some(workspace) = scope.workspace() else {
+        return Err(ReceiptError::NotOwner);
+    };
+    sqlx::query_as("SELECT id,mutation_epoch_at_start,authorization_epoch_at_start FROM operations WHERE workspace_id=$1 AND id=$2 AND credential_id=$3 AND state='pending' AND owner_token=$4 FOR UPDATE")
+        .bind(workspace).bind(operation.0).bind(scope.credential().0).bind(sha256(owner.expose()).0.as_slice())
+        .fetch_optional(&mut **tx).await?.ok_or(ReceiptError::NotOwner)
+}
+#[derive(Debug)]
+pub enum FenceOutcome {
+    Fenced,
+    StillActive,
+    AlreadyResolved(Stored),
+}
+/// Does not take actor/session locks: the operation identity and its row lock
+/// serialize owners, finalizers and fences. No resolved receipt is overwritten.
+pub async fn fence_expired_pending(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: WorkspaceId,
+    operation: OperationId,
+) -> Result<FenceOutcome, sqlx::Error> {
+    use crate::{objects, quota, reservations};
+    use anchorfs_core::ReservationId;
+    let row: Stored = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {} FROM operations WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+        columns(true)
+    )))
+    .bind(workspace.0)
+    .bind(operation.0)
+    .fetch_one(&mut **tx)
+    .await?;
+    if row.state != "pending" {
+        return Ok(FenceOutcome::AlreadyResolved(row));
+    }
+    let reservations: Vec<reservations::ReservationRow> = sqlx::query_as("SELECT * FROM upload_reservations WHERE workspace_id=$1 AND operation_id=$2 ORDER BY id FOR UPDATE")
+        .bind(workspace.0).bind(operation.0).fetch_all(&mut **tx).await?;
+    if !reservation_overdue(tx, Some(workspace), operation).await? {
+        return Ok(FenceOutcome::StillActive);
+    }
+    let mut reserved = 0i64;
+    let mut orphans = 0i64;
+    for reservation in reservations.iter().filter(|r| r.state == "active") {
+        reservations::fail(tx, workspace, reservation, "expired").await?;
+        let bytes = objects::orphan(
+            tx,
+            workspace,
+            ReservationId(reservation.id),
+            &[],
+            &[],
+            "reservation_expired",
+        )
+        .await?;
+        reserved = reserved
+            .checked_add(reservation.reserved_bytes)
+            .ok_or_else(|| sqlx::Error::Protocol("reservation sum overflow".into()))?;
+        orphans = orphans
+            .checked_add(bytes)
+            .ok_or_else(|| sqlx::Error::Protocol("orphan sum overflow".into()))?;
+    }
+    if reserved > 0 {
+        quota::release_to_orphans(tx, workspace, reserved, orphans).await?;
+    }
+    let updated = sqlx::query("UPDATE operations SET state='failed',result=jsonb_build_object('code','reservation_expired'),committed_at=transaction_timestamp() WHERE workspace_id=$1 AND id=$2 AND state='pending'")
+        .bind(workspace.0).bind(operation.0).execute(&mut **tx).await?.rows_affected();
+    if updated != 1 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok(FenceOutcome::Fenced)
 }
 
 /// Inspection scope is separate from mutation scope: hosts may inspect other actors by id.
@@ -231,7 +488,8 @@ pub async fn read(
     let predicate = if by_id { "id=$4" } else { "idempotency_key=$4" };
     // Only fixed enum-selected predicates/table names are interpolated.
     let query = format!(
-        "SELECT id,request_digest,state,result,expires_at FROM {table} WHERE {workspace_filter} AND (credential_id=$2 OR $3) AND {predicate} FOR UPDATE"
+        "SELECT {} FROM {table} WHERE {workspace_filter} AND (credential_id=$2 OR $3) AND {predicate} FOR UPDATE",
+        columns(filter.workspace.is_some())
     );
     let query = sqlx::query_as::<_, Stored>(sqlx::AssertSqlSafe(query))
         .bind(filter.workspace.map(|w| w.0))
@@ -244,11 +502,24 @@ pub async fn read(
     let Some(mut row) = row else {
         return Ok(None);
     };
-    tombstone(tx, table, &mut row).await?;
+    let tombstoned = tombstone(tx, filter.workspace, &mut row).await?;
+    if row.state == "pending"
+        && let Some(w) = filter.workspace
+    {
+        match fence_expired_pending(tx, w, OperationId(row.id)).await? {
+            FenceOutcome::Fenced => {
+                row.state = "failed".into();
+                row.result = Some(serde_json::json!({"code":"reservation_expired"}));
+            }
+            FenceOutcome::AlreadyResolved(resolved) => row = resolved,
+            FenceOutcome::StillActive => (),
+        }
+    }
     Ok(Some(ReceiptView {
         operation_id: OperationId(row.id),
         state: row.state,
         result: row.result,
+        tombstoned,
     }))
 }
 pub async fn read_by_id(

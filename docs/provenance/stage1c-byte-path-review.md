@@ -45,7 +45,7 @@ service `futures-core` dependency edge has not yet been introduced.
 - Production AppState construction installs NoFaults and a bounded data
   semaphore. Fault points are inert until the pipeline is connected.
 
-The full WP1 is not done. Still required: receipt-owner and pending/failed
+At checkpoint 933ac5e, WP1 was incomplete. Remaining work then was: receipt-owner and pending/failed
 semantics, expired-receipt session revocation, overdue-reservation fences,
 manifest-bearing file creation and truncate-on-open, handle read/write helpers,
 accounting invariant extensions, byte-capable conformance fixtures, remaining
@@ -53,12 +53,12 @@ transaction schedules and design lock-order amendment. WP2/WP3 and the full
 BY1–BY21/model/restart verification remain pending. The chunk arithmetic
 property oracle was added early from WP4.
 
-Implementation note for the receipt work: W35 excludes expired `failed` rows
+The receipt work exposed a schema detail (resolved below as D-C1): W35 excludes expired `failed` rows
 from session revocation, including later encounters, while tombstones clear
 `result`. The implementation must retain enough durable origin information to
 distinguish those rows from tombstones of `pending`/`committed` operations after
 a crash. The plan's two-column migration alone does not encode that distinction;
-resolve and record this local schema detail before implementing B11 follow-ups.
+D-C1 below records the implemented resolution for the B11 follow-ups.
 
 ## Observed local validation
 
@@ -90,3 +90,82 @@ were covered separately by passing `cargo test -p anchorfs-service --lib
 --locked` (12 tests), `cargo test -p anchorfs-conformance --test chunking_props
 --locked` (256 generated cases), and the rerun of `bytes_tx` (7 tests).
 The imported-spec diff against main is empty.
+
+## Receipt, manifest and fixture checkpoint (2026-10-20)
+
+The next implementation step adds owner-proof pending receipts, conditional
+terminal writers, read-only peek, lazy reservation expiry on retry/inspection
+and quota pressure, and post-tombstone session follow-ups. The latter retry on
+every encounter and retain the failed-outcome exclusion. New file creation
+publishes an empty manifest; truncate-on-open publishes a new empty manifest
+and settles logical bytes. Handle read/write grants and final lifetime checks
+have persistence helpers. Workspace/deployment invariant checks now cover the
+byte accounting and manifest rules.
+
+The conformance fixture now supports real MinIO with an optional fault proxy,
+binary requests/responses, a bounded pool, isolated deployment prefixes and a
+container owned by a dedicated process-lifetime runtime. Bucket reconciliation
+uses a raw SDK listing of the disposable workspace prefix, bypassing both the
+service adapter and scripted proxy; it rejects unknown/uncharged keys and
+missing published keys. This is a stronger independent observation boundary
+than using only the service adapter's list path. Two fixture tests verify shared
+MinIO isolation and that a planted uncharged object is detected. No byte HTTP
+route has been connected by this checkpoint; the route split remains 26/12.
+
+### Local schema detail D-C1
+
+Requirement: W35 revokes sessions for tombstones of pending/committed receipts,
+including encounters after process death, and excludes tombstones of failed
+receipts. W35 also clears the stored result. The plan's proposed schema did not
+retain which category produced an indeterminate tombstone. Independent local
+implementation decision: migration 0009 additionally adds
+`operations.expiry_fences_session boolean NOT NULL DEFAULT false`. Tombstoning
+sets it from the prior locked state, and later reads/follow-ups check it.
+Administrative receipts need no flag because they have no session.
+
+This retains the original requested behavior rather than changing product
+scope. There are no deployed users or compatibility requirements, per the
+owner's plan decision. The persistent-column gate is consequently **156**,
+rather than the plan's 155; the design table and executable coverage check were
+updated together. No imported specification or import baseline was amended.
+Origin: approved W35 plus independent crash-recovery/schema reasoning. Evidence:
+`expired_receipt_tombstone_then_session_fence_once` tests pending, committed and
+failed outcomes through multiple encounters and one-time epoch increment;
+`expired_receipt_followup_recovers_after_a_crash` tests HTTP inspection, the
+BeforeFollowUp fault, subsequent recovery, terminal rebind rejection and new
+host-issued session recovery. Independent gauntlet review remains pending.
+
+### Verification for this checkpoint
+
+- `cargo test -p anchorfs-persistence --locked`: passed before the final new
+  transaction tests, covering migration apply/revert/reapply and all regressions.
+- `cargo test -p anchorfs-persistence --test bytes_tx --locked`: 18 passed after
+  the receipt/handle/invariant additions. The race test observes a fence waiting
+  on the publisher's operations row before commit; it then returns the original
+  committed result and leaves physical/staging charges unchanged.
+- `cargo test -p anchorfs-persistence --test namespace_tx --locked`: 30 passed.
+- Conformance control-plane, namespace and design coverage: 16/18/3 passed
+  before the additional crash test; the crash test passed separately. CP12 now
+  expects the planned 409 fenced after the inspecting host revokes the worker's
+  expired-receipt session, and proves host-issued recovery.
+- `cargo test -p anchorfs-conformance --test bytes --locked`: 2 fixture tests
+  passed against the real shared MinIO container.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: passed.
+- `cargo deny check licenses bans advisories sources`: passed (existing duplicate
+  warnings). No new dependencies or lockfile changes.
+- OpenAPI regenerated with `cargo run -p anchorfs-service --locked -- openapi
+  --format yaml`; version 1.0.0-stage1c now includes operation_failed. Byte and
+  pin route descriptions remain stubs until their implementation.
+- `cargo test --workspace --locked -- --test-threads=4`: exited 0, 221 passing
+  tests across the workspace and doc-test suites. This includes 26/12 route
+  coverage, all namespace regressions, 156-column design coverage, OpenAPI
+  snapshots, migration reversibility and the generated chunk model.
+- After that run, the bucket negative control was tightened to require the
+  specific bucket-uncharged panic, owner redaction checked on the whole receipt,
+  and overlapping quota predicates checked for precedence. Both affected suites
+  were rerun: bytes_tx 18 passed; byte fixture tests 2 passed. Final clippy,
+  formatting and diff checks passed; imported hashes and Cargo.lock unchanged.
+
+Still required: write/read/replace/pin pipelines and route implementations,
+service-level fault, concurrency, quota, model and restart acceptance (BY1–BY21),
+complete implementation/design records, both review-gauntlet stages and PR/CI.

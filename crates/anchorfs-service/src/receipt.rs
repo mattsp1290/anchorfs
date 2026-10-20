@@ -48,13 +48,42 @@ pub fn request_digest(op_type: &str, path_ids: &[&str], body: Option<&Value>) ->
 }
 /// Cache policy is selected from a typed grant before JSON serialization.
 /// No Debug implementation: Secret answers contain initial grant material.
-pub enum Answer {
-    Metadata(Value),
-    Secret(Value),
+#[derive(Debug, Clone, Copy)]
+pub enum FollowUp {
+    FenceSession {
+        workspace: anchorfs_core::WorkspaceId,
+        session: anchorfs_core::SessionId,
+        operation: anchorfs_core::OperationId,
+    },
+}
+pub struct Answer {
+    value: Value,
+    secret: bool,
+    pub followups: Vec<FollowUp>,
 }
 impl Answer {
+    fn value(value: Value, secret: bool) -> Self {
+        Self {
+            value,
+            secret,
+            followups: Vec::new(),
+        }
+    }
     pub fn metadata(value: impl serde::Serialize) -> Result<Self, crate::error::ApiError> {
-        Ok(Self::Metadata(json(value)?))
+        Ok(Self::value(json(value)?, false))
+    }
+}
+pub fn expiry_followups(
+    workspace: Option<anchorfs_core::WorkspaceId>,
+    tombstoned: Option<anchorfs_persistence::receipts::Tombstoned>,
+) -> Vec<FollowUp> {
+    match (workspace, tombstoned) {
+        (Some(workspace), Some(t)) if t.session.is_some() => vec![FollowUp::FenceSession {
+            workspace,
+            session: t.session.expect("checked session"),
+            operation: t.operation_id,
+        }],
+        _ => Vec::new(),
     }
 }
 fn json(value: impl serde::Serialize) -> Result<Value, crate::error::ApiError> {
@@ -72,7 +101,7 @@ impl Published {
         let value = json(value)?;
         Ok(Self {
             stored: value.clone(),
-            response: Answer::Metadata(value),
+            response: Answer::value(value, false),
         })
     }
     pub fn credential(
@@ -84,9 +113,9 @@ impl Published {
         grant.secret = secret;
         let value = json(grant)?;
         let response = if contains_secret {
-            Answer::Secret(value)
+            Answer::value(value, true)
         } else {
-            Answer::Metadata(value)
+            Answer::value(value, false)
         };
         Ok(Self { stored, response })
     }
@@ -105,7 +134,7 @@ pub struct WorkflowAuthority<'a> {
     pub mode: anchorfs_persistence::authority::LeaseMode,
 }
 impl Authority<'_> {
-    async fn check_publication(
+    pub(crate) async fn check_publication(
         self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<(), crate::error::ApiError> {
@@ -156,6 +185,7 @@ pub async fn execute(
         .await
         .map_err(|error| match error {
             ReceiptError::Database(error) => error.into(),
+            ReceiptError::NotOwner => ApiError::new(ErrorCode::Fenced, ""),
             ReceiptError::PendingOwner => {
                 let mut error = ApiError::new(ErrorCode::OutcomeUnknown, "");
                 error.retry_after_ms = Some(100);
@@ -163,20 +193,41 @@ pub async fn execute(
             }
         })?;
     let result = match entry {
-        ReceiptEntry::Fresh(operation) => {
+        ReceiptEntry::Fresh {
+            operation_id: operation,
+            ..
+        } => {
             let published = mutate(tx, operation).await?;
             authority.check_publication(tx).await?;
-            receipts::commit_result(tx, scope, operation, &published.stored).await?;
+            if !receipts::commit_result(tx, scope, operation, &published.stored).await? {
+                return Err(ApiError::new(ErrorCode::Fenced, ""));
+            }
             return Ok(Ok(published.response));
         }
-        ReceiptEntry::Replay { result, .. } => Ok(Answer::Metadata(result)),
+        ReceiptEntry::Replay { result, .. } => Ok(Answer::value(result, false)),
         ReceiptEntry::Mismatch { operation_id } => {
             Err(receipt_error(ErrorCode::IdempotencyMismatch, operation_id))
         }
-        ReceiptEntry::Expired { operation_id } => Err(receipt_error(
-            ErrorCode::OperationIndeterminate,
+        ReceiptEntry::Expired {
             operation_id,
-        )),
+            tombstoned,
+        } => {
+            let mut error = receipt_error(ErrorCode::OperationIndeterminate, operation_id);
+            let workspace = match scope {
+                receipts::ReceiptScope::Workspace { workspace, .. } => Some(workspace),
+                _ => None,
+            };
+            error.followups = expiry_followups(workspace, tombstoned);
+            Err(error)
+        }
+        ReceiptEntry::Failed { operation_id } => {
+            Err(receipt_error(ErrorCode::OperationFailed, operation_id))
+        }
+        ReceiptEntry::Pending { operation_id, .. } => {
+            let mut error = receipt_error(ErrorCode::OutcomeUnknown, operation_id);
+            error.retry_after_ms = Some(100);
+            Err(error)
+        }
     };
     authority.check_publication(tx).await?;
     Ok(result)
@@ -190,19 +241,65 @@ fn receipt_error(
     error
 }
 /// Commit-first errors carry the route's trace after the outer transaction succeeds.
-pub fn response(
+pub async fn finish(
+    state: &crate::app::AppState,
     result: Result<Result<Answer, crate::error::ApiError>, crate::error::ApiError>,
     status: StatusCode,
     trace: &str,
 ) -> Result<Response, crate::error::ApiError> {
-    match result.and_then(|inner| inner) {
+    let mut result = result.and_then(|inner| inner);
+    let followups = match &mut result {
+        Ok(answer) => std::mem::take(&mut answer.followups),
+        Err(error) => std::mem::take(&mut error.followups),
+    };
+    for followup in followups {
+        use crate::pipeline::faults::{FaultAction, FaultPoint};
+        match state.faults.at(FaultPoint::BeforeFollowUp, None) {
+            FaultAction::Crash => break,
+            FaultAction::Wait(mut gate) => {
+                while !*gate.borrow_and_update() {
+                    if gate.changed().await.is_err() {
+                        break;
+                    }
+                }
+            }
+            FaultAction::Continue => (),
+        }
+        let followup_result = crate::control::run(
+            state,
+            crate::middleware::RequestStart(std::time::Instant::now()),
+            crate::middleware::TraceId(trace.into()),
+            crate::control::Kind::Mutation,
+            move |tx, _| {
+                Box::pin(async move {
+                    match followup {
+                        FollowUp::FenceSession {
+                            workspace,
+                            session,
+                            operation,
+                        } => {
+                            anchorfs_persistence::sessions::fence_for_expired_receipt(
+                                tx, workspace, session, operation,
+                            )
+                            .await?;
+                        }
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        if followup_result.is_err() {
+            tracing::warn!(
+                trace_id = trace,
+                "receipt session-fence follow-up failed; next encounter retries"
+            );
+        }
+    }
+    match result {
         Ok(answer) => {
-            let (value, secret) = match answer {
-                Answer::Metadata(value) => (value, false),
-                Answer::Secret(value) => (value, true),
-            };
-            let mut response = (status, Json(value)).into_response();
-            if secret {
+            let mut response = (status, Json(answer.value)).into_response();
+            if answer.secret {
                 response.headers_mut().insert(
                     axum::http::header::CACHE_CONTROL,
                     axum::http::HeaderValue::from_static("no-store"),

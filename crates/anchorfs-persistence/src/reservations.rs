@@ -155,3 +155,30 @@ async fn transition(
     }
     Ok(())
 }
+
+/// Best-effort bounded lazy expiry; every fence gets its own committing transaction.
+pub async fn fence_overdue(
+    pool: &sqlx::PgPool,
+    workspace: Option<WorkspaceId>,
+    limit: u32,
+) -> Result<u32, sqlx::Error> {
+    let overdue: Vec<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as("SELECT DISTINCT workspace_id,operation_id FROM upload_reservations WHERE state='active' AND expires_at<=clock_timestamp() AND ($1::uuid IS NULL OR workspace_id=$1) LIMIT $2")
+        .bind(workspace.map(|w|w.0)).bind(i64::from(limit)).fetch_all(pool).await?;
+    let mut count = 0;
+    for (workspace, operation) in overdue {
+        let mut tx = pool.begin().await?;
+        if matches!(
+            crate::receipts::fence_expired_pending(
+                &mut tx,
+                WorkspaceId(workspace),
+                OperationId(operation)
+            )
+            .await?,
+            crate::receipts::FenceOutcome::Fenced
+        ) {
+            count += 1;
+        }
+        tx.commit().await?;
+    }
+    Ok(count)
+}

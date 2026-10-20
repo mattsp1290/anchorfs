@@ -22,6 +22,7 @@ async fn open(
     name: &str,
     policy: HandlePolicy,
 ) -> Result<Opened, HandleError> {
+    let operation = operation(tx, s).await;
     handles::open_file(
         tx,
         &caller(),
@@ -36,6 +37,8 @@ async fn open(
             mode: Some(0o600),
         },
         policy,
+        operation,
+        4194304,
     )
     .await
 }
@@ -267,7 +270,8 @@ async fn open_limit_holds_under_concurrency() {
         limit: 2,
         ..policy()
     };
-    handles::open_file(&mut first, &caller(), &s, req("a"), p)
+    let operation = operation(&mut first, &s).await;
+    handles::open_file(&mut first, &caller(), &s, req("a"), p, operation, 4194304)
         .await
         .unwrap();
     let mut second = db.pool.begin().await.unwrap();
@@ -277,7 +281,8 @@ async fn open_limit_holds_under_concurrency() {
         .unwrap();
     let s2 = s.clone();
     let waiter = tokio::spawn(async move {
-        let result = handles::open_file(&mut second, &caller(), &s2, req("b"), p).await;
+        let result =
+            handles::open_file(&mut second, &caller(), &s2, req("b"), p, operation, 4194304).await;
         second.rollback().await.unwrap();
         result
     });
@@ -452,6 +457,7 @@ async fn unlink_between_resolve_and_lock_fails_open() {
         .unwrap();
     assert_eq!(rows[0].nlink, 0);
     // open_file repeats resolution and rejects the vanished path; the locked-row predicate above covers an already-resolved open.
+    let operation = operation(&mut first, &s).await;
     let r = handles::open_file(
         &mut first,
         &caller(),
@@ -466,6 +472,8 @@ async fn unlink_between_resolve_and_lock_fails_open() {
             mode: None,
         },
         policy(),
+        operation,
+        4194304,
     )
     .await;
     assert!(matches!(
@@ -495,13 +503,22 @@ async fn renewal_waiting_on_admission_cannot_reactivate_an_expired_slot() {
         truncate: false,
         mode: Some(0o600),
     };
-    let old = handles::open_file(&mut setup, &caller(), &session, req("old", true), policy)
-        .await
-        .unwrap();
+    let operation = operation(&mut setup, &session).await;
+    let old = handles::open_file(
+        &mut setup,
+        &caller(),
+        &session,
+        req("old", true),
+        policy,
+        operation,
+        4194304,
+    )
+    .await
+    .unwrap();
     namespace::lock(&mut setup, w)
         .await
         .unwrap()
-        .create_file(&caller(), &path("replacement"), 0o600)
+        .create_file(&caller(), &path("replacement"), 0o600, operation, 4194304)
         .await
         .unwrap();
     let expires:time::OffsetDateTime=sqlx::query_scalar("UPDATE handles SET expires_at=clock_timestamp()+interval '2 seconds' WHERE workspace_id=$1 AND id=$2 RETURNING expires_at").bind(w.0).bind(old.handle.id).fetch_one(&mut *setup).await.unwrap();
@@ -552,6 +569,8 @@ async fn renewal_waiting_on_admission_cannot_reactivate_an_expired_slot() {
         &session,
         req("replacement", false),
         policy,
+        operation,
+        4194304,
     )
     .await
     .unwrap();

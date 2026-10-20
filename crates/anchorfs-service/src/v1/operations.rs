@@ -220,12 +220,14 @@ async fn inspect(
                     .await?
                     .ok_or(authority::AuthorityError::NotFound)?;
                 authority::check_publication_time(tx, &actor, None).await?;
-                Ok(Ok(crate::receipt::Answer::metadata(
-                    super::views::operation(view)?,
-                )?))
+                let followups =
+                    crate::receipt::expiry_followups(workspace, view.tombstoned.clone());
+                let mut answer = crate::receipt::Answer::metadata(super::views::operation(view)?)?;
+                answer.followups = followups;
+                Ok(Ok(answer))
             })
         },
     )
     .await;
-    crate::receipt::response(result, axum::http::StatusCode::OK, &trace.0)
+    crate::receipt::finish(&state, result, axum::http::StatusCode::OK, &trace.0).await
 }

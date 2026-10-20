@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+pub mod byte_backend;
 pub mod client;
 pub mod fake_backend;
 pub mod fixture;
@@ -17,6 +18,20 @@ use testcontainers_modules::postgres::Postgres;
 pub const POSTGRES_IMAGE_DIGEST: &str =
     "sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3";
 pub async fn database(settings: &[&str]) -> (ContainerAsync<Postgres>, PgPool, String) {
+    database_with(
+        settings,
+        &DeploymentId::parse("test").unwrap(),
+        anchorfs_core::Limits::default().chunk_size,
+        4,
+    )
+    .await
+}
+pub async fn database_with(
+    settings: &[&str],
+    deployment: &DeploymentId,
+    chunk_size: u32,
+    max_connections: u32,
+) -> (ContainerAsync<Postgres>, PgPool, String) {
     let mut command = vec!["postgres".to_owned()];
     for setting in settings {
         command.extend(["-c".into(), setting.to_string()]);
@@ -35,7 +50,7 @@ pub async fn database(settings: &[&str]) -> (ContainerAsync<Postgres>, PgPool, S
     );
     let pool = pool::connect(&PoolConfig {
         url: Secret::new(url.clone()),
-        max_connections: 4,
+        max_connections,
         acquire_timeout: Duration::from_secs(2),
     })
     .await
@@ -43,12 +58,12 @@ pub async fn database(settings: &[&str]) -> (ContainerAsync<Postgres>, PgPool, S
     migrate::apply(&pool).await.unwrap();
     meta::initialize(
         &pool,
-        &DeploymentId::parse("test").unwrap(),
+        deployment,
         &DeploymentQuotaConfig {
             physical_bytes_limit: 1 << 40,
             staging_bytes_limit: 1 << 30,
         },
-        anchorfs_core::Limits::default().chunk_size,
+        chunk_size,
     )
     .await
     .unwrap();

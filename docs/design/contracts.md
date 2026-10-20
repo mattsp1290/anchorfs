@@ -2,6 +2,38 @@
 
 Independent design from approved specs 02–05 and 07 and the reviewed Stage 0 plan. Contract freeze means versioned and test-pinned; there are no active users or compatibility shims. Future transaction/runtime behavior remains unverified until the stated stage.
 
+## Stage 1c receipt and manifest foundation (2026-10-20)
+
+Byte operations may retain visible pending receipts while uploading. Their
+owner holds the random preimage of the hashed owner token; locking a pending
+operation requires that proof. Pending receipts with an active reservation
+return `outcome_unknown` and a bounded retry hint. A pending receipt whose
+reservations are overdue is fenced on encounter: all possibly uploaded objects
+become charged deletion candidates, staging charges are released, and the
+receipt becomes failed. Terminal failed receipts return 409 `operation_failed`
+(`EIO` hint). Every terminal writer requires the operation still be pending;
+a late fence cannot overwrite an acknowledged commit.
+
+Expired workspace receipts become permanent indeterminate/result-null
+tombstones. Pending receipts are fenced before tombstoning. Tombstones of
+pending/committed operations carry durable `expiry_fences_session=true`; those
+of failed operations carry false. After commit, inspection or retry attempts
+an idempotent session revocation in a second transaction. Every later encounter
+retries the follow-up, so a process death cannot erase it. Administrative
+receipts have no session follow-up. Failed receipts remain excluded even after
+their result is cleared. An inspecting host may trigger revocation of another
+actor's session. Recovery uses an authorized new session; renew/rebind never
+revive a revoked session. Tests: `expired_receipt_tombstone_then_session_fence_once`,
+`fence_does_not_overwrite_a_committed_receipt`, CP12 and
+`expired_receipt_followup_recovers_after_a_crash`.
+
+Every created file has a complete empty manifest at generation 1. Truncate-on-open
+publishes a new empty manifest, increments the inode generation and releases
+the file's retained logical size; physical objects and old manifests remain.
+Read/write handle helpers enforce the granted access flags as well as session
+binding and lifetime. These persistence and metadata-route behaviors are tested;
+the byte HTTP upload/read pipelines remain under implementation.
+
 ## Limits
 
 Values are bytes or counts, with file size 4 TiB derived from checked chunk_size × max_chunks_per_file. Core validation bounds PostgreSQL integer/bigint columns and rejects zero/overflow. API bodies and whole-file replacement have separate caps.
@@ -184,8 +216,9 @@ the client needs current authority or a replacement session.
 
 Expired receipts become permanent indeterminate/result-null tombstones, including
 through inspection, which commits that transition before responding. Retry returns
-409 operation_indeterminate with the operation ID. Session revocation at receipt
-expiry is deferred by the dated B11 amendment in persistent-state.md. Find-by-key
+409 operation_indeterminate with the operation ID. Stage 1c implements lazy
+session revocation in a separate idempotent post-tombstone transaction (W35),
+as amended in persistent-state.md. Find-by-key
 is always actor-scoped; hosts can inspect workspace receipts by ID, administrators
 cannot inspect another credential's workspace receipt. Inspection never grants
 authority.

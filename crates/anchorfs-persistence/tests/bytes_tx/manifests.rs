@@ -21,7 +21,13 @@ async fn publish_write_copies_untouched_rows_and_bumps_generation() {
     let inode = namespace::lock(&mut tx, w)
         .await
         .unwrap()
-        .create_file(&caller(), &WorkspacePath::parse("f").unwrap(), 0o600)
+        .create_file(
+            &caller(),
+            &WorkspacePath::parse("f").unwrap(),
+            0o600,
+            operation,
+            4096,
+        )
         .await
         .unwrap();
     let (empty, inode) = manifests::publish_empty(&mut tx, w, &inode, operation, 4096, false)
@@ -143,7 +149,13 @@ async fn publish_truncate_clips_boundary_and_drops_tail_with_high_index() {
     let inode = namespace::lock(&mut tx, w)
         .await
         .unwrap()
-        .create_file(&caller(), &WorkspacePath::parse("f").unwrap(), 0o600)
+        .create_file(
+            &caller(),
+            &WorkspacePath::parse("f").unwrap(),
+            0o600,
+            operation,
+            4194304,
+        )
         .await
         .unwrap();
     let (_, inode) = manifests::publish_empty(&mut tx, w, &inode, operation, 4194304, false)
@@ -263,7 +275,13 @@ async fn pins_bound_per_session_and_detect_mismatch() {
     let inode = namespace::lock(&mut tx, w)
         .await
         .unwrap()
-        .create_file(&caller(), &WorkspacePath::parse("f").unwrap(), 0o600)
+        .create_file(
+            &caller(),
+            &WorkspacePath::parse("f").unwrap(),
+            0o600,
+            operation,
+            4096,
+        )
         .await
         .unwrap();
     let (manifest, inode) = manifests::publish_empty(&mut tx, w, &inode, operation, 4096, false)

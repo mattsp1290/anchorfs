@@ -5,7 +5,7 @@ info:
   license:
     name: MIT
     identifier: MIT
-  version: 1.0.0-stage1b
+  version: 1.0.0-stage1c
 paths:
   /v1/workspaces:
     post:
@@ -4009,6 +4009,7 @@ components:
       - workspace_busy
       - fenced
       - operation_indeterminate
+      - operation_failed
       - not_directory
       - is_directory
       - directory_not_empty

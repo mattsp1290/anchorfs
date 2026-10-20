@@ -1,13 +1,11 @@
-//! HTTP acceptance from approved Stage 1a decisions, with disposable metadata only.
+//! Synthetic HTTP acceptance against disposable metadata and optional MinIO.
 use crate::common;
-pub use crate::common::{
-    client::{Client, Credential},
-    fake_backend::FakeBackend,
-};
+pub use crate::common::client::{Client, Credential};
 pub use anchorfs_service::{
     app::{AppState, build_router},
     config::Config,
 };
+pub use common::byte_backend::Backend;
 pub use serde_json::{Value, json};
 pub use sqlx::PgPool;
 pub use std::{sync::Arc, time::Duration};
@@ -17,7 +15,9 @@ pub struct Fixture {
     pub _container: testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>,
     pub pool: PgPool,
     pub client: Client,
-    pub backend: Arc<FakeBackend>,
+    pub backend: Backend,
+    pub config: Arc<Config>,
+    max_reservation_bytes: i64,
     pub admin: Credential,
     pub host: Credential,
     pub worker: Credential,
@@ -29,7 +29,10 @@ pub fn workspace_body() -> Value {
     json!({"root_uid":1000,"root_gid":1000,"logical_bytes_limit":10000,"logical_inodes_limit":100,"physical_bytes_limit":20000,"staging_bytes_limit":10000})
 }
 pub fn credential_body(workspace: Uuid, kind: &str) -> Value {
-    json!({"workspace_id":workspace,"kind":kind,"role":"write","uid":1000,"gid":1000,"max_reservation_bytes":4096})
+    credential_body_bounded(workspace, kind, 4096)
+}
+fn credential_body_bounded(workspace: Uuid, kind: &str, bound: i64) -> Value {
+    json!({"workspace_id":workspace,"kind":kind,"role":"write","uid":1000,"gid":1000,"max_reservation_bytes":bound})
 }
 impl Fixture {
     pub async fn new() -> Self {
@@ -43,13 +46,77 @@ impl Fixture {
         state.cursor_key =
             anchorfs_core::decode_hex_32(config.cursor_signing_key.expose()).expect("test key");
         state.config = Arc::new(config);
+        Self::from_state(container, pool, state, Backend::Fake(backend), 4096, body).await
+    }
+    pub async fn with_bytes(
+        body: Value,
+        configure: impl FnOnce(&mut Config),
+        faults: Arc<dyn anchorfs_service::pipeline::faults::FaultInjector>,
+        use_proxy: bool,
+    ) -> Self {
+        let minio = common::minio::shared().await;
+        let deployment = common::minio::deployment();
+        let proxy = if use_proxy {
+            Some(Arc::new(common::proxy::Proxy::start(&minio.endpoint).await))
+        } else {
+            None
+        };
+        let endpoint = proxy.as_ref().map_or(&minio.endpoint, |p| &p.endpoint);
+        let mut config = Config::contract_defaults();
+        config.durability_profile = anchorfs_persistence::settings::DurabilityProfile::Development;
+        config.db_max_connections = 16;
+        config.max_data_ops = 14;
+        config.deployment_id = deployment.clone();
+        config.s3 = common::minio::backend_config(
+            endpoint,
+            deployment.clone(),
+            anchorfs_backend::config::ChecksumMode::Sha256,
+            Duration::from_secs(5),
+            0,
+        );
+        configure(&mut config);
+        let (container, pool, _) = common::database_with(
+            &[],
+            &deployment,
+            config.chunk_size,
+            config.db_max_connections,
+        )
+        .await;
+        sqlx::query("UPDATE deployment_quotas SET physical_bytes_limit=$1,staging_bytes_limit=$2 WHERE singleton")
+            .bind(config.deployment_physical_bytes_limit).bind(config.deployment_staging_bytes_limit)
+            .execute(&pool).await.unwrap();
+        let backend = Arc::new(anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap());
+        let mut state = AppState::production(config, pool.clone(), backend.clone());
+        state.faults = faults;
+        let backend = Backend::Minio {
+            backend,
+            proxy,
+            deployment,
+            endpoint: minio.endpoint.clone(),
+        };
+        Self::from_state(container, pool, state, backend, 1 << 30, body).await
+    }
+    async fn from_state(
+        container: testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>,
+        pool: PgPool,
+        state: AppState,
+        backend: Backend,
+        max_reservation_bytes: i64,
+        body: Value,
+    ) -> Self {
+        let config = state.config.clone();
         let client = Client {
             app: build_router(state),
         };
-        let issued =
-            anchorfs_service::bootstrap::create_administrator(&pool, 1000, 1000, 4096, None)
-                .await
-                .unwrap();
+        let issued = anchorfs_service::bootstrap::create_administrator(
+            &pool,
+            1000,
+            1000,
+            max_reservation_bytes,
+            None,
+        )
+        .await
+        .unwrap();
         let admin = Credential {
             id: issued.id.0,
             secret: issued.secret.expose().clone(),
@@ -75,7 +142,11 @@ impl Fixture {
                     Some(&admin),
                     None,
                     Some("host"),
-                    Some(credential_body(workspace, "host")),
+                    Some(credential_body_bounded(
+                        workspace,
+                        "host",
+                        max_reservation_bytes,
+                    )),
                 )
                 .await
                 .status(201)
@@ -89,7 +160,11 @@ impl Fixture {
                     Some(&host),
                     None,
                     Some("worker"),
-                    Some(credential_body(workspace, "worker")),
+                    Some(credential_body_bounded(
+                        workspace,
+                        "worker",
+                        max_reservation_bytes,
+                    )),
                 )
                 .await
                 .status(201)
@@ -125,6 +200,8 @@ impl Fixture {
             pool,
             client,
             backend,
+            config,
+            max_reservation_bytes,
             admin,
             host,
             worker,
@@ -143,10 +220,17 @@ impl Fixture {
             .unwrap()
             .is_empty()
         );
+        assert!(
+            anchorfs_persistence::invariants::check_deployment(&self.pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        self.backend.reconcile(&self.pool, self.workspace).await;
         self.backend.untouched();
     }
     pub async fn credential(&self, kind: &str, role: &str, uid: u32, gid: u32) -> Credential {
-        let body = json!({"workspace_id":self.workspace,"kind":kind,"role":role,"uid":uid,"gid":gid,"max_reservation_bytes":4096});
+        let body = json!({"workspace_id":self.workspace,"kind":kind,"role":role,"uid":uid,"gid":gid,"max_reservation_bytes":self.max_reservation_bytes});
         Credential::from_grant(
             &self
                 .client
@@ -178,7 +262,7 @@ impl Fixture {
             .body
     }
     pub fn client_with_deadline(&self, millis: u64) -> Client {
-        let mut config = Config::contract_defaults();
+        let mut config = (*self.config).clone();
         config.metadata_call_deadline = Duration::from_millis(millis);
         Client {
             app: build_router(AppState {
@@ -186,7 +270,7 @@ impl Fixture {
                     .expect("validated cursor signing key"),
                 pool: self.pool.clone(),
                 config: Arc::new(config),
-                backend: self.backend.clone(),
+                backend: self.backend.service(),
                 probe_cache: Default::default(),
                 data_permits: Arc::new(tokio::sync::Semaphore::new(6)),
                 faults: Arc::new(anchorfs_service::pipeline::faults::NoFaults),

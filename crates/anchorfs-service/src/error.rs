@@ -13,6 +13,7 @@ pub struct ApiError {
     pub retry_after_ms: Option<u64>,
     pub operation_id: Option<anchorfs_core::OperationId>,
     pub token_presented: bool,
+    pub followups: Vec<crate::receipt::FollowUp>,
 }
 impl ApiError {
     pub fn new(code: ErrorCode, trace: impl Into<String>) -> Self {
@@ -23,6 +24,7 @@ impl ApiError {
             retry_after_ms: None,
             operation_id: None,
             token_presented: false,
+            followups: Vec::new(),
         }
     }
     pub fn not_implemented(trace: impl Into<String>) -> Self {
@@ -140,6 +142,7 @@ impl From<anchorfs_persistence::namespace::NamespaceError> for ApiError {
                 N::InvalidInput => ErrorCode::InvalidInput,
                 N::NotImplemented => ErrorCode::NotImplemented,
                 N::Quota(error) => return error.into(),
+                N::Manifest(error) => return error.into(),
                 N::Database(error) => return error.into(),
             },
             "",
@@ -153,9 +156,21 @@ impl From<anchorfs_persistence::handles::HandleError> for ApiError {
             H::Stale => Self::new(ErrorCode::StaleHandle, ""),
             H::Limit => Self::new(ErrorCode::QuotaExceeded, ""),
             H::NotFound => Self::new(ErrorCode::NotFound, ""),
+            H::Forbidden => Self::new(ErrorCode::Forbidden, ""),
             H::Namespace(error) => error.into(),
             H::Quota(error) => error.into(),
             H::Database(error) => error.into(),
+        }
+    }
+}
+
+impl From<anchorfs_persistence::manifests::ManifestError> for ApiError {
+    fn from(error: anchorfs_persistence::manifests::ManifestError) -> Self {
+        use anchorfs_persistence::manifests::ManifestError;
+        match error {
+            ManifestError::NotFound => Self::new(ErrorCode::DependencyUnavailable, ""),
+            ManifestError::ChunkSizeMismatch => Self::new(ErrorCode::Unsupported, ""),
+            ManifestError::Database(error) => error.into(),
         }
     }
 }

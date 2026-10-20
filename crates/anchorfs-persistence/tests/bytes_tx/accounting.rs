@@ -24,11 +24,16 @@ async fn reserve_charges_workspace_and_deployment_and_bounds_principal() {
     let values: (i64, i64) = sqlx::query_as("SELECT w.staging_bytes_reserved,d.staging_bytes_reserved FROM workspace_quotas w CROSS JOIN deployment_quotas d WHERE w.workspace_id=$1")
         .bind(w.0).fetch_one(&mut *tx).await.unwrap();
     assert_eq!(values, (800, 800));
+    sqlx::query("UPDATE workspace_quotas SET physical_bytes_limit=1000 WHERE workspace_id=$1")
+        .bind(w.0)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     assert!(matches!(
         quota::reserve_staging(&mut tx, w, 201).await,
         Err(ReservationError::Exceeded(QuotaKind::WorkspaceStaging))
     ));
-    sqlx::query("UPDATE workspace_quotas SET staging_bytes_limit=5000 WHERE workspace_id=$1")
+    sqlx::query("UPDATE workspace_quotas SET staging_bytes_limit=5000,physical_bytes_limit=2000 WHERE workspace_id=$1")
         .bind(w.0)
         .execute(&mut *tx)
         .await
@@ -40,6 +45,7 @@ async fn reserve_charges_workspace_and_deployment_and_bounds_principal() {
     tx.rollback().await.unwrap();
     for (staging, physical, expected) in [
         (100, 2000, QuotaKind::DeploymentStaging),
+        (100, 100, QuotaKind::DeploymentStaging),
         (1000, 100, QuotaKind::DeploymentPhysical),
     ] {
         let mut tx = db.pool.begin().await.unwrap();

@@ -173,6 +173,7 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
     };
     let mutation = request.mutation_gate();
     let retention = state.config.receipt_retention;
+    let chunk_size = state.config.chunk_size;
     let policy = handles::HandlePolicy {
         ttl: state.config.handle_ttl,
         limit: state.config.max_handles_per_session,
@@ -247,9 +248,10 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
                                         truncate: body.truncate,
                                         mode: body.mode,
                                     };
-                                    let opened =
-                                        handles::open_file(tx, &p.caller, &session, req, policy)
-                                            .await?;
+                                    let opened = handles::open_file(
+                                        tx, &p.caller, &session, req, policy, operation, chunk_size,
+                                    )
+                                    .await?;
                                     Published::metadata(super::views::handle(
                                         operation,
                                         &opened.handle,
@@ -282,5 +284,5 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
         },
     )
     .await;
-    receipt::response(result, status, &context.trace.0)
+    receipt::finish(&state, result, status, &context.trace.0).await
 }

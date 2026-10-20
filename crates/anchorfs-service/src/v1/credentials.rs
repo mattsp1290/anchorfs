@@ -142,7 +142,7 @@ pub async fn create_credential(
         },
     )
     .await;
-    receipt::response(result, StatusCode::CREATED, &trace.0)
+    receipt::finish(&state, result, StatusCode::CREATED, &trace.0).await
 }
 #[utoipa::path(post,
  path="/v1/credentials/{credential_id}/rotate",
@@ -341,5 +341,5 @@ async fn mutate_credential(
         },
     )
     .await;
-    receipt::response(result, StatusCode::OK, &trace.0)
+    receipt::finish(&state, result, StatusCode::OK, &trace.0).await
 }

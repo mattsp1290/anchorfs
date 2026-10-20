@@ -488,7 +488,7 @@ async fn durability_settings_role_override_detected() {
 async fn receipt_key_unique() {
     let db = Database::migrated().await;
     fixture(&db.pool).await;
-    assert_db(sqlx::query("INSERT INTO operations SELECT workspace_id,$1,credential_id,client_session_id,session_epoch,credential_epoch_at_start,authorization_epoch_at_start,mutation_epoch_at_start,owner_token,heartbeat_at,idempotency_key,op_type,request_digest,state,result,created_at,committed_at,expires_at FROM operations").bind(Uuid::new_v4()).execute(&db.pool).await.unwrap_err(),"23505","operations_receipt_key");
+    assert_db(sqlx::query("INSERT INTO operations(workspace_id,id,credential_id,client_session_id,session_epoch,credential_epoch_at_start,authorization_epoch_at_start,mutation_epoch_at_start,owner_token,heartbeat_at,idempotency_key,op_type,request_digest,state,result,created_at,committed_at,expires_at) SELECT workspace_id,$1,credential_id,client_session_id,session_epoch,credential_epoch_at_start,authorization_epoch_at_start,mutation_epoch_at_start,owner_token,heartbeat_at,idempotency_key,op_type,request_digest,state,result,created_at,committed_at,expires_at FROM operations").bind(Uuid::new_v4()).execute(&db.pool).await.unwrap_err(),"23505","operations_receipt_key");
 }
 #[tokio::test]
 async fn database_newer_detected() {
@@ -546,7 +546,7 @@ async fn expired_receipts_retain_identity_and_referenced_state() {
     tx.commit().await.unwrap();
     let retained:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inodes i JOIN manifests m ON (m.workspace_id,m.id)=(i.workspace_id,i.current_manifest_id) JOIN operations o ON (o.workspace_id,o.id)=(m.workspace_id,m.created_by_operation_id) JOIN upload_reservations r ON (r.workspace_id,r.operation_id)=(o.workspace_id,o.id) JOIN objects b ON (b.workspace_id,b.reservation_id)=(r.workspace_id,r.id) WHERE i.workspace_id=$1 AND o.state='indeterminate' AND o.result IS NULL)").bind(f.workspace).fetch_one(&db.pool).await.unwrap();
     assert!(retained);
-    assert_db(sqlx::query("INSERT INTO operations SELECT workspace_id,$2,credential_id,client_session_id,session_epoch,credential_epoch_at_start,authorization_epoch_at_start,mutation_epoch_at_start,owner_token,heartbeat_at,idempotency_key,op_type,request_digest,state,result,created_at,committed_at,expires_at FROM operations WHERE workspace_id=$1").bind(f.workspace).bind(Uuid::new_v4()).execute(&db.pool).await.unwrap_err(),"23505","operations_receipt_key");
+    assert_db(sqlx::query("INSERT INTO operations(workspace_id,id,credential_id,client_session_id,session_epoch,credential_epoch_at_start,authorization_epoch_at_start,mutation_epoch_at_start,owner_token,heartbeat_at,idempotency_key,op_type,request_digest,state,result,created_at,committed_at,expires_at) SELECT workspace_id,$2,credential_id,client_session_id,session_epoch,credential_epoch_at_start,authorization_epoch_at_start,mutation_epoch_at_start,owner_token,heartbeat_at,idempotency_key,op_type,request_digest,state,result,created_at,committed_at,expires_at FROM operations WHERE workspace_id=$1").bind(f.workspace).bind(Uuid::new_v4()).execute(&db.pool).await.unwrap_err(),"23505","operations_receipt_key");
     let admin_key: Option<String> = sqlx::query_scalar(
         "SELECT idempotency_key FROM admin_operations WHERE state='indeterminate' LIMIT 1",
     )
@@ -625,7 +625,9 @@ async fn receipt_begin_replays_mismatches_and_tombstones() {
         wait_bound: Duration::from_secs(1),
     };
     let mut tx = db.pool.begin().await.unwrap();
-    let ReceiptEntry::Fresh(id) = receipts::begin(&mut tx, scope, request([1; 32]))
+    let ReceiptEntry::Fresh {
+        operation_id: id, ..
+    } = receipts::begin(&mut tx, scope, request([1; 32]))
         .await
         .unwrap()
     else {
@@ -677,7 +679,7 @@ async fn receipt_begin_replays_mismatches_and_tombstones() {
     );
     let mut tx = db.pool.begin().await.unwrap();
     assert!(
-        matches!(receipts::begin(&mut tx, scope, request([1;32])).await.unwrap(), ReceiptEntry::Expired { operation_id } if operation_id == id)
+        matches!(receipts::begin(&mut tx, scope, request([1;32])).await.unwrap(), ReceiptEntry::Expired { operation_id, .. } if operation_id == id)
     );
     tx.commit().await.unwrap();
 }
@@ -703,10 +705,11 @@ async fn receipt_duplicate_insert_waits_for_owner() {
             wait_bound,
         };
         let mut owner = db.pool.begin().await.unwrap();
-        let ReceiptEntry::Fresh(id) =
-            receipts::begin(&mut owner, scope, request(Duration::from_secs(5)))
-                .await
-                .unwrap()
+        let ReceiptEntry::Fresh {
+            operation_id: id, ..
+        } = receipts::begin(&mut owner, scope, request(Duration::from_secs(5)))
+            .await
+            .unwrap()
         else {
             panic!("fresh receipt expected");
         };
@@ -751,7 +754,13 @@ async fn receipt_duplicate_insert_waits_for_owner() {
                 matches!(entry, ReceiptEntry::Replay { operation_id, .. } if operation_id == id)
             );
         } else {
-            assert!(matches!(entry, ReceiptEntry::Fresh(_)));
+            assert!(matches!(
+                entry,
+                ReceiptEntry::Fresh {
+                    operation_id: _,
+                    ..
+                }
+            ));
         }
         // waiter rolls back when dropped, after the borrowed future is dropped.
     }

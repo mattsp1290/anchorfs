@@ -112,3 +112,38 @@ pub async fn waiting(pool: &sqlx::PgPool, pid: i32) {
         if waiting {break;}tokio::time::sleep(Duration::from_millis(10)).await;
     }}).await.unwrap();
 }
+
+pub async fn operation(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session: &anchorfs_persistence::authority::ActorSession,
+) -> anchorfs_core::OperationId {
+    use anchorfs_persistence::receipts::{self, ReceiptEntry, ReceiptRequest, ReceiptScope};
+    let id = anchorfs_core::OperationId::new();
+    let entry = receipts::begin(
+        tx,
+        ReceiptScope::Workspace {
+            workspace: session.workspace_id,
+            credential: session.credential_id,
+            session: session.id,
+            session_epoch: session.session_epoch,
+            authorization_epoch: 1,
+            mutation_epoch: 1,
+        },
+        ReceiptRequest {
+            key: &id.to_string(),
+            op_type: "write",
+            digest: [1; 32],
+            credential_epoch: 1,
+            retention: std::time::Duration::from_secs(3600),
+            wait_bound: std::time::Duration::from_secs(1),
+        },
+    )
+    .await
+    .unwrap();
+    match entry {
+        ReceiptEntry::Fresh {
+            operation_id: id, ..
+        } => id,
+        _ => panic!("fresh operation expected"),
+    }
+}
