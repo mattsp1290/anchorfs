@@ -1,7 +1,7 @@
 //! Conditional replacement consumes one chunk at a time, stages each identity
 //! before PUT and publishes the complete manifest in a final short transaction.
 use super::{
-    common::{self, Context, Operation, Prepared, Upload},
+    common::{self, Admission, AdmissionPlan, Context, Operation, Prepared, Upload},
     faults::{self, FaultInjector, FaultPoint},
     runner::{Db, Deadline, Outcome, PhaseCell, unavailable},
 };
@@ -17,7 +17,7 @@ use anchorfs_persistence::{
     namespace::{self, InodeRow},
     objects, quota,
     receipts::{self, ReceiptEntry, ReceiptRequest},
-    reservations::{self, ReservationError},
+    reservations,
 };
 use bytes::Bytes;
 use futures_core::Stream;
@@ -33,11 +33,6 @@ pub struct ReplaceRequest {
 enum Snapshot {
     File(Box<InodeRow>),
     Receipt(ReceiptEntry),
-}
-enum Admission {
-    Owned(Operation, Upload),
-    Receipt(ReceiptEntry),
-    Unknown(ApiError),
 }
 enum Published {
     Done(Answer),
@@ -109,97 +104,6 @@ impl Replacer<'_> {
             return Err(ApiError::new(ErrorCode::GenerationConflict, ""));
         }
         Ok(())
-    }
-    async fn admit(&self) -> Result<Admission, ApiError> {
-        for retry in 0..2 {
-            let mut tx = self.db.begin().await?;
-            let p = self.context.prologue(&mut tx).await?;
-            let scope = common::scope(&p);
-            let entry = receipts::begin(
-                &mut tx,
-                scope,
-                ReceiptRequest {
-                    key: &self.context.key,
-                    op_type: self.context.op_type,
-                    digest: self.context.digest,
-                    credential_epoch: p.actor.epoch,
-                    retention: self.state.config.receipt_retention,
-                    wait_bound: self.state.config.db_lock_timeout,
-                },
-            )
-            .await?;
-            let ReceiptEntry::Fresh {
-                operation_id,
-                owner,
-            } = entry
-            else {
-                self.context.check(&mut tx, &p).await?;
-                tx.commit().await?;
-                return Ok(Admission::Receipt(entry));
-            };
-            let reserved = async {
-                let row = reservations::insert(
-                    &mut tx,
-                    self.context.workspace,
-                    operation_id,
-                    &p.actor,
-                    self.length as i64,
-                    self.state.config.upload_reservation_ttl,
-                )
-                .await?;
-                reservations::charge(&mut tx, self.context.workspace, &row).await?;
-                Ok::<_, ReservationError>(row)
-            }
-            .await;
-            let reservation = match reserved {
-                Ok(row) => row,
-                Err(error) => {
-                    let pressure = matches!(error, ReservationError::Exceeded(_));
-                    tx.rollback().await?;
-                    if pressure && retry == 0 {
-                        reservations::fence_overdue(
-                            &self.db.pool,
-                            Some(self.context.workspace),
-                            64,
-                            self.state.config.db_lock_timeout,
-                        )
-                        .await?;
-                        reservations::fence_overdue(
-                            &self.db.pool,
-                            None,
-                            64,
-                            self.state.config.db_lock_timeout,
-                        )
-                        .await?;
-                        continue;
-                    }
-                    return Err(error.into());
-                }
-            };
-            match tx.commit().await {
-                Ok(()) => {
-                    return Ok(Admission::Owned(
-                        Operation {
-                            id: operation_id,
-                            owner,
-                            scope,
-                            credential_epoch: p.actor.epoch,
-                        },
-                        Upload {
-                            reservation,
-                            chunks: Vec::new(),
-                            attempted: 0,
-                            confirmed: 0,
-                        },
-                    ));
-                }
-                Err(error) if !common::commit_outcome_unknown(&error) => {
-                    return Err(error.into());
-                }
-                Err(_) => return Ok(Admission::Unknown(common::pending_error(operation_id))),
-            }
-        }
-        Err(unavailable())
     }
     async fn publish(
         &self,
@@ -521,7 +425,16 @@ pub async fn replace(
     if !phase.start_admission() {
         return Err(unavailable());
     }
-    let (operation, mut upload) = match replacer.admit().await? {
+    let (operation, mut upload) = match common::admit(
+        &db,
+        &req.context,
+        &state,
+        AdmissionPlan::Replace {
+            length: req.content.length,
+        },
+    )
+    .await?
+    {
         Admission::Owned(op, upload) => (op, upload),
         Admission::Receipt(entry) => {
             return req.context.resolve(&db, entry).await.map(Outcome::Done);

@@ -86,7 +86,7 @@ pub async fn read(
     .await?;
     let existing = rows
         .iter()
-        .map(super::write::existing)
+        .map(super::common::existing_chunk)
         .collect::<Result<Vec<_>, _>>()?;
     let plan = plan_read(
         geometry,

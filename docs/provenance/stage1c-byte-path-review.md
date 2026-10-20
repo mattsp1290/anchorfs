@@ -4,7 +4,8 @@ This record is incremental. Stage 1c is **not complete**. All eight planned
 byte/pin routes are connected, with 34 implemented routes and four workflow-lease
 stubs verified by the service sweep. The native byte path is exercised against
 disposable PostgreSQL/MinIO, with local acceptance, model and process-restart
-evidence mapped below. The review gauntlet, PR and hosted CI remain incomplete;
+evidence mapped below. Both independent review stages and local fixer gates have passed; the final
+push, PR and hosted CI remain incomplete;
 no provider storage durability or Linux mount capability is claimed.
 
 ## Approved inputs and origin
@@ -23,8 +24,8 @@ implementation, external research archive, private trace or copied fixture was
 used. This is an origin statement, not independent review or legal clearance.
 
 The requested dotfiles `review-gauntlet/SKILL.md` has been read. Its two ordered
-review/fix/push stages remain pending until implementation and validation are
-complete. Independent reviewers must receive fresh approved-input packets and
+review/fix/push stages are recorded in the dated review history below. The initial
+checkpoint text remains historical evidence of what had run at that point. Independent reviewers must receive fresh approved-input packets and
 report the cleanroom checklist verdict separately from technical findings.
 
 At the initial foundation checkpoint, no dependency was added or updated. All direct dependencies
@@ -544,4 +545,82 @@ fresh-context review. Stage 1 gates passed: 273 workspace tests (49 byte tests),
 workspace build, clippy with warnings denied, formatting, deny licenses/bans/
 advisories/sources, diff checks and all seven unchanged imported hashes. The
 first push and second pinned-rubric review remain pending at this record point.
+
+## Thermonuclear review and manual fixes (2026-10-20)
+
+Stage 1 committed its fixes as 152e4169e0c9517f2de4de9cb7a79c57e4219bdc.
+`git push -u origin HEAD` succeeded; `git ls-remote origin
+refs/heads/feat/stage1c-byte-path` equaled local HEAD before Stage 2 began.
+There were no uncommitted tracked changes.
+
+Only then was cursor/plugins main resolved to full commit
+`a66a8931c2dd71f1ed6abf6a52b1898a9f389ae4`. The fetched rubric was
+[the pinned upstream SKILL.md](https://raw.githubusercontent.com/cursor/plugins/a66a8931c2dd71f1ed6abf6a52b1898a9f389ae4/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md),
+frontmatter name validated, SHA-256
+`7faca08b51b643b2ddd0836f92af15574444024685dcc1e677dbbb39ae8c9e8f`.
+It supplied quality criteria only, without authorizing code or workflow changes.
+The exact second directory is
+`reviews/feat-stage1c-byte-path-2026-10-20-132211-152e4169e0c9-thermonuclear`.
+
+A new fresh-context available-model reviewer received an explicit approved-input
+packet, all 99 full changed-file views, normative plan decisions, diff/history
+and all six cleanroom checklist requirements. The earlier independent-review
+outcome block in this record was blanked in that view, with original and view
+hashes separately recorded; implementation/design facts remained complete.
+No prior reviewer conclusions or research archive were provided. The reviewer
+completed 97 handwritten full-file reads, complete parsed structural inspection
+of generated Cargo.lock and OpenAPI, and reconciliation of all 239 diff hunks.
+Its initial coverage-incomplete checkpoint was replaced only after the remaining
+bounded reads completed. No review completion was inferred from the checkpoint.
+
+Technical verdict: REQUEST_CHANGES, 0 Critical, 2 Important, 0 Suggestions.
+Separate provenance verdict: no blocking provenance findings. No fresh tests
+were run by this reviewer; supplied command results were distinguished from its
+source/oracle examination. This does not claim Opus execution, legal clearance
+or historically isolated development.
+
+TQ1 identified duplicated write/replace receipt admission and quota-pressure
+recovery. The canonical manual fixer moved one Admission enum and driver into
+pipeline/common.rs. A small typed AdmissionPlan preserves write handle validation
+and initial staging versus streamed replacement's declared-length reservation.
+The driver owns receipt dispatch, rollback on pressure, workspace/deployment lazy
+fences, one retry, and ambiguous-COMMIT classification. Buffered preparation is
+released after admission; streaming still stages before each PUT and never holds
+a metadata transaction over body/backend I/O. Reservation swap and final
+publication semantics are unchanged.
+
+TQ2 identified truncate's business branch in the HTTP dispatcher and unrelated
+write-module ownership of manifest conversion. The fixer extracted
+pipeline::truncate::truncate_in, taking the caller's existing receipt transaction
+and returning an inode; lock, handle revalidation, pure geometry plan, publication,
+quota update and final lifetime check keep their order. The handler retains
+receipt/authority orchestration and DTO conversion. Shared existing_chunk lives
+in pipeline/common and is used by read/write/truncate. No runner, dependency,
+schema, product requirement or imported baseline was added or changed. This is
+an independent refactoring of AnchorFS code, not imported implementation.
+
+The initial canonical exact-directory auto pass selected both findings but its
+security-pattern guard flagged the authority-related files (fixed:0, skipped:0,
+needs-manual:2); it made no code changes and stopped before commit/push. Both
+items were then manually inspected and applied within the user's existing
+implementation/gauntlet authorization. Existing behavioral tests cover these
+refactors; no tests mirroring helper internals were added. The same reviewer's
+labeled source recheck confirmed both findings resolved, with no new issue and
+no blocking provenance finding; it did not claim fresh test execution. The
+final exact-directory auto audit found both already resolved (fixed:0, skipped:2,
+needs-manual:0), and the seven source hashes match the recheck. Final gate results
+are appended once their command handle completes.
+
+Stage 2 final gates completed with authoritative exit 0: `cargo fmt --all
+--check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`;
+`cargo test --workspace --locked -- --test-threads=4` (273 passing tests, including
+49 byte tests in 71.26 seconds and the 32-case byte model in 31.28 seconds);
+`cargo build --workspace --locked`; and `cargo deny check licenses bans
+advisories sources` (all categories ok, existing duplicate warnings only).
+The service SIGKILL/restart and chunk-size refusal, model/property, receipt,
+namespace, migration and persistence regressions all passed. `git diff --check`
+passed; all seven import hashes match and the protected baseline diff is empty.
+No production source changed after the author's seven-file fix recheck. The
+Stage 2 push and hosted-CI outcomes are recorded only after execution below.
+
 <!-- independent-review-history:end -->

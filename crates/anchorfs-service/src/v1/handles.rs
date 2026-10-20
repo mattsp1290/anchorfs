@@ -337,57 +337,10 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
                                     )?)
                                 }
                                 HandleRequest::Truncate(id, size) => {
-                                    use anchorfs_persistence::{manifests, namespace, quota};
-                                    let handle =
-                                        handles::load_for_write(tx, workspace, &session, id, None)
-                                            .await?;
-                                    let inode =
-                                        namespace::lock_inodes(tx, workspace, &[handle.inode_id])
-                                            .await?
-                                            .pop()
-                                            .ok_or_else(crate::pipeline::runner::unavailable)?;
-                                    let handle =
-                                        handles::load_for_write(tx, workspace, &session, id, None)
-                                            .await?;
-                                    let manifest =
-                                        manifests::current(tx, workspace, &inode).await?;
-                                    if manifest.chunk_size as u32 != chunk_size {
-                                        return Err(ApiError::new(
-                                            anchorfs_core::ErrorCode::Unsupported,
-                                            "",
-                                        ));
-                                    }
-                                    let rows = manifests::chunks(
-                                        tx,
-                                        workspace,
-                                        anchorfs_core::ManifestId(manifest.id),
-                                        None,
+                                    let next = crate::pipeline::truncate::truncate_in(
+                                        tx, workspace, &session, id, operation, geometry, size,
                                     )
                                     .await?;
-                                    let existing = rows
-                                        .iter()
-                                        .map(crate::pipeline::write::existing)
-                                        .collect::<Result<Vec<_>, _>>()?;
-                                    let plan = anchorfs_core::plan_truncate(
-                                        geometry,
-                                        inode.size as u64,
-                                        size,
-                                        &existing,
-                                    )?;
-                                    let (_, next) = manifests::publish_truncate(
-                                        tx, workspace, &inode, operation, size, &plan,
-                                    )
-                                    .await?;
-                                    quota::apply(
-                                        tx,
-                                        workspace,
-                                        quota::Charge {
-                                            inodes: 0,
-                                            bytes: next.size - inode.size,
-                                        },
-                                    )
-                                    .await?;
-                                    handles::assert_live(tx, &handle).await?;
                                     Published::metadata(MutationResult {
                                         operation_id: operation.0,
                                         inode_id: Some(next.id),

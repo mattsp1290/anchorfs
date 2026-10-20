@@ -1,7 +1,7 @@
 //! Receipt-first positional writes and append. Transaction ownership stays in
 //! each phase; materialization and uploads receive no transaction or connection.
 use super::{
-    common::{self, Context, Operation, Prepared, Upload},
+    common::{self, Admission, AdmissionPlan, Context, Operation, Prepared, Upload},
     faults::{self, FaultInjector, FaultPoint},
     runner::{Db, Deadline, Outcome, PhaseCell, unavailable},
 };
@@ -13,16 +13,16 @@ use crate::{
 };
 use anchorfs_backend::key::ObjectKey;
 use anchorfs_core::{
-    ErrorCode, ExistingChunk, HandleId, ManifestId, ObjectId, ReservationId, Sha256Digest,
-    WritePlan, materialize, plan_write, sha256,
+    ErrorCode, HandleId, ManifestId, ObjectId, ReservationId, Sha256Digest, WritePlan, materialize,
+    plan_write, sha256,
 };
 use anchorfs_persistence::{
     handles,
     manifests::{self, ChunkRow, ManifestRow, NewChunk},
     namespace::{self, InodeRow},
     objects, quota,
-    receipts::{self, ReceiptEntry, ReceiptRequest},
-    reservations::{self, ReservationError},
+    receipts::{self, ReceiptEntry},
+    reservations,
 };
 use bytes::Bytes;
 
@@ -47,11 +47,6 @@ struct Snapshot {
 enum Observed {
     Snapshot(Box<Snapshot>),
     Receipt(ReceiptEntry),
-}
-enum Admission {
-    Owned(Operation, Upload),
-    Receipt(ReceiptEntry),
-    Unknown(ApiError),
 }
 enum Swap {
     Reserved(Upload),
@@ -116,7 +111,10 @@ impl Writer<'_> {
             Some(&indices),
         )
         .await?;
-        let existing = rows.iter().map(existing).collect::<Result<Vec<_>, _>>()?;
+        let existing = rows
+            .iter()
+            .map(common::existing_chunk)
+            .collect::<Result<Vec<_>, _>>()?;
         let plan = plan_write(
             g,
             inode.size as u64,
@@ -181,89 +179,6 @@ impl Writer<'_> {
         }
         Ok(prepared)
     }
-    async fn admit(&self, chunks: Vec<Prepared>) -> Result<Admission, ApiError> {
-        let ctx = &self.req.context;
-        for pressure_retry in 0..2 {
-            let mut tx = self.db.begin().await?;
-            let p = ctx.prologue(&mut tx).await?;
-            let scope = common::scope(&p);
-            let entry = receipts::begin(
-                &mut tx,
-                scope,
-                ReceiptRequest {
-                    key: &ctx.key,
-                    op_type: ctx.op_type,
-                    digest: ctx.digest,
-                    credential_epoch: p.actor.epoch,
-                    retention: self.state.config.receipt_retention,
-                    wait_bound: self.state.config.db_lock_timeout,
-                },
-            )
-            .await?;
-            let ReceiptEntry::Fresh {
-                operation_id,
-                owner,
-            } = entry
-            else {
-                ctx.check(&mut tx, &p).await?;
-                tx.commit().await?;
-                return Ok(Admission::Receipt(entry));
-            };
-            handles::load_for_write(&mut tx, ctx.workspace, &p.session, self.req.handle, None)
-                .await?;
-            let upload = match common::reserve(
-                &mut tx,
-                self.state,
-                &p,
-                operation_id,
-                chunks.clone(),
-            )
-            .await
-            {
-                Ok(upload) => upload,
-                Err(error) => {
-                    let pressure = matches!(error, ReservationError::Exceeded(_));
-                    tx.rollback().await?;
-                    if pressure && pressure_retry == 0 {
-                        reservations::fence_overdue(
-                            &self.db.pool,
-                            Some(ctx.workspace),
-                            64,
-                            self.state.config.db_lock_timeout,
-                        )
-                        .await?;
-                        reservations::fence_overdue(
-                            &self.db.pool,
-                            None,
-                            64,
-                            self.state.config.db_lock_timeout,
-                        )
-                        .await?;
-                        continue;
-                    }
-                    return Err(error.into());
-                }
-            };
-            match tx.commit().await {
-                Ok(()) => {
-                    return Ok(Admission::Owned(
-                        Operation {
-                            id: operation_id,
-                            owner,
-                            scope,
-                            credential_epoch: p.actor.epoch,
-                        },
-                        upload,
-                    ));
-                }
-                Err(error) if !common::commit_outcome_unknown(&error) => {
-                    return Err(error.into());
-                }
-                Err(_) => return Ok(Admission::Unknown(common::pending_error(operation_id))),
-            }
-        }
-        Err(unavailable())
-    }
     async fn swap(
         &self,
         operation: &Operation,
@@ -299,7 +214,7 @@ impl Writer<'_> {
             "generation_conflict",
         )
         .await?;
-        let next = common::reserve(&mut tx, self.state, &p, operation.id, chunks).await;
+        let next = common::reserve(&mut tx, self.state, &p, operation.id, &chunks).await;
         let outcome = match next {
             Ok(upload) => Swap::Reserved(upload),
             Err(error) => {
@@ -454,14 +369,6 @@ impl Writer<'_> {
         }
     }
 }
-pub(crate) fn existing(row: &ChunkRow) -> Result<ExistingChunk, ApiError> {
-    Ok(ExistingChunk {
-        index: row.chunk_index.try_into().map_err(|_| unavailable())?,
-        logical_length: row.logical_length.try_into().map_err(|_| unavailable())?,
-        object_length: row.object_length.try_into().map_err(|_| unavailable())?,
-    })
-}
-
 pub async fn write(
     db: Db,
     deadline: Deadline,
@@ -495,13 +402,24 @@ pub async fn write(
     if !phase.start_admission() {
         return Err(unavailable());
     }
-    let (operation, mut upload) = match writer.admit(prepared).await? {
+    let (operation, mut upload) = match common::admit(
+        &db,
+        &req.context,
+        &state,
+        AdmissionPlan::Write {
+            handle: req.handle,
+            chunks: &prepared,
+        },
+    )
+    .await?
+    {
         Admission::Receipt(entry) => {
             return req.context.resolve(&db, entry).await.map(Outcome::Done);
         }
         Admission::Owned(operation, upload) => (operation, upload),
         Admission::Unknown(error) => return Err(error),
     };
+    drop(prepared);
     phase.admitted(operation.id);
     for attempt in 0..state.config.max_retry_attempts {
         if !faults::hit(

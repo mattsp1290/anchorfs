@@ -10,13 +10,15 @@ use crate::{
     v1::{self, Gate, Prologue},
 };
 use anchorfs_core::{
-    ChunkGeometry, ErrorCode, Limits, ObjectId, OperationId, ReservationId, Secret, Sha256Digest,
-    WorkspaceId,
+    ChunkGeometry, ErrorCode, ExistingChunk, HandleId, Limits, ObjectId, OperationId,
+    ReservationId, Secret, Sha256Digest, WorkspaceId,
 };
 use anchorfs_persistence::{
     authority::LeaseMode,
+    handles,
+    manifests::ChunkRow,
     objects, quota,
-    receipts::{self, ReceiptEntry, ReceiptScope},
+    receipts::{self, ReceiptEntry, ReceiptRequest, ReceiptScope},
     reservations::{self, ReservationError, ReservationRow},
 };
 use bytes::Bytes;
@@ -200,6 +202,109 @@ pub struct Operation {
     pub scope: ReceiptScope,
     pub credential_epoch: i64,
 }
+pub enum Admission {
+    Owned(Operation, Upload),
+    Receipt(ReceiptEntry),
+    Unknown(ApiError),
+}
+/// Writes stage their materialized chunks at admission; streamed replacement
+/// reserves its declared length and stages each identity as the body arrives.
+pub enum AdmissionPlan<'a> {
+    Write {
+        handle: HandleId,
+        chunks: &'a [Prepared],
+    },
+    Replace {
+        length: u64,
+    },
+}
+pub async fn admit(
+    db: &Db,
+    ctx: &Context,
+    state: &AppState,
+    plan: AdmissionPlan<'_>,
+) -> Result<Admission, ApiError> {
+    for pressure_retry in 0..2 {
+        let mut tx = db.begin().await?;
+        let p = ctx.prologue(&mut tx).await?;
+        let scope = scope(&p);
+        let entry = receipts::begin(
+            &mut tx,
+            scope,
+            ReceiptRequest {
+                key: &ctx.key,
+                op_type: ctx.op_type,
+                digest: ctx.digest,
+                credential_epoch: p.actor.epoch,
+                retention: state.config.receipt_retention,
+                wait_bound: state.config.db_lock_timeout,
+            },
+        )
+        .await?;
+        let ReceiptEntry::Fresh {
+            operation_id,
+            owner,
+        } = entry
+        else {
+            ctx.check(&mut tx, &p).await?;
+            tx.commit().await?;
+            return Ok(Admission::Receipt(entry));
+        };
+        let reserved = match &plan {
+            AdmissionPlan::Write { handle, chunks } => {
+                handles::load_for_write(&mut tx, ctx.workspace, &p.session, *handle, None).await?;
+                reserve(&mut tx, state, &p, operation_id, chunks).await
+            }
+            AdmissionPlan::Replace { length } => {
+                reserve_parts(&mut tx, state, &p, operation_id, *length as i64, &[]).await
+            }
+        };
+        let upload = match reserved {
+            Ok(upload) => upload,
+            Err(error) => {
+                let pressure = matches!(error, ReservationError::Exceeded(_));
+                tx.rollback().await?;
+                if pressure && pressure_retry == 0 {
+                    reservations::fence_overdue(
+                        &db.pool,
+                        Some(ctx.workspace),
+                        64,
+                        state.config.db_lock_timeout,
+                    )
+                    .await?;
+                    reservations::fence_overdue(&db.pool, None, 64, state.config.db_lock_timeout)
+                        .await?;
+                    continue;
+                }
+                return Err(error.into());
+            }
+        };
+        match tx.commit().await {
+            Ok(()) => {
+                return Ok(Admission::Owned(
+                    Operation {
+                        id: operation_id,
+                        owner,
+                        scope,
+                        credential_epoch: p.actor.epoch,
+                    },
+                    upload,
+                ));
+            }
+            Err(error) if !commit_outcome_unknown(&error) => return Err(error.into()),
+            Err(_) => return Ok(Admission::Unknown(pending_error(operation_id))),
+        }
+    }
+    Err(unavailable())
+}
+
+pub fn existing_chunk(row: &ChunkRow) -> Result<ExistingChunk, ApiError> {
+    Ok(ExistingChunk {
+        index: row.chunk_index.try_into().map_err(|_| unavailable())?,
+        logical_length: row.logical_length.try_into().map_err(|_| unavailable())?,
+        object_length: row.object_length.try_into().map_err(|_| unavailable())?,
+    })
+}
 #[derive(Clone)]
 pub struct Prepared {
     pub index: u32,
@@ -219,9 +324,19 @@ pub async fn reserve(
     state: &AppState,
     p: &Prologue,
     operation: OperationId,
-    chunks: Vec<Prepared>,
+    chunks: &[Prepared],
 ) -> Result<Upload, ReservationError> {
     let bytes = chunks.iter().map(|c| i64::from(c.length)).sum();
+    reserve_parts(tx, state, p, operation, bytes, chunks).await
+}
+async fn reserve_parts(
+    tx: &mut Transaction<'_, Postgres>,
+    state: &AppState,
+    p: &Prologue,
+    operation: OperationId,
+    bytes: i64,
+    chunks: &[Prepared],
+) -> Result<Upload, ReservationError> {
     let reservation = reservations::insert(
         tx,
         p.session.workspace_id,
@@ -231,7 +346,7 @@ pub async fn reserve(
         state.config.upload_reservation_ttl,
     )
     .await?;
-    for chunk in &chunks {
+    for chunk in chunks {
         objects::stage(
             tx,
             p.session.workspace_id,
@@ -246,7 +361,7 @@ pub async fn reserve(
     reservations::charge(tx, p.session.workspace_id, &reservation).await?;
     Ok(Upload {
         reservation,
-        chunks,
+        chunks: chunks.to_vec(),
         attempted: 0,
         confirmed: 0,
     })
