@@ -192,8 +192,8 @@ impl Replacer<'_> {
                         },
                     ));
                 }
-                Err(sqlx::Error::Database(error)) => {
-                    return Err(sqlx::Error::Database(error).into());
+                Err(error) if !common::commit_outcome_unknown(&error) => {
+                    return Err(error.into());
                 }
                 Err(_) => return Ok(Admission::Unknown(common::pending_error(operation_id))),
             }
@@ -287,7 +287,7 @@ impl Replacer<'_> {
         self.context.check(&mut tx, &p).await?;
         match tx.commit().await {
             Ok(()) => Ok(Published::Done(Answer::metadata(result)?)),
-            Err(sqlx::Error::Database(error)) => Err(sqlx::Error::Database(error).into()),
+            Err(error) if !common::commit_outcome_unknown(&error) => Err(error.into()),
             Err(_) => Ok(Published::Unknown(common::pending_error(operation.id))),
         }
     }
@@ -390,7 +390,7 @@ impl Replacer<'_> {
                 }
                 answer.map(Outcome::Done)
             }
-            Err(sqlx::Error::Database(error)) => Err(sqlx::Error::Database(error).into()),
+            Err(error) if !common::commit_outcome_unknown(&error) => Err(error.into()),
             Err(_) => Err(common::pending_error(operation_id)),
         }
     }

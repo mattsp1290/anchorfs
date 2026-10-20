@@ -153,6 +153,28 @@ pub fn pending_error(id: OperationId) -> ApiError {
     error.retry_after_ms = Some(100);
     error
 }
+/// A transport failure may arrive as a PostgreSQL FATAL message rather than
+/// sqlx::Error::Io. Once COMMIT has been sent, it must not trigger finalization
+/// of a publication whose durable outcome has not been observed.
+pub fn commit_outcome_unknown(error: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(error) = error else {
+        return true;
+    };
+    if error
+        .code()
+        .is_some_and(|code| code.starts_with("08") || code == "40003")
+    {
+        return true;
+    }
+    error
+        .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+        .is_none_or(|error| {
+            matches!(
+                error.severity(),
+                sqlx::postgres::PgSeverity::Fatal | sqlx::postgres::PgSeverity::Panic
+            )
+        })
+}
 pub struct Operation {
     pub id: OperationId,
     pub owner: Secret<String>,

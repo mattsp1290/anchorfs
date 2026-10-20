@@ -56,8 +56,12 @@ re-materialization and retry; append chooses the new EOF. Retry swaps release
 the old staging reservation before charging the new one, in the same transaction.
 A failed swap rolls back to its savepoint and finalizes the old reservation
 and receipt in that transaction. Statement errors are definitive non-publication
-and run a separate finalizer; I/O failure during COMMIT returns outcome_unknown
-and preserves the receipt for resolution.
+and run a separate finalizer. Transport errors, fatal PostgreSQL messages and
+connection/unknown-completion SQLSTATEs during COMMIT return outcome_unknown
+and preserve the receipt for resolution. An ordinary server error at COMMIT
+(such as a deferred constraint rejection) remains definitive and is finalized.
+BY3c tests both an actual terminated backend during COMMIT and a deferred
+constraint rejection.
 
 The data runner owns a concurrency permit until its detached job finishes.
 An atomic Before→Admitting handshake competes with Before→Abandoned at response

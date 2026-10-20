@@ -252,8 +252,8 @@ impl Writer<'_> {
                         upload,
                     ));
                 }
-                Err(sqlx::Error::Database(error)) => {
-                    return Err(sqlx::Error::Database(error).into());
+                Err(error) if !common::commit_outcome_unknown(&error) => {
+                    return Err(error.into());
                 }
                 Err(_) => return Ok(Admission::Unknown(common::pending_error(operation_id))),
             }
@@ -321,7 +321,7 @@ impl Writer<'_> {
         };
         match tx.commit().await {
             Ok(()) => Ok(outcome),
-            Err(sqlx::Error::Database(error)) => Err(sqlx::Error::Database(error).into()),
+            Err(error) if !common::commit_outcome_unknown(&error) => Err(error.into()),
             Err(_) => Ok(Swap::Unknown(common::pending_error(operation.id))),
         }
     }
@@ -444,7 +444,7 @@ impl Writer<'_> {
         handles::assert_live(&mut tx, &handle).await?;
         match tx.commit().await {
             Ok(()) => Ok(Publication::Written(Answer::metadata(result)?)),
-            Err(sqlx::Error::Database(error)) => Err(sqlx::Error::Database(error).into()),
+            Err(error) if !common::commit_outcome_unknown(&error) => Err(error.into()),
             Err(_) => Ok(Publication::Unknown(common::pending_error(operation.id))),
         }
     }

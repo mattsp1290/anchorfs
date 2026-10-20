@@ -350,3 +350,48 @@ The first admin test attempt incorrectly used the fixture's write-role host;
 that caller was correctly denied. The corrected fixture issues a distinct admin
 role and uid, proving the intended permission bypass rather than relying on file
 ownership. No production permission change was needed.
+
+
+## COMMIT loss, pool pressure and provider faults (2026-10-20)
+
+The BY3c deferred-trigger schedule exposed a real classification defect:
+terminating PostgreSQL while the manifest transaction awaited COMMIT returned a
+fatal database message rather than an sqlx I/O error. The byte pipeline treated
+all database messages as definite rollback and returned dependency_unavailable.
+The shared byte COMMIT classifier now treats PostgreSQL FATAL/PANIC severity,
+connection exception codes and unknown statement completion as ambiguous, in
+addition to transport errors. Admission, retry swap, regular publication and
+empty replacement all use it. Definite server errors still permit finalization;
+a new deferred check-constraint test exercises that distinction. Ordinary
+statement errors are unaffected.
+
+Inputs: independently authored fault tests following the approved BY3c/CP13b
+pattern; the existing source/license-reviewed sqlx-postgres 0.8.6 error API for
+severity; and the permitted [PostgreSQL 17 SQLSTATE reference](https://www.postgresql.org/docs/17/errcodes-appendix.html).
+No new crate or dependency edge is introduced. The classifier is an independent
+AnchorFS error-handling decision implementing receipt-based ambiguity recovery,
+not a compatibility claim.
+
+Observed targeted results:
+
+- BY3c backend termination during the actual COMMIT now passes and preserves
+  receipt/manifest atomicity, with pending reservation recovery after expiry.
+- BY5c passes: a newly built AppState/router on the same pool and bucket sees
+  the crashed operation pending, reads the old bytes and durably fences the
+  reservation on a later same-key request after expiry.
+- BY21 passes with a four-connection pool: two held connections still allow
+  publication; all four held beyond grace produce outcome_unknown, the detached
+  task releases its permit, and a later touch durably fences the pending upload.
+- BY6 passes all four provider scripts. Dropped PUTs and provider checksum
+  rejection retain conservative charges despite absent raw objects; a swallowed
+  response reconciles through HEAD and publishes once; a mutated checksum reply
+  leaves a present raw object conservatively charged without publication. Old
+  bytes remain visible for failed operations, and independent bucket/SQL
+  invariants pass. The initial test query incorrectly assumed objects had an
+  operation_id column; it now joins through upload_reservations, matching the
+  actual schema. No schema change was required.
+
+Clippy passes with warnings denied. The complete expanded byte suite exited 0:
+37 tests passed in 40.23 seconds, including the new definite-constraint rejection
+case and all provider/pool/recovery variants. Formatting and diff checks pass.
+The remaining acceptance/review/PR work is still pending.

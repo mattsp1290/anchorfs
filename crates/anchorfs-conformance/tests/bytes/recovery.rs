@@ -1,6 +1,150 @@
 use super::support::*;
 
 #[tokio::test]
+async fn by3c_definite_commit_rejection_finalizes_without_publishing() {
+    let f = Fixture::with_bytes(workspace_body(), configure, Arc::new(NoFaults), false).await;
+    let handle = open(&f, &f.worker, &f.worker_session, "f", true).await;
+    sqlx::raw_sql("CREATE FUNCTION test_byte_commit_reject() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE check_violation USING MESSAGE='synthetic deferred constraint'; END $$; CREATE CONSTRAINT TRIGGER test_byte_commit_reject AFTER INSERT ON manifests DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_byte_commit_reject();").execute(&f.pool).await.unwrap();
+    error(
+        append(&f, &handle, "rejected", b"data").await,
+        503,
+        "dependency_unavailable",
+    );
+    let state: String = sqlx::query_scalar(
+        "SELECT state FROM operations WHERE workspace_id=$1 AND idempotency_key='rejected'",
+    )
+    .bind(f.workspace)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(state, "failed");
+    assert_eq!(committed(&f, &handle).await, b"");
+    let charges:(i64,i64)=sqlx::query_as("SELECT physical_bytes_used,staging_bytes_reserved FROM workspace_quotas WHERE workspace_id=$1").bind(f.workspace).fetch_one(&f.pool).await.unwrap();
+    assert_eq!(charges, (4, 0));
+    f.invariants().await;
+}
+
+#[tokio::test]
+async fn by3c_connection_loss_during_manifest_commit_preserves_atomicity() {
+    let f = Fixture::with_bytes(workspace_body(), configure, Arc::new(NoFaults), false).await;
+    let handle = open(&f, &f.worker, &f.worker_session, "f", true).await;
+    sqlx::raw_sql("CREATE FUNCTION test_byte_commit_barrier() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(918272); RETURN NEW; END $$; CREATE CONSTRAINT TRIGGER test_byte_commit_barrier AFTER INSERT ON manifests DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_byte_commit_barrier();").execute(&f.pool).await.unwrap();
+    let mut holder = f.pool.acquire().await.unwrap();
+    sqlx::query("SELECT pg_advisory_lock(918272)")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let request = append_task(&f, &handle, "commit-loss", b"once");
+    let pid:i32=tokio::time::timeout(Duration::from_secs(10),async {loop {
+        let pid:Option<i32>=sqlx::query_scalar("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND query='COMMIT' AND wait_event_type='Lock' AND wait_event='advisory'").fetch_optional(&f.pool).await.unwrap();
+        if let Some(pid)=pid {break pid;}
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }}).await.unwrap();
+    let terminated: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
+        .bind(pid)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(terminated);
+    error(request.await.unwrap(), 503, "outcome_unknown");
+    sqlx::query("SELECT pg_advisory_unlock(918272)")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    drop(holder);
+    let state: String = sqlx::query_scalar(
+        "SELECT state FROM operations WHERE workspace_id=$1 AND idempotency_key='commit-loss'",
+    )
+    .bind(f.workspace)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM manifests WHERE workspace_id=$1")
+        .bind(f.workspace)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, if state == "committed" { 2 } else { 1 });
+    if state == "pending" {
+        let active: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM upload_reservations WHERE workspace_id=$1 AND state='active'",
+        )
+        .bind(f.workspace)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+        assert_eq!(active, 1);
+        sqlx::query("UPDATE upload_reservations SET expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1").bind(f.workspace).execute(&f.pool).await.unwrap();
+        error(
+            append(&f, &handle, "commit-loss", b"once").await,
+            409,
+            "operation_failed",
+        );
+    } else {
+        assert_eq!(state, "committed");
+        assert_eq!(committed(&f, &handle).await, b"once");
+    }
+    f.invariants().await;
+}
+
+#[tokio::test]
+async fn by5c_new_router_recovers_a_crashed_pending_upload() {
+    let mut f = Fixture::with_bytes(workspace_body(), configure, Arc::new(NoFaults), false).await;
+    let handle = open(&f, &f.worker, &f.worker_session, "f", true).await;
+    write(&f, &handle, "seed", 0, b"safe").await.status(200);
+    let mut state = AppState::production((*f.config).clone(), f.pool.clone(), f.backend.service());
+    state.faults = Arc::new(CrashOnce::at(FaultPoint::BeforePublish));
+    f.client = Client {
+        app: build_router(state),
+    };
+    let lost = error(
+        write(&f, &handle, "crash", 0, b"lost").await,
+        503,
+        "outcome_unknown",
+    );
+    f.client = Client {
+        app: build_router(AppState::production(
+            (*f.config).clone(),
+            f.pool.clone(),
+            f.backend.service(),
+        )),
+    };
+    let pending = f
+        .client
+        .call(
+            "GET",
+            &format!(
+                "{}/operations/{}",
+                f.workspace_path(),
+                lost["operation_id"].as_str().unwrap()
+            ),
+            Some(&f.host),
+            None,
+            None,
+            None,
+        )
+        .await
+        .status(200)
+        .body;
+    assert_eq!(pending["state"], "pending");
+    assert_eq!(
+        read(&f, &handle, 0, 4096, None).await.status(200).bytes,
+        b"safe".as_slice()
+    );
+    sqlx::query("UPDATE upload_reservations SET expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND state='active'").bind(f.workspace).execute(&f.pool).await.unwrap();
+    error(
+        write(&f, &handle, "crash", 0, b"lost").await,
+        409,
+        "operation_failed",
+    );
+    assert_eq!(
+        read(&f, &handle, 0, 4096, None).await.status(200).bytes,
+        b"safe".as_slice()
+    );
+    f.invariants().await;
+}
+
+#[tokio::test]
 async fn by4_pending_same_key_returns_the_owned_operation_then_replays() {
     let (faults, release) = GateFault::new(FaultPoint::BeforeUpload, 1);
     let f = Fixture::with_bytes(workspace_body(), configure, faults.clone(), false).await;
