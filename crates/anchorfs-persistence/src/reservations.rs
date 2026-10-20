@@ -161,12 +161,20 @@ pub async fn fence_overdue(
     pool: &sqlx::PgPool,
     workspace: Option<WorkspaceId>,
     limit: u32,
+    lock_timeout: Duration,
 ) -> Result<u32, sqlx::Error> {
     let overdue: Vec<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as("SELECT DISTINCT workspace_id,operation_id FROM upload_reservations WHERE state='active' AND expires_at<=clock_timestamp() AND ($1::uuid IS NULL OR workspace_id=$1) LIMIT $2")
         .bind(workspace.map(|w|w.0)).bind(i64::from(limit)).fetch_all(pool).await?;
     let mut count = 0;
     for (workspace, operation) in overdue {
         let mut tx = pool.begin().await?;
+        sqlx::query("SELECT set_config('lock_timeout',$1,true)")
+            .bind(format!(
+                "{}ms",
+                lock_timeout.as_millis().max(1).min(i32::MAX as u128)
+            ))
+            .execute(&mut *tx)
+            .await?;
         if matches!(
             crate::receipts::fence_expired_pending(
                 &mut tx,

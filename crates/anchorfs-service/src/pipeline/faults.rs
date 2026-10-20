@@ -31,3 +31,22 @@ impl FaultInjector for NoFaults {
         FaultAction::Continue
     }
 }
+
+pub async fn hit(
+    faults: &dyn FaultInjector,
+    point: FaultPoint,
+    operation: Option<OperationId>,
+) -> bool {
+    match faults.at(point, operation) {
+        FaultAction::Continue => true,
+        FaultAction::Crash => false,
+        FaultAction::Wait(mut gate) => {
+            while !*gate.borrow_and_update() {
+                if gate.changed().await.is_err() {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+}

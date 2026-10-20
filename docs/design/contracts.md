@@ -32,7 +32,59 @@ publishes a new empty manifest, increments the inode generation and releases
 the file's retained logical size; physical objects and old manifests remain.
 Read/write handle helpers enforce the granted access flags as well as session
 binding and lifetime. These persistence and metadata-route behaviors are tested;
-the byte HTTP upload/read pipelines remain under implementation.
+the verified write methods are described below; reads and replace remain under implementation.
+
+### Stage 1c write pipeline (2026-10-20)
+
+`writeAt` and `append` now use separate snapshot, admission, upload and
+publication phases. No database transaction spans a backend request. Receipt
+peek precedes handle, file-size, quota and backend validation; the admission
+transaction rechecks the receipt for concurrent same-key attempts. It records
+an owner proof, reservation and staged objects before the first upload, with
+workspace and deployment quota locks last. A same-key pending request returns
+`outcome_unknown` with the operation ID; overdue reservations resolve through
+the lazy fence. Every PUT error retains a conservative physical charge for all
+attempted objects. Only the owner, which tracks never-attempted objects, can
+omit those objects from orphan charges. No automatic deletion occurs.
+
+Publication rechecks authority epochs captured at admission, session, workflow,
+inode, handle and reservation. It commits objects, a complete immutable
+manifest, logical/staging/physical charges and the original result together.
+An inode-generation change with the same manifest is a metadata change and
+does not require a new upload. A different manifest triggers bounded
+re-materialization and retry; append chooses the new EOF. Retry swaps release
+the old staging reservation before charging the new one, in the same transaction.
+A failed swap rolls back to its savepoint and finalizes the old reservation
+and receipt in that transaction. Statement errors are definitive non-publication
+and run a separate finalizer; I/O failure during COMMIT returns outcome_unknown
+and preserves the receipt for resolution.
+
+The data runner owns a concurrency permit until its detached job finishes.
+An atomic Before→Admitting handshake competes with Before→Abandoned at response
+timeout: a request answered dependency_unavailable before admission cannot
+later begin publishing. After admission, abandonment returns outcome_unknown.
+Backend calls have a hard deadline measured from request start; database phases
+complete under lock/acquisition bounds, with bounded acquisition retries for
+publication/finalization. Lazy quota-pressure fences now receive the configured
+lock timeout as well.
+
+Verified against disposable PostgreSQL/MinIO by the byte write suite: persisted
+bytes across two sessions' handles, sparse boundary writes, metadata-only
+shrink/regrow and same-size truncate, receipt replay after a simulated lost
+response and handle close, key/body/offset binding, conservative failed-upload
+charges, append conflict retry at the staging limit, and post-upload credential,
+epoch and handle fencing. Fsync is a read-mode, receipt-free synchronous-write
+barrier returning current inode attributes. This is not yet process-restart or
+readRange acceptance evidence; those remain in the milestone verification work.
+
+Memory/lifecycle limitations: BinaryBody buffers up to max_request_bytes per
+request before database authentication and before a data permit; total buffered
+request-body memory is therefore not bounded by max_data_ops. Materialization
+is bounded by the data permits, and uploaded buffers are released before retry
+preparation. No reservation heartbeat, expiry sweeper, read cache or object
+deletion is implemented. The deployment quota singleton and full manifest row
+copies remain throughput costs. Uncertain uploads may over-report physical bytes
+until future offline reconciliation.
 
 ## Limits
 

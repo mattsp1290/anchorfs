@@ -108,6 +108,67 @@ impl From<sqlx::Error> for ApiError {
         database(error, "")
     }
 }
+
+impl From<anchorfs_persistence::reservations::ReservationError> for ApiError {
+    fn from(error: anchorfs_persistence::reservations::ReservationError) -> Self {
+        use anchorfs_persistence::reservations::{QuotaKind as Q, ReservationError as R};
+        match error {
+            R::Database(error) => error.into(),
+            R::PrincipalBound | R::Exceeded(Q::WorkspaceStaging | Q::DeploymentStaging) => {
+                Self::new(ErrorCode::QuotaExceeded, "")
+            }
+            R::Exceeded(Q::WorkspacePhysical | Q::DeploymentPhysical) => {
+                Self::new(ErrorCode::CapacityExhausted, "")
+            }
+            R::Expired => {
+                let mut error = Self::new(ErrorCode::Fenced, "");
+                error.message = "reservation_expired".into();
+                error
+            }
+            R::NotActive => Self::new(ErrorCode::Fenced, ""),
+            R::NotFound => Self::new(ErrorCode::NotFound, ""),
+        }
+    }
+}
+impl From<anchorfs_core::ChunkError> for ApiError {
+    fn from(error: anchorfs_core::ChunkError) -> Self {
+        Self::new(
+            if error == anchorfs_core::ChunkError::ZeroLength {
+                ErrorCode::InvalidInput
+            } else {
+                ErrorCode::FileTooLarge
+            },
+            "",
+        )
+    }
+}
+impl From<anchorfs_persistence::receipts::ReceiptError> for ApiError {
+    fn from(error: anchorfs_persistence::receipts::ReceiptError) -> Self {
+        use anchorfs_persistence::receipts::ReceiptError as R;
+        match error {
+            R::Database(error) => error.into(),
+            R::NotOwner => Self::new(ErrorCode::OperationFailed, ""),
+            R::PendingOwner => {
+                let mut error = Self::new(ErrorCode::OutcomeUnknown, "");
+                error.retry_after_ms = Some(100);
+                error
+            }
+        }
+    }
+}
+pub fn backend(error: anchorfs_backend::traits::BackendError) -> ApiError {
+    use anchorfs_backend::traits::BackendError;
+    let mut result = ApiError::new(ErrorCode::DependencyUnavailable, "");
+    if matches!(
+        error,
+        BackendError::NotFound | BackendError::IntegrityMismatch
+    ) {
+        result.message = "backend_integrity".into();
+    } else {
+        result.retry_after_ms = Some(100);
+    }
+    result
+}
 impl From<anchorfs_persistence::sessions::SessionError> for ApiError {
     fn from(error: anchorfs_persistence::sessions::SessionError) -> Self {
         use anchorfs_persistence::sessions::SessionError;

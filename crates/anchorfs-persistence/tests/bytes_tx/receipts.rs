@@ -228,15 +228,25 @@ async fn inspection_and_quota_pressure_fence_overdue_operations() {
             tx.commit().await.unwrap();
         } else {
             assert_eq!(
-                reservations::fence_overdue(&p.db.pool, Some(p.workspace), 10)
-                    .await
-                    .unwrap(),
+                reservations::fence_overdue(
+                    &p.db.pool,
+                    Some(p.workspace),
+                    10,
+                    Duration::from_secs(1)
+                )
+                .await
+                .unwrap(),
                 1
             );
             assert_eq!(
-                reservations::fence_overdue(&p.db.pool, Some(p.workspace), 10)
-                    .await
-                    .unwrap(),
+                reservations::fence_overdue(
+                    &p.db.pool,
+                    Some(p.workspace),
+                    10,
+                    Duration::from_secs(1)
+                )
+                .await
+                .unwrap(),
                 0
             );
         }

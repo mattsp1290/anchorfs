@@ -136,6 +136,19 @@ pub async fn apply(
     }
     Ok(())
 }
+/// Snapshot-only optimization; publication must still apply the authoritative delta.
+pub async fn check_growth(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: WorkspaceId,
+    delta: i64,
+) -> Result<(), QuotaError> {
+    let allowed:bool=sqlx::query_scalar("SELECT $2<=0 OR logical_bytes_used::numeric+$2<=logical_bytes_limit FROM workspace_quotas WHERE workspace_id=$1")
+        .bind(workspace.0).bind(delta).fetch_one(&mut **tx).await?;
+    if !allowed {
+        return Err(QuotaError::Exceeded);
+    }
+    Ok(())
+}
 /// The caller holds the inode FOR UPDATE. Re-read after acquiring that lock.
 pub async fn release_if_due(
     tx: &mut Transaction<'_, Postgres>,

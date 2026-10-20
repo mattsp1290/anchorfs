@@ -74,7 +74,7 @@ impl<S: Send + Sync> FromRequestParts<S> for IdempotencyKey {
             .ok_or_else(|| map_rejection(axum::http::StatusCode::BAD_REQUEST, trace(parts)))
     }
 }
-pub struct BinaryBody;
+pub struct BinaryBody(pub bytes::Bytes);
 impl<S: Send + Sync> FromRequest<S> for BinaryBody {
     type Rejection = ApiError;
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
@@ -97,7 +97,7 @@ impl<S: Send + Sync> FromRequest<S> for BinaryBody {
         }
         axum::body::Bytes::from_request(req, state)
             .await
-            .map(|_| Self)
+            .map(Self)
             .map_err(|r| map_rejection(r.status(), id))
     }
 }

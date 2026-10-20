@@ -25,6 +25,10 @@ const IMPLEMENTED: &[&str] = &[
     "openHandle",
     "renewHandle",
     "closeHandle",
+    "writeAt",
+    "append",
+    "truncate",
+    "fsync",
 ];
 mod common;
 use anchorfs_persistence::settings::DurabilityProfile;
@@ -49,6 +53,7 @@ async fn call(
         .method(method)
         .uri(uri)
         .header("content-type", content_type)
+        .header("content-length", body.len())
         .header(
             "X-Anchorfs-Session-Id",
             "00000000-0000-4000-8000-000000000001",
@@ -320,7 +325,7 @@ async fn implemented_routes_demand_bearer_and_others_return_501() {
         }
     }
     assert_eq!(count, 38);
-    assert_eq!(implemented_count, 26);
+    assert_eq!(implemented_count, 30);
 }
 #[tokio::test]
 async fn invalid_body_returns_400_not_501() {
@@ -391,7 +396,7 @@ async fn body_limits_exact() {
         (
             "/handles/00000000-0000-4000-8000-000000000001/bytes?offset=0",
             write,
-            501,
+            401,
         ),
         (
             "/handles/00000000-0000-4000-8000-000000000001/bytes?offset=0",

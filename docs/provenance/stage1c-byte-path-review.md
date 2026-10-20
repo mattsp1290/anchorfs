@@ -1,7 +1,8 @@
 # Stage 1c byte path — implementation evidence (in progress)
 
-This record is incremental. Stage 1c is **not complete**; byte and pin HTTP
-routes still return their Stage 1b stubs. No end-to-end durable byte capability,
+This record is incremental. Stage 1c is **not complete**. Write, append, truncate
+and fsync routes are connected; readRange, replaceFile and read pins remain stubs.
+No complete end-to-end byte path,
 review-gauntlet completion, PR, hosted CI result or storage durability is claimed.
 
 ## Approved inputs and origin
@@ -169,3 +170,53 @@ host-issued session recovery. Independent gauntlet review remains pending.
 Still required: write/read/replace/pin pipelines and route implementations,
 service-level fault, concurrency, quota, model and restart acceptance (BY1–BY21),
 complete implementation/design records, both review-gauntlet stages and PR/CI.
+
+## Write pipeline checkpoint (2026-10-20)
+
+Implemented WP2: detached data runner with an atomic admission handshake,
+hard backend deadlines and bounded final-phase acquisition; receipt-first
+writeAt/append; exact reservations and staged objects before PUT; conservative
+failure finalization; publication-time epoch/handle/lease/reservation fences;
+bounded generation retries and an atomic reservation swap; truncate and
+receipt-free fsync. The route sweep now observes **30 implemented / 8 stubs**.
+OpenAPI was regenerated for the four connected methods and fsync's attribute
+response without an idempotency-key parameter.
+
+Origin remains approved specs, plan W2/W5–W9/W11/W14–W22/W25–W30/W32/W35, and
+independent AnchorFS code. New helpers put inode loading and snapshot quota
+checks in persistence, with transaction orchestration in service. No new crate,
+dependency edge, imported text, competitor source or compatibility claim was
+introduced. The implementation adds an explicit lock-timeout argument to the
+lazy quota-pressure fence; otherwise its standalone transactions could inherit
+PostgreSQL's unbounded default lock timeout. Uploaded buffers are released as
+PUT completes, retaining lengths/digests/identities for publication and cleanup
+so retry preparation does not retain a previous attempt's file buffers.
+
+Observed verification so far:
+
+- Service unit tests: 15 passed, including the admission race, prevention of
+  late admission after timeout, and completion/permit retention after admitted
+  response abandonment.
+- Conformance service contract suite: 17 passed, including 30/8 route coverage.
+  Its finite-body helper now sends Content-Length, matching HTTP framing when
+  asserting rejection above the body limit before bearer parsing.
+- New real-backend byte tests pass individually: complete manifests and sparse
+  truncate/regrow; digest/key binding and empty-body rejection; lost-response
+  receipt replay after close; conservative upload failure charges; concurrent
+  append retry with the staging budget exactly full; post-upload credential,
+  epoch and handle fencing. A single dropped PUT was initially recovered by
+  the backend's documented two-round immutable retry; the failure fixture was
+  corrected to drop both rounds and the terminal-failure test passed.
+- `cargo test --workspace --locked -- --test-threads=4`: exited 0, 230 passing
+  tests. This broad run began before the last buffer-release and receipt-error
+  annotation refinements; the entire 8-test byte suite was rerun after them
+  and passed, including forced conflict/retry and finalization cases.
+- Final `cargo clippy --workspace --all-targets --locked -- -D warnings`,
+  formatting and diff checks passed. `cargo deny check licenses bans advisories
+  sources` also exited 0 (existing duplicate warnings). No imported-spec or
+  Cargo.lock diff.
+
+The byte tests currently observe committed contents independently through
+manifest SQL and raw SDK GETs, without the service planners. Native readRange,
+pins, streamed conditional replace and the rest of BY1–BY21/model/restart
+coverage still remain. No PR or gauntlet completion is claimed.

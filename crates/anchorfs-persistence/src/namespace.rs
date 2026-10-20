@@ -209,6 +209,17 @@ pub async fn lock_inodes(
     .fetch_all(&mut **tx)
     .await
 }
+pub async fn load_inode(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: WorkspaceId,
+    id: i64,
+) -> Result<InodeRow, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM inodes WHERE workspace_id=$1 AND id=$2")
+        .bind(workspace.0)
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await
+}
 pub async fn ancestors(
     tx: &mut Transaction<'_, Postgres>,
     workspace: WorkspaceId,
