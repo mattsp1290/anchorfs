@@ -8,6 +8,8 @@ use testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
 use testcontainers_modules::postgres::Postgres;
 #[path = "common/minio.rs"]
 mod minio;
+#[path = "binary/restart.rs"]
+mod restart;
 const DIGEST: &str = "sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3";
 struct ChildGuard(Child);
 impl Drop for ChildGuard {
@@ -301,6 +303,142 @@ fn config_checksum_mode_and_probe_deadline() {
     assert_eq!(defaults.backend_probe_deadline, Duration::from_secs(1));
 }
 
+#[test]
+fn config_byte_path_bounds() {
+    for (vars, valid) in [
+        (vec![("CHUNK_SIZE", "1024")], false),
+        (vec![("CHUNK_SIZE", "8388608")], false),
+        (
+            vec![("CHUNK_SIZE", "4096"), ("MAX_REQUEST_BYTES", "4097")],
+            false,
+        ),
+        (vec![("MAX_DATA_OPS", "7")], false),
+        (vec![("UPLOAD_RESERVATION_TTL_MS", "362000")], false),
+        (vec![("UPLOAD_RESERVATION_TTL_MS", "86400000")], false),
+        (vec![("READ_PIN_TTL_MS", "0")], false),
+        (vec![("MAX_READ_PINS_PER_SESSION", "0")], false),
+        (vec![("MAX_RETRY_ATTEMPTS", "0")], false),
+        (
+            vec![("CHUNK_SIZE", "4096"), ("MAX_REQUEST_BYTES", "4096")],
+            true,
+        ),
+        (
+            vec![("DB_MAX_CONNECTIONS", "1"), ("MAX_DATA_OPS", "1")],
+            true,
+        ),
+        (
+            vec![("DB_MAX_CONNECTIONS", "2"), ("MAX_DATA_OPS", "2")],
+            false,
+        ),
+    ] {
+        let mut cmd = command();
+        cmd.arg("serve").env(
+            "ANCHORFS_DATABASE_URL",
+            "postgres://unused:unused@127.0.0.1:1/unused",
+        );
+        for (name, value) in &vars {
+            cmd.env(format!("ANCHORFS_{name}"), value);
+        }
+        let output = cmd.output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{vars:?}");
+        if valid {
+            assert!(
+                stderr.contains("database connection failed"),
+                "{vars:?}: {stderr}"
+            );
+        } else {
+            assert_eq!(output.status.code(), Some(2), "{vars:?}: {stderr}");
+            assert!(
+                stderr.contains("invalid or missing ANCHORFS_"),
+                "{vars:?}: {stderr}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn serve_refuses_changed_chunk_size() {
+    let (container, url) = database(&[]).await;
+    let bootstrap = || {
+        let mut cmd = command();
+        cmd.args(["bootstrap-admin", "--uid", "1000", "--gid", "1000"])
+            .env("ANCHORFS_DATABASE_URL", &url)
+            .env("ANCHORFS_CHUNK_SIZE", "4096");
+        cmd
+    };
+    assert!(bootstrap().output().unwrap().status.success());
+    assert_eq!(
+        sql(&container, "SELECT chunk_size FROM schema_meta")
+            .await
+            .trim(),
+        "4096"
+    );
+    let minio = minio::start().await;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut cmd = command();
+    with_minio(&mut cmd, &minio);
+    let mut child = ChildGuard(
+        cmd.arg("serve")
+            .env("ANCHORFS_DATABASE_URL", &url)
+            .env("ANCHORFS_DURABILITY_PROFILE", "development")
+            .env("ANCHORFS_LISTEN_ADDR", address.to_string())
+            .env("ANCHORFS_CHUNK_SIZE", "4096")
+            .env("ANCHORFS_MAX_REQUEST_BYTES", "4096")
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "service exited before readiness"
+            );
+            if let Ok(response) = client.get(format!("http://{address}/readyz")).send().await
+                && response.status() == 200
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .unwrap();
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    // Bootstrap identity comparison must succeed again; rotate the synthetic
+    // admin first because bootstrap intentionally rejects an existing admin.
+    sql(&container, "UPDATE credentials SET revoked_at=clock_timestamp(),epoch=epoch+1 WHERE kind='administrator'").await;
+    assert!(bootstrap().output().unwrap().status.success());
+    let mut cmd = command();
+    with_minio(&mut cmd, &minio);
+    let output = cmd
+        .arg("serve")
+        .env("ANCHORFS_DATABASE_URL", &url)
+        .env("ANCHORFS_DURABILITY_PROFILE", "development")
+        .env("ANCHORFS_LISTEN_ADDR", address.to_string())
+        .env("ANCHORFS_CHUNK_SIZE", "8192")
+        .env("ANCHORFS_MAX_REQUEST_BYTES", "8192")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("database chunk size 4096"));
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    assert_eq!(
+        sql(&container, "SELECT chunk_size FROM schema_meta")
+            .await
+            .trim(),
+        "4096"
+    );
+}
+
 #[tokio::test]
 async fn bootstrap_admin_once() {
     let (container, url) = database(&[]).await;
@@ -356,6 +494,7 @@ async fn bootstrap_admin_once() {
         &pool,
         &anchorfs_core::DeploymentId::parse("test").unwrap(),
         &anchorfs_service::config::Config::contract_defaults().quota_config(),
+        anchorfs_core::Limits::default().chunk_size,
     )
     .await
     .unwrap();

@@ -1,5 +1,7 @@
 //! Independently authored namespace operations. Paths never follow symlinks.
-use anchorfs_core::{Access, Identity, Mode, Name, WorkspaceId, WorkspacePath, permits};
+use anchorfs_core::{
+    Access, Identity, Mode, Name, OperationId, WorkspaceId, WorkspacePath, permits,
+};
 use sqlx::{Postgres, Transaction};
 use time::OffsetDateTime;
 
@@ -45,6 +47,8 @@ pub enum NamespaceError {
     InvalidInput,
     #[error(transparent)]
     Quota(#[from] crate::quota::QuotaError),
+    #[error(transparent)]
+    Manifest(#[from] crate::manifests::ManifestError),
     #[error("not_implemented")]
     NotImplemented,
     #[error(transparent)]
@@ -205,6 +209,17 @@ pub async fn lock_inodes(
     .fetch_all(&mut **tx)
     .await
 }
+pub async fn load_inode(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: WorkspaceId,
+    id: i64,
+) -> Result<InodeRow, sqlx::Error> {
+    sqlx::query_as("SELECT * FROM inodes WHERE workspace_id=$1 AND id=$2")
+        .bind(workspace.0)
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await
+}
 pub async fn ancestors(
     tx: &mut Transaction<'_, Postgres>,
     workspace: WorkspaceId,
@@ -306,22 +321,40 @@ impl NamespaceMutation<'_, '_> {
         caller: &Caller,
         path: &WorkspacePath,
         mode: u32,
+        operation: OperationId,
+        chunk_size: u32,
     ) -> Result<(InodeRow, bool), NamespaceError> {
         let (parent, name) = resolve_parent(self.tx, self.workspace, path, caller).await?;
         if let Some(row) = child(self.tx, self.workspace, parent.id, name.as_str()).await? {
             Ok((row, false))
         } else {
-            Ok((self.create_file(caller, path, mode).await?, true))
+            Ok((
+                self.create_file(caller, path, mode, operation, chunk_size)
+                    .await?,
+                true,
+            ))
         }
     }
-    /// Shared create path also used by metadata-only open(create).
+    /// Every newly created file has a complete empty manifest in this transaction.
     pub async fn create_file(
         &mut self,
         caller: &Caller,
         path: &WorkspacePath,
         mode: u32,
+        operation: OperationId,
+        chunk_size: u32,
     ) -> Result<InodeRow, NamespaceError> {
-        self.create(caller, path, mode, "file", None).await
+        let inode = self.create(caller, path, mode, "file", None).await?;
+        let (_, inode) = crate::manifests::publish_empty(
+            self.tx,
+            self.workspace,
+            &inode,
+            operation,
+            chunk_size,
+            false,
+        )
+        .await?;
+        Ok(inode)
     }
     async fn create(
         &mut self,

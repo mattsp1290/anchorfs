@@ -107,7 +107,9 @@ async fn own_session_renew_with_update_lock_has_no_deadlock() {
         authority::load_actor_session(&mut owner, &actor, w, session.id, 1, LockMode::Update)
             .await
             .unwrap();
-    let ReceiptEntry::Fresh(id) = receipts::begin(&mut owner, scope, request()).await.unwrap()
+    let ReceiptEntry::Fresh {
+        operation_id: id, ..
+    } = receipts::begin(&mut owner, scope, request()).await.unwrap()
     else {
         panic!("fresh receipt expected");
     };

@@ -15,8 +15,9 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | bytes | 1.12.1 | MIT | https://github.com/tokio-rs/bytes | binary buffers |
 | cargo_metadata | 0.23.1 | MIT | https://github.com/oli-obk/cargo_metadata | workspace edge verification |
 | clap | 4.6.7 | MIT OR Apache-2.0 | https://github.com/clap-rs/clap | CLI/environment configuration |
-| futures-core | 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | failing body stream for the conformance fault proxy (dev-dependency) |
+| futures-core | 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | bounded body streaming in anchorfs-service and failing streams in the conformance fault proxy |
 | fuser | 0.18.0 | MIT | https://github.com/cberner/fuser | Linux FUSE boundary |
+| http-body-util | 0.1.5 | MIT | https://github.com/hyperium/http-body | typed length-limit error classification for streamed replacement; reviewed 2026-10-20 |
 | nix | 0.31.3 | MIT | https://github.com/nix-rust/nix | test process signals |
 | rand | 0.9.5 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | random secrets; conformance fixtures |
 | reqwest | 0.12.28 | MIT OR Apache-2.0 | https://github.com/seanmonstar/reqwest | binary HTTP tests and the conformance fault proxy |
@@ -93,3 +94,15 @@ workspace-member edge was introduced. `Cargo.lock` records the new direct edges.
 Stage 1b: hmac 0.13.0 direct use checked with `cargo info --registry crates-io hmac@0.13.0` on 2026-10-18 (MSRV 1.85). Already present transitively; this adds no new package.
 
 Stage 1b: proptest 1.12.0 metadata checked on 2026-10-18 with `cargo info --registry crates-io proptest@1.12.0` (MSRV 1.88). Default features disabled; std only, without fork/timeout. New transitive origins/licenses are recorded by Cargo.lock and verified by cargo-deny; planned additions are core_detect, rand_xorshift and unarray (MIT OR Apache-2.0).
+
+## Stage 1c runtime edges — 2026-10-20
+
+The existing futures-core 0.3.34 pin is now a runtime dependency of service body
+streaming as well as conformance. http-body-util 0.1.5 was already transitively
+locked; cargo info for that exact version and its local registry LICENSE were
+checked before adding its workspace pin and direct service edge. Source is the
+general-purpose hyperium HTTP body library, MIT; no competitor source or fixture
+is involved. Its typed LengthLimitError distinguishes malformed declared body
+length from transport/disconnect errors without matching error-message prose.
+This is the plan's allowed reviewed dependency exception: neither package
+version nor the resolved package set changes.

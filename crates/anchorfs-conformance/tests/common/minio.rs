@@ -28,6 +28,37 @@ pub struct Minio {
     pub endpoint: Url,
 }
 
+/// A dedicated runtime owns the shared container independently of any test's
+/// Tokio runtime. The process reaper removes it when the test binary exits.
+pub struct SharedMinio {
+    pub endpoint: Url,
+}
+pub async fn shared() -> &'static SharedMinio {
+    tokio::task::spawn_blocking(|| {
+        static SHARED: std::sync::OnceLock<SharedMinio> = std::sync::OnceLock::new();
+        SHARED.get_or_init(|| {
+            let (send, receive) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async move {
+                    let minio = start().await;
+                    send.send(minio.endpoint.clone()).unwrap();
+                    std::future::pending::<()>().await;
+                    drop(minio);
+                });
+            });
+            SharedMinio {
+                endpoint: receive.recv().expect("shared MinIO startup"),
+            }
+        })
+    })
+    .await
+    .unwrap()
+}
+
 pub async fn start() -> Minio {
     let container = GenericImage::new(MINIO_IMAGE, &format!("{MINIO_TAG}@{MINIO_IMAGE_DIGEST}"))
         .with_exposed_port(9000.tcp())

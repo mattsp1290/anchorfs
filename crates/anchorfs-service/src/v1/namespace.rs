@@ -455,7 +455,7 @@ async fn mutate(call: MutationCall, mutation: Mutation) -> Result<Response, ApiE
         },
     )
     .await;
-    receipt::response(result, StatusCode::OK, &context.trace.0)
+    receipt::finish(&state, result, StatusCode::OK, &context.trace.0).await
 }
 
 enum Read {

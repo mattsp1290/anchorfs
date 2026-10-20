@@ -13,5 +13,9 @@ pub mod workspaces;
 
 pub mod handles;
 pub mod invariants;
+pub mod manifests;
 pub mod namespace;
+pub mod objects;
+pub mod pins;
 pub mod quota;
+pub mod reservations;

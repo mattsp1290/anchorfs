@@ -233,8 +233,10 @@ async fn ns8_cursor_expiry_workspace_and_key_scope() {
             cursor_key: anchorfs_core::decode_hex_32(config.cursor_signing_key.expose()).unwrap(),
             pool: f.pool.clone(),
             config: Arc::new(config),
-            backend: f.backend.clone(),
+            backend: f.backend.service(),
             probe_cache: Default::default(),
+            data_permits: Arc::new(tokio::sync::Semaphore::new(6)),
+            faults: Arc::new(anchorfs_service::pipeline::faults::NoFaults),
             control_permits: Arc::new(tokio::sync::Semaphore::new(2)),
         }),
     };
@@ -275,6 +277,11 @@ async fn ns9_large_listing_and_generation_change() {
     let mut tx = f.pool.begin().await.unwrap();
     // Synthetic sequential names and empty file inodes, in the disposable fixture only.
     sqlx::query("WITH new AS (INSERT INTO inodes(workspace_id,kind,mode,uid,gid,atime,mtime,ctime) SELECT $1,'file',420,1000,1000,now(),now(),now() FROM generate_series(1,2501) RETURNING id), numbered AS (SELECT id,row_number() OVER (ORDER BY id) AS n FROM new) INSERT INTO directory_entries(workspace_id,parent_inode_id,name,inode_id) SELECT $1,w.root_inode_id,'n'||lpad(n.n::text,6,'0'),n.id FROM numbered n JOIN workspaces w ON w.id=$1").bind(f.workspace).execute(&mut *tx).await.unwrap();
+    let operation = Uuid::new_v4();
+    sqlx::query("INSERT INTO operations(workspace_id,id,credential_id,client_session_id,session_epoch,credential_epoch_at_start,authorization_epoch_at_start,mutation_epoch_at_start,owner_token,heartbeat_at,idempotency_key,op_type,request_digest,state,result,created_at,committed_at,expires_at) SELECT s.workspace_id,$2,s.credential_id,s.id,s.session_epoch,s.credential_epoch,w.authorization_epoch,w.mutation_epoch,decode(repeat('12',32),'hex'),clock_timestamp(),'synthetic-listing-seed','open',decode(repeat('34',32),'hex'),'committed','{}'::jsonb,transaction_timestamp(),transaction_timestamp(),clock_timestamp()+interval '1 day' FROM client_sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE s.workspace_id=$1 AND s.id=$3")
+        .bind(f.workspace).bind(operation).bind(Uuid::parse_str(f.worker_session["session_id"].as_str().unwrap()).unwrap()).execute(&mut *tx).await.unwrap();
+    sqlx::query("WITH descriptions AS (INSERT INTO manifests(workspace_id,id,inode_id,size,chunk_size,generation,created_by_operation_id,created_at) SELECT workspace_id,gen_random_uuid(),id,0,4194304,generation,$2,transaction_timestamp() FROM inodes WHERE workspace_id=$1 AND kind='file' AND current_manifest_id IS NULL RETURNING inode_id,id) UPDATE inodes SET current_manifest_id=d.id FROM descriptions d WHERE inodes.workspace_id=$1 AND inodes.id=d.inode_id")
+        .bind(f.workspace).bind(operation).execute(&mut *tx).await.unwrap();
     sqlx::query("UPDATE workspace_quotas SET logical_inodes_used=2501 WHERE workspace_id=$1")
         .bind(f.workspace)
         .execute(&mut *tx)

@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct SchemaMetaRow {
+    pub chunk_size: i32,
     pub singleton: bool,
     pub schema_version: i32,
     pub object_format_version: i32,

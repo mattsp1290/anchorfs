@@ -2,6 +2,165 @@
 
 Independent design from approved specs 02–05 and 07 and the reviewed Stage 0 plan. Contract freeze means versioned and test-pinned; there are no active users or compatibility shims. Future transaction/runtime behavior remains unverified until the stated stage.
 
+## Stage 1c receipt and manifest foundation (2026-10-20)
+
+Byte operations may retain visible pending receipts while uploading. Their
+owner holds the random preimage of the hashed owner token; locking a pending
+operation requires that proof. Pending receipts with an active reservation
+return `outcome_unknown` and a bounded retry hint. A pending receipt whose
+reservations are overdue is fenced on encounter: all possibly uploaded objects
+become charged deletion candidates, staging charges are released, and the
+receipt becomes failed. Terminal failed receipts return 409 `operation_failed`
+(`EIO` hint). Every terminal writer requires the operation still be pending;
+a late fence cannot overwrite an acknowledged commit.
+
+Expired workspace receipts become permanent indeterminate/result-null
+tombstones. Pending receipts are fenced before tombstoning. Tombstones of
+pending/committed operations carry durable `expiry_fences_session=true`; those
+of failed operations carry false. After commit, inspection or retry attempts
+an idempotent session revocation in a second transaction. Every later encounter
+retries the follow-up, so a process death cannot erase it. Administrative
+receipts have no session follow-up. Failed receipts remain excluded even after
+their result is cleared. An inspecting host may trigger revocation of another
+actor's session. Recovery uses an authorized new session; renew/rebind never
+revive a revoked session. Tests: `expired_receipt_tombstone_then_session_fence_once`,
+`fence_does_not_overwrite_a_committed_receipt`, CP12 and
+`expired_receipt_followup_recovers_after_a_crash`.
+
+Every created file has a complete empty manifest at generation 1. Truncate-on-open
+publishes a new empty manifest, increments the inode generation and releases
+the file's retained logical size; physical objects and old manifests remain.
+Read/write handle helpers enforce the granted access flags as well as session
+binding and lifetime. These persistence and metadata-route behaviors are tested;
+the verified byte methods are described below.
+
+### Stage 1c write pipeline (2026-10-20)
+
+`writeAt` and `append` now use separate snapshot, admission, upload and
+publication phases. No database transaction spans a backend request. Receipt
+peek precedes handle, file-size, quota and backend validation; the admission
+transaction rechecks the receipt for concurrent same-key attempts. It records
+an owner proof, reservation and staged objects before the first upload, with
+workspace and deployment quota locks last. A same-key pending request returns
+`outcome_unknown` with the operation ID; overdue reservations resolve through
+the lazy fence. Every PUT error retains a conservative physical charge for all
+attempted objects. Only the owner, which tracks never-attempted objects, can
+omit those objects from orphan charges. No automatic deletion occurs.
+
+Publication rechecks authority epochs captured at admission, session, workflow,
+inode, handle and reservation. It commits objects, a complete immutable
+manifest, logical/staging/physical charges and the original result together.
+An inode-generation change with the same manifest is a metadata change and
+does not require a new upload. A different manifest triggers bounded
+re-materialization and retry; append chooses the new EOF. Retry swaps release
+the old staging reservation before charging the new one, in the same transaction.
+A failed swap rolls back to its savepoint and finalizes the old reservation
+and receipt in that transaction. Statement errors are definitive non-publication
+and run a separate finalizer. Transport errors, fatal PostgreSQL messages and
+connection/unknown-completion SQLSTATEs during COMMIT return outcome_unknown
+and preserve the receipt for resolution. An ordinary server error at COMMIT
+(such as a deferred constraint rejection) remains definitive and is finalized.
+BY3c tests both an actual terminated backend during COMMIT and a deferred
+constraint rejection.
+
+The data runner owns a concurrency permit until its detached job finishes.
+An atomic Before→Admitting handshake competes with Before→Abandoned at response
+timeout: a request answered dependency_unavailable before admission cannot
+later begin publishing. After admission, abandonment returns outcome_unknown.
+Backend calls have a hard deadline measured from request start; database phases
+complete under lock/acquisition bounds, with bounded acquisition retries for
+publication/finalization. Lazy quota-pressure fences now receive the configured
+lock timeout as well.
+
+Verified against disposable PostgreSQL/MinIO by the byte write suite: persisted
+bytes across two sessions' handles, sparse boundary writes, metadata-only
+shrink/regrow and same-size truncate, receipt replay after a simulated lost
+response and handle close, key/body/offset binding, conservative failed-upload
+charges, append conflict retry at the staging limit, and post-upload credential,
+epoch and handle fencing. Fsync is a read-mode, receipt-free synchronous-write
+barrier returning current inode attributes. ReadRange and replacement acceptance
+are described below. The real-binary restart test preserves 6,000 acknowledged
+bytes and their generation across SIGKILL and restart against the same disposable
+database and bucket; it does not crash the backing containers or storage.
+
+Memory/lifecycle limitations: BinaryBody buffers up to max_request_bytes per
+request before database authentication and before a data permit; total buffered
+request-body memory is therefore not bounded by max_data_ops. Materialization
+is bounded by the data permits, and uploaded buffers are released before retry
+preparation. No reservation heartbeat, expiry sweeper, read cache or object
+deletion is implemented. The deployment quota singleton and full manifest row
+copies remain throughput costs. Uncertain uploads may over-report physical bytes
+until future offline reconciliation.
+
+## Byte path
+
+The six byte methods and both pin methods are connected, giving 34 implemented
+operations and four workflow-lease stubs. ReadRange bounds each call to
+1..=max_request_bytes, clips at EOF and returns empty bytes beyond EOF. It
+captures one manifest, fetches every touched object whole with digest/length
+verification, slices only its logical prefix and zero-fills holes. Corrupt or
+missing objects produce dependency_unavailable with backend_integrity and no
+retry hint, even when corruption lies outside the requested prefix. There is
+no cache. Read amplification is a whole object per touched chunk.
+
+Unpinned X-Anchorfs-Generation is the inode generation observed with the manifest;
+pinned reads report that immutable manifest's data generation, which may lag
+chmod/link/rename changes. Pins are session-bound, expire, have a per-session
+admission bound and can be explicitly released. Create/release use receipts and
+read lease mode; pins are permitted during an active workflow. Pin rows and
+receipts are never deleted, so churn grows metadata. There is no physical
+collection for pins to protect yet.
+
+ReplaceFile requires Content-Length and a 64-hex X-Anchorfs-Content-SHA256.
+Receipt-first resolution uses path, expected generation, digest and length;
+replay does not poll the supplied body. Nonempty replacement reserves N bytes
+before reading, then reads and stages one chunk at a time before PUT. The full
+length/digest must match before a single complete manifest is published.
+Conditional generation compares the inode strictly, including metadata-only
+changes, with no retry. A per-chunk stage transaction costs one round trip per
+chunk. Empty replacement publishes atomically without a reservation or PUT.
+All body polls and uploads must fit the hard data deadline; this sets the
+throughput ceiling for max_replace_bytes (default 256 MiB in 60 seconds).
+The stream retains one application chunk, a pending incoming transport frame,
+a running hasher and bounded manifest descriptors; it does not aggregate a
+whole-file application buffer.
+
+Chunk size is fixed per deployment in schema_meta and compared by bootstrap
+and serve. File capacity is min(default max_file_size, chunk_size times
+max_chunks_per_file). Writes/truncates/replaces reject mismatched manifest
+geometry; reads honor the recorded geometry. Shrink clips logical reachability
+without PUT, and regrowth or a later write exposes zeros instead of discarded
+tails. Manifests and old objects are retained, so full manifest row copies and
+old versions consume metadata/physical capacity.
+
+Accounting uses live retained inode sizes for logical bytes, active reservation
+sums for staging, and published object lengths plus deletion-candidate bytes
+for physical usage. Workspace and deployment staging/physical changes share
+the same transaction; the deployment singleton serializes those updates.
+Expired reservations release staging only by converting every possibly uploaded
+object into a retained physical charge. A confirmed absence is not inferred
+from a PUT error; conservative orphan over-reporting remains until future offline
+reconciliation. The invariant checker and independent bucket listing verify
+these formulas against disposable PostgreSQL/MinIO.
+
+### Confirmed interpretations of spec 02
+
+The owner confirmed the following interpretations in the approved plan on
+2026-10-19: a concurrent same-key pending request returns outcome_unknown rather
+than waiting (W16); quota pressure lazily fences overdue reservations instead
+of running a sweeper (W16b); max_reservation_bytes is a per-request principal
+bound rather than an aggregate (W33); reservation heartbeat refresh is deferred
+and TTL is bounded against backend/lock/acquisition deadlines (W25); pins are
+reader-side state allowed during leases (W34); receipt expiry revokes sessions
+for pending/committed outcomes, including when another actor inspects them,
+with repeatable follow-ups and a failed-receipt exclusion (W35).
+
+The engineering refinements and dependency exception are recorded in the
+[implementation amendments](../provenance/stage1c-implementation-amendments.md).
+The sequential byte model also checks mixed operations against a dense in-memory
+oracle. These tests do not establish the remaining full failure/concurrency
+matrix, Linux mounts, Spaces/AWS support, or backing-storage durability.
+
 ## Limits
 
 Values are bytes or counts, with file size 4 TiB derived from checked chunk_size × max_chunks_per_file. Core validation bounds PostgreSQL integer/bigint columns and rejects zero/overflow. API bodies and whole-file replacement have separate caps.
@@ -42,7 +201,7 @@ Seconds. The repository owner accepted the U2 defaults on 2026-10-17 at the Stag
 
 ## Transaction model
 
-READ COMMITTED, explicit locks and the complete order/modes in [persistent-state.md](persistent-state.md). PostgreSQL clock_timestamp() is the expiry authority, transaction_timestamp() supplies recorded times, and each pool connection sets synchronous_commit=on. The commit phase from Stage 1 runs in a spawned non-cancellable task: disconnect/deadline cannot undo publication; uncertain waiting yields outcome_unknown; clients resolve by idempotency key when no operation ID is known. Stage 0 stubs never begin mutations; a deadline returns dependency_unavailable with bounded retry guidance. Control-plane transaction behavior is verified by `control_plane` CP4, CP5 and CP13; file publication remains later work.
+READ COMMITTED, explicit locks and the complete order/modes in [persistent-state.md](persistent-state.md). PostgreSQL clock_timestamp() is the expiry authority, transaction_timestamp() supplies recorded times, and each pool connection sets synchronous_commit=on. The commit phase from Stage 1 runs in a spawned non-cancellable task: disconnect/deadline cannot undo publication; uncertain waiting yields outcome_unknown; clients resolve by idempotency key when no operation ID is known. Stage 0 stubs never begin mutations; a deadline returns dependency_unavailable with bounded retry guidance. Control-plane transaction behavior is verified by `control_plane` CP4, CP5 and CP13; native file publication is exercised by the Stage 1c byte suite, with process-restart evidence in `serve_restart_preserves_bytes`. The complete acceptance matrix remains in progress.
 
 ## Credential epochs and sessions
 
@@ -56,9 +215,9 @@ The workspaces authority row stores workflow owner/token hash/expiry. Acquire, r
 
 ## Object format and deployment identity
 
-OBJECT_FORMAT_VERSION=1: an object is raw bytes of one chunk without framing. Its independent opaque key is deployment_id/workspace UUID/object UUID. SHA-256 lives in objects and manifest_chunks with a composite digest FK. The manifests/manifest_chunks tables define manifest format. Absent indexes and bytes beyond logical_length read as zeros; shrink/regrow must never expose old discarded tails. Manifest updates are rejected by schema triggers (verified: manifests_immutable); object persistence and read semantics remain unverified until Stage 1.
+OBJECT_FORMAT_VERSION=1: an object is raw bytes of one chunk without framing. Its independent opaque key is deployment_id/workspace UUID/object UUID. SHA-256 lives in objects and manifest_chunks with a composite digest FK. The manifests/manifest_chunks tables define manifest format. Absent indexes and bytes beyond logical_length read as zeros; shrink/regrow must never expose old discarded tails. Manifest updates are rejected by schema triggers (verified: manifests_immutable); object persistence and verified native reads are exercised against disposable MinIO by the Stage 1c byte suite; provider storage durability remains unverified.
 
-One deployment_id is both schema_meta identity and bucket prefix. Startup compares stored identity and configuration (verified: migrations_apply_revert_reapply). Two independent metadata authorities must never own the same prefix. Physical, staging and logical quota accounting and offline collection are Stage 1+ work; automatic deletion is disabled.
+One deployment_id is both schema_meta identity and bucket prefix. Startup compares stored identity and configuration (verified: migrations_apply_revert_reapply). Two independent metadata authorities must never own the same prefix. Physical, staging and logical quota accounting are implemented and checked by Stage 1c workspace/deployment/bucket oracles. Offline collection remains future work; automatic deletion is disabled.
 
 ## Open deviations
 
@@ -108,7 +267,7 @@ GET /v1/admin-operations/{operation_id} and GET /v1/admin-operations?idempotency
 
 PUT verifies the local SHA-256 before uploading a nonempty object of at most the default chunk size. The default `checksum_mode=sha256` sends a signed SHA-256 checksum header: a matching provider echo confirms it, an absent echo triggers verified read-back, and a wrong echo is an integrity error. Mode `none` relies on transport integrity for successful uploads. SDK response checksum validation is disabled; AnchorFS verifies digest and length in `get_verified`. `get_range` verifies Content-Range and Content-Length framing only, and surfaces absent or clamped ranges rather than zero-filling. Both read forms share one configured request deadline across response headers and complete body consumption, including verified GETs used by upload read-back.
 
-Ambiguous uploads reconcile through HEAD and, when needed, verified GET, repeating the same immutable bytes only after observed absence. The bound is two PUT, two HEAD and two GET calls, each with bounded SDK retries. `Unavailable` after reconciliation means not observed stored after the repeat and final HEAD; a delayed request may still land. Failed observation yields `UncertainOutcome`. Control-plane metadata publication is implemented; file publication and operations remain unimplemented. No Spaces/AWS compatibility or performance claim follows from local provider tests.
+Ambiguous uploads reconcile through HEAD and, when needed, verified GET, repeating the same immutable bytes only after observed absence. The bound is two PUT, two HEAD and two GET calls, each with bounded SDK retries. `Unavailable` after reconciliation means not observed stored after the repeat and final HEAD; a delayed request may still land. Failed observation yields `UncertainOutcome`. Control-plane metadata and Stage 1c byte publication/receipt operations are implemented; see the [byte path](#byte-path) and [acceptance map](../provenance/stage1c-byte-path-acceptance.md). No Spaces/AWS compatibility or performance claim follows from local provider tests.
 
 ## Control plane authority
 
@@ -184,8 +343,9 @@ the client needs current authority or a replacement session.
 
 Expired receipts become permanent indeterminate/result-null tombstones, including
 through inspection, which commits that transition before responding. Retry returns
-409 operation_indeterminate with the operation ID. Session revocation at receipt
-expiry is deferred by the dated B11 amendment in persistent-state.md. Find-by-key
+409 operation_indeterminate with the operation ID. Stage 1c implements lazy
+session revocation in a separate idempotent post-tombstone transaction (W35),
+as amended in persistent-state.md. Find-by-key
 is always actor-scoped; hosts can inspect workspace receipts by ID, administrators
 cannot inspect another credential's workspace receipt. Inspection never grants
 authority.

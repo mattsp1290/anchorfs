@@ -74,7 +74,56 @@ impl<S: Send + Sync> FromRequestParts<S> for IdempotencyKey {
             .ok_or_else(|| map_rejection(axum::http::StatusCode::BAD_REQUEST, trace(parts)))
     }
 }
-pub struct BinaryBody;
+pub struct BinaryBody(pub bytes::Bytes);
+pub struct BinaryStream {
+    pub length: u64,
+    pub sha256: anchorfs_core::Sha256Digest,
+    pub body: axum::body::Body,
+}
+impl<S: Send + Sync> FromRequest<S> for BinaryStream {
+    type Rejection = ApiError;
+    async fn from_request(req: Request, _: &S) -> Result<Self, ApiError> {
+        let trace = req
+            .extensions()
+            .get::<TraceId>()
+            .expect("trace middleware")
+            .0
+            .clone();
+        if req
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            != Some("application/octet-stream")
+        {
+            return Err(map_rejection(
+                axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                trace,
+            ));
+        }
+        let length = req
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| {
+                let mut error = ApiError::new(anchorfs_core::ErrorCode::InvalidInput, &trace);
+                error.message = "content_length_required".into();
+                error
+            })?;
+        let sha256 = req
+            .headers()
+            .get("X-Anchorfs-Content-SHA256")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| ApiError::new(anchorfs_core::ErrorCode::InvalidInput, &trace))?;
+        Ok(Self {
+            length,
+            sha256,
+            body: req.into_body(),
+        })
+    }
+}
 impl<S: Send + Sync> FromRequest<S> for BinaryBody {
     type Rejection = ApiError;
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
@@ -97,7 +146,7 @@ impl<S: Send + Sync> FromRequest<S> for BinaryBody {
         }
         axum::body::Bytes::from_request(req, state)
             .await
-            .map(|_| Self)
+            .map(Self)
             .map_err(|r| map_rejection(r.status(), id))
     }
 }
@@ -246,6 +295,39 @@ pub struct SessionAuthority {
     pub binding: SessionBinding,
     pub workflow: Option<anchorfs_persistence::authority::WorkflowProof>,
     pub proof: anchorfs_core::CredentialProof,
+}
+
+/// Binary contract validation can finish before reporting a missing bearer.
+/// Session/workflow header grammar is still rejected immediately.
+pub struct ByteAuthority {
+    binding: SessionBinding,
+    workflow: Option<anchorfs_persistence::authority::WorkflowProof>,
+    proof: Result<anchorfs_core::CredentialProof, ApiError>,
+}
+impl ByteAuthority {
+    pub fn finish(self) -> Result<SessionAuthority, ApiError> {
+        Ok(SessionAuthority {
+            binding: self.binding,
+            workflow: self.workflow,
+            proof: self.proof?,
+        })
+    }
+}
+impl<S: Send + Sync> FromRequestParts<S> for ByteAuthority {
+    type Rejection = ApiError;
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        let binding = SessionBinding::from_request_parts(parts, state).await?;
+        let OptionalWorkflowGrant(workflow) =
+            OptionalWorkflowGrant::from_request_parts(parts, state).await?;
+        let proof = Bearer::from_request_parts(parts, state)
+            .await
+            .map(|Bearer(proof)| proof);
+        Ok(Self {
+            binding,
+            workflow,
+            proof,
+        })
+    }
 }
 impl<S: Send + Sync> FromRequestParts<S> for SessionAuthority {
     type Rejection = ApiError;

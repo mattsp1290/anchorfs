@@ -5,6 +5,10 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+/// Marks our envelope so middleware can normalize framework rejections without
+/// discarding an API error's specific code or receipt identity.
+#[derive(Clone, Copy)]
+pub(crate) struct StructuredError;
 #[derive(Debug)]
 pub struct ApiError {
     pub code: ErrorCode,
@@ -13,6 +17,7 @@ pub struct ApiError {
     pub retry_after_ms: Option<u64>,
     pub operation_id: Option<anchorfs_core::OperationId>,
     pub token_presented: bool,
+    pub followups: Vec<crate::receipt::FollowUp>,
 }
 impl ApiError {
     pub fn new(code: ErrorCode, trace: impl Into<String>) -> Self {
@@ -23,6 +28,7 @@ impl ApiError {
             retry_after_ms: None,
             operation_id: None,
             token_presented: false,
+            followups: Vec::new(),
         }
     }
     pub fn not_implemented(trace: impl Into<String>) -> Self {
@@ -44,6 +50,7 @@ impl IntoResponse for ApiError {
             }),
         )
             .into_response();
+        response.extensions_mut().insert(StructuredError);
         if unauthenticated {
             response.headers_mut().insert(
                 axum::http::header::WWW_AUTHENTICATE,
@@ -106,6 +113,84 @@ impl From<sqlx::Error> for ApiError {
         database(error, "")
     }
 }
+
+impl From<anchorfs_persistence::reservations::ReservationError> for ApiError {
+    fn from(error: anchorfs_persistence::reservations::ReservationError) -> Self {
+        use anchorfs_persistence::reservations::{QuotaKind as Q, ReservationError as R};
+        match error {
+            R::Database(error) => error.into(),
+            R::PrincipalBound | R::Exceeded(Q::WorkspaceStaging | Q::DeploymentStaging) => {
+                Self::new(ErrorCode::QuotaExceeded, "")
+            }
+            R::Exceeded(Q::WorkspacePhysical | Q::DeploymentPhysical) => {
+                Self::new(ErrorCode::CapacityExhausted, "")
+            }
+            R::Expired => {
+                let mut error = Self::new(ErrorCode::Fenced, "");
+                error.message = "reservation_expired".into();
+                error
+            }
+            R::NotActive => Self::new(ErrorCode::Fenced, ""),
+            R::NotFound => Self::new(ErrorCode::NotFound, ""),
+        }
+    }
+}
+impl From<anchorfs_core::ChunkError> for ApiError {
+    fn from(error: anchorfs_core::ChunkError) -> Self {
+        Self::new(
+            if error == anchorfs_core::ChunkError::ZeroLength {
+                ErrorCode::InvalidInput
+            } else {
+                ErrorCode::FileTooLarge
+            },
+            "",
+        )
+    }
+}
+impl From<anchorfs_persistence::receipts::ReceiptError> for ApiError {
+    fn from(error: anchorfs_persistence::receipts::ReceiptError) -> Self {
+        use anchorfs_persistence::receipts::ReceiptError as R;
+        match error {
+            R::Database(error) => error.into(),
+            R::NotOwner => Self::new(ErrorCode::OperationFailed, ""),
+            R::PendingOwner => {
+                let mut error = Self::new(ErrorCode::OutcomeUnknown, "");
+                error.retry_after_ms = Some(100);
+                error
+            }
+        }
+    }
+}
+pub fn backend(error: anchorfs_backend::traits::BackendError) -> ApiError {
+    use anchorfs_backend::traits::BackendError;
+    let mut result = ApiError::new(ErrorCode::DependencyUnavailable, "");
+    if matches!(
+        error,
+        BackendError::NotFound | BackendError::IntegrityMismatch
+    ) {
+        result.message = "backend_integrity".into();
+    } else {
+        result.retry_after_ms = Some(100);
+    }
+    result
+}
+
+impl From<anchorfs_persistence::pins::PinError> for ApiError {
+    fn from(error: anchorfs_persistence::pins::PinError) -> Self {
+        use anchorfs_persistence::pins::PinError as P;
+        match error {
+            P::Limit => Self::new(ErrorCode::QuotaExceeded, ""),
+            P::Stale => Self::new(ErrorCode::StaleHandle, ""),
+            P::NotFound => Self::new(ErrorCode::NotFound, ""),
+            P::Database(error) => error.into(),
+            P::Mismatch => {
+                let mut error = Self::new(ErrorCode::InvalidInput, "");
+                error.message = "pin_mismatch".into();
+                error
+            }
+        }
+    }
+}
 impl From<anchorfs_persistence::sessions::SessionError> for ApiError {
     fn from(error: anchorfs_persistence::sessions::SessionError) -> Self {
         use anchorfs_persistence::sessions::SessionError;
@@ -140,6 +225,7 @@ impl From<anchorfs_persistence::namespace::NamespaceError> for ApiError {
                 N::InvalidInput => ErrorCode::InvalidInput,
                 N::NotImplemented => ErrorCode::NotImplemented,
                 N::Quota(error) => return error.into(),
+                N::Manifest(error) => return error.into(),
                 N::Database(error) => return error.into(),
             },
             "",
@@ -153,9 +239,21 @@ impl From<anchorfs_persistence::handles::HandleError> for ApiError {
             H::Stale => Self::new(ErrorCode::StaleHandle, ""),
             H::Limit => Self::new(ErrorCode::QuotaExceeded, ""),
             H::NotFound => Self::new(ErrorCode::NotFound, ""),
+            H::Forbidden => Self::new(ErrorCode::Forbidden, ""),
             H::Namespace(error) => error.into(),
             H::Quota(error) => error.into(),
             H::Database(error) => error.into(),
+        }
+    }
+}
+
+impl From<anchorfs_persistence::manifests::ManifestError> for ApiError {
+    fn from(error: anchorfs_persistence::manifests::ManifestError) -> Self {
+        use anchorfs_persistence::manifests::ManifestError;
+        match error {
+            ManifestError::NotFound => Self::new(ErrorCode::DependencyUnavailable, ""),
+            ManifestError::ChunkSizeMismatch => Self::new(ErrorCode::Unsupported, ""),
+            ManifestError::Database(error) => error.into(),
         }
     }
 }

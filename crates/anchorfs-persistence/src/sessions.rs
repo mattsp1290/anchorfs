@@ -206,3 +206,30 @@ async fn lock_admission(
         .await?;
     Ok(())
 }
+
+/// Dedicated post-tombstone transaction: session lock precedes operation read.
+/// The durable flag preserves the known-failed exclusion on every encounter.
+pub async fn fence_for_expired_receipt(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: WorkspaceId,
+    session: SessionId,
+    operation: anchorfs_core::OperationId,
+) -> Result<bool, sqlx::Error> {
+    let revoked: Option<Option<OffsetDateTime>> = sqlx::query_scalar(
+        "SELECT revoked_at FROM client_sessions WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+    )
+    .bind(workspace.0)
+    .bind(session.0)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if !matches!(revoked, Some(None)) {
+        return Ok(false);
+    }
+    let eligible: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM operations WHERE workspace_id=$1 AND id=$2 AND client_session_id=$3 AND state='indeterminate' AND expiry_fences_session)")
+        .bind(workspace.0).bind(operation.0).bind(session.0).fetch_one(&mut **tx).await?;
+    if !eligible {
+        return Ok(false);
+    }
+    Ok(sqlx::query("UPDATE client_sessions SET revoked_at=transaction_timestamp(),session_epoch=session_epoch+1 WHERE workspace_id=$1 AND id=$2 AND revoked_at IS NULL")
+        .bind(workspace.0).bind(session.0).execute(&mut **tx).await?.rows_affected()==1)
+}

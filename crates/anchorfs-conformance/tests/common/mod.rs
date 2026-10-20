@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+pub mod byte_backend;
 pub mod client;
 pub mod fake_backend;
 pub mod fixture;
@@ -17,6 +18,20 @@ use testcontainers_modules::postgres::Postgres;
 pub const POSTGRES_IMAGE_DIGEST: &str =
     "sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3";
 pub async fn database(settings: &[&str]) -> (ContainerAsync<Postgres>, PgPool, String) {
+    database_with(
+        settings,
+        &DeploymentId::parse("test").unwrap(),
+        anchorfs_core::Limits::default().chunk_size,
+        4,
+    )
+    .await
+}
+pub async fn database_with(
+    settings: &[&str],
+    deployment: &DeploymentId,
+    chunk_size: u32,
+    max_connections: u32,
+) -> (ContainerAsync<Postgres>, PgPool, String) {
     let mut command = vec!["postgres".to_owned()];
     for setting in settings {
         command.extend(["-c".into(), setting.to_string()]);
@@ -35,7 +50,7 @@ pub async fn database(settings: &[&str]) -> (ContainerAsync<Postgres>, PgPool, S
     );
     let pool = pool::connect(&PoolConfig {
         url: Secret::new(url.clone()),
-        max_connections: 4,
+        max_connections,
         acquire_timeout: Duration::from_secs(2),
     })
     .await
@@ -43,11 +58,12 @@ pub async fn database(settings: &[&str]) -> (ContainerAsync<Postgres>, PgPool, S
     migrate::apply(&pool).await.unwrap();
     meta::initialize(
         &pool,
-        &DeploymentId::parse("test").unwrap(),
+        deployment,
         &DeploymentQuotaConfig {
             physical_bytes_limit: 1 << 40,
             staging_bytes_limit: 1 << 30,
         },
+        chunk_size,
     )
     .await
     .unwrap();
@@ -86,6 +102,8 @@ pub fn state_with(pool: PgPool, s3: anchorfs_backend::config::S3Config) -> AppSt
         pool,
         backend: Arc::new(anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap()),
         probe_cache: Default::default(),
+        data_permits: Arc::new(tokio::sync::Semaphore::new(6)),
+        faults: Arc::new(anchorfs_service::pipeline::faults::NoFaults),
         config: Arc::new(config),
     }
 }
@@ -105,6 +123,8 @@ pub fn state_fake(pool: PgPool) -> (AppState, Arc<fake_backend::FakeBackend>) {
         config: Arc::new(Config::contract_defaults()),
         backend: backend.clone(),
         probe_cache: Default::default(),
+        data_permits: Arc::new(tokio::sync::Semaphore::new(6)),
+        faults: Arc::new(anchorfs_service::pipeline::faults::NoFaults),
         control_permits: Arc::new(tokio::sync::Semaphore::new(2)),
     };
     (state, backend)

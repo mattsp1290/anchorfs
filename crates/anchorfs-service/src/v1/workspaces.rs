@@ -127,7 +127,7 @@ pub async fn create_workspace(
         },
     )
     .await;
-    receipt::response(result, axum::http::StatusCode::CREATED, &trace.0)
+    receipt::finish(&state, result, axum::http::StatusCode::CREATED, &trace.0).await
 }
 #[utoipa::path(get,
  path="/v1/workspaces/{workspace_id}",
@@ -191,5 +191,5 @@ pub async fn get_workspace(
         },
     )
     .await;
-    crate::receipt::response(result, axum::http::StatusCode::OK, &trace.0)
+    crate::receipt::finish(&state, result, axum::http::StatusCode::OK, &trace.0).await
 }

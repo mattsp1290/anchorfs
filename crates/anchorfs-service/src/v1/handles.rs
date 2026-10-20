@@ -16,7 +16,7 @@ use uuid::Uuid;
 #[utoipa::path(post, path="/v1/workspaces/{workspace_id}/handles", operation_id="openHandle",
  request_body = OpenHandle,
  params(("X-Anchorfs-Session-Id" = Uuid, Header), ("X-Anchorfs-Session-Epoch" = i64, Header, minimum=1),("X-Anchorfs-Workflow-Token" = Option<String>, Header, description="64 hex characters; required with active workflow authority"),("X-Anchorfs-Workflow-Epoch" = Option<i64>, Header, minimum=1),("workspace_id" = Uuid, Path),("Idempotency-Key" = String, Header, description = "Required retry key, 1–256 visible ASCII bytes")),
- responses((status=201,description="Committed handle lifecycle",body=HandleGrant), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
+ responses((status=201,description="Committed handle lifecycle",body=HandleGrant), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate, operation_failed", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
 pub async fn open_handle(
     State(state): State<AppState>,
     context: RequestContext,
@@ -51,7 +51,7 @@ pub async fn open_handle(
 #[utoipa::path(post, path="/v1/workspaces/{workspace_id}/handles/{handle_id}/renew", operation_id="renewHandle",
 
  params(("X-Anchorfs-Session-Id" = Uuid, Header), ("X-Anchorfs-Session-Epoch" = i64, Header, minimum=1),("X-Anchorfs-Workflow-Token" = Option<String>, Header, description="64 hex characters; required with active workflow authority"),("X-Anchorfs-Workflow-Epoch" = Option<i64>, Header, minimum=1),("workspace_id" = Uuid, Path),("handle_id" = Uuid, Path),("Idempotency-Key" = String, Header, description = "Required retry key, 1–256 visible ASCII bytes")),
- responses((status=200,description="Committed handle lifecycle",body=HandleGrant), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
+ responses((status=200,description="Committed handle lifecycle",body=HandleGrant), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate, operation_failed", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
 pub async fn renew_handle(
     State(state): State<AppState>,
     context: RequestContext,
@@ -74,7 +74,7 @@ pub async fn renew_handle(
 #[utoipa::path(delete, path="/v1/workspaces/{workspace_id}/handles/{handle_id}", operation_id="closeHandle",
 
  params(("X-Anchorfs-Session-Id" = Uuid, Header), ("X-Anchorfs-Session-Epoch" = i64, Header, minimum=1),("X-Anchorfs-Workflow-Token" = Option<String>, Header, description="64 hex characters; required with active workflow authority"),("X-Anchorfs-Workflow-Epoch" = Option<i64>, Header, minimum=1),("workspace_id" = Uuid, Path),("handle_id" = Uuid, Path),("Idempotency-Key" = String, Header, description = "Required retry key, 1–256 visible ASCII bytes")),
- responses((status=200,description="Committed handle lifecycle",body=MutationResult), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
+ responses((status=200,description="Committed handle lifecycle",body=MutationResult), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate, operation_failed", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
 pub async fn close_handle(
     State(state): State<AppState>,
     context: RequestContext,
@@ -97,28 +97,90 @@ pub async fn close_handle(
 #[utoipa::path(post, path="/v1/workspaces/{workspace_id}/handles/{handle_id}/truncate", operation_id="truncate",
  request_body = Truncate,
  params(("X-Anchorfs-Session-Id" = Uuid, Header), ("X-Anchorfs-Session-Epoch" = i64, Header, minimum=1),("X-Anchorfs-Workflow-Token" = Option<String>, Header, description="64 hex characters; required with active workflow authority"),("X-Anchorfs-Workflow-Epoch" = Option<i64>, Header, minimum=1),("workspace_id" = Uuid, Path),("handle_id" = Uuid, Path),("Idempotency-Key" = String, Header, description = "Required retry key, 1–256 visible ASCII bytes")),
- responses((status=200,description="Future success contract; Stage 0 returns 501",body=MutationResult), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
+ responses((status=200,description="Committed truncate",body=MutationResult), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate, operation_failed", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
 pub async fn truncate(
-    axum::Extension(trace): axum::Extension<crate::middleware::TraceId>,
-    _session: SessionBinding,
-    ApiPath(_ids): ApiPath<(Uuid, Uuid)>,
-    _key: IdempotencyKey,
+    State(state): State<AppState>,
+    context: RequestContext,
+    authority: SessionAuthority,
+    ApiPath((workspace, handle)): ApiPath<(Uuid, Uuid)>,
+    IdempotencyKey(key): IdempotencyKey,
     ApiJson(body): ApiJson<Truncate>,
-) -> Result<(), ApiError> {
-    let _ = body;
-    Err(ApiError::not_implemented(trace.0))
+) -> Result<Response, ApiError> {
+    execute(
+        HandleCall {
+            state,
+            context,
+            authority,
+            workspace: WorkspaceId(workspace),
+            key,
+        },
+        HandleRequest::Truncate(HandleId(handle), body.size),
+    )
+    .await
 }
 #[utoipa::path(post, path="/v1/workspaces/{workspace_id}/handles/{handle_id}/fsync", operation_id="fsync",
 
- params(("X-Anchorfs-Session-Id" = Uuid, Header), ("X-Anchorfs-Session-Epoch" = i64, Header, minimum=1),("X-Anchorfs-Workflow-Token" = Option<String>, Header, description="64 hex characters; required with active workflow authority"),("X-Anchorfs-Workflow-Epoch" = Option<i64>, Header, minimum=1),("workspace_id" = Uuid, Path),("handle_id" = Uuid, Path),("Idempotency-Key" = String, Header, description = "Required retry key, 1–256 visible ASCII bytes")),
- responses((status=200,description="Future success contract; Stage 0 returns 501",body=MutationResult), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
+ params(("X-Anchorfs-Session-Id" = Uuid, Header), ("X-Anchorfs-Session-Epoch" = i64, Header, minimum=1),("X-Anchorfs-Workflow-Token" = Option<String>, Header, description="64 hex characters; required with active workflow authority"),("X-Anchorfs-Workflow-Epoch" = Option<i64>, Header, minimum=1),("workspace_id" = Uuid, Path),("handle_id" = Uuid, Path)),
+ responses((status=200,description="Current inode after the synchronous write barrier",body=InodeAttributes), (status=404,description="not_found",body=ErrorBody),(status=507,description="quota_exceeded or capacity_exhausted",body=ErrorBody),(status = 501, description = "Stage 0 declared operation", body = ErrorBody),(status = 400, description = "invalid_input", body = ErrorBody),(status = 401, description = "unauthenticated", body = ErrorBody),(status = 403, description = "forbidden", body = ErrorBody),(status = 503, description = "dependency_unavailable; outcome_unknown after mutation begins (Stage 1)", body = ErrorBody),(status = 409, description = "generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate, operation_failed", body = ErrorBody),(status = 410, description = "stale_handle", body = ErrorBody)), security(("credential" = [])))]
 pub async fn fsync(
-    axum::Extension(trace): axum::Extension<crate::middleware::TraceId>,
-    _session: SessionBinding,
-    ApiPath(_ids): ApiPath<(Uuid, Uuid)>,
-    _key: IdempotencyKey,
-) -> Result<(), ApiError> {
-    Err(ApiError::not_implemented(trace.0))
+    State(state): State<AppState>,
+    context: RequestContext,
+    authority: SessionAuthority,
+    ApiPath((workspace, handle)): ApiPath<(Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    let result = control::run(
+        &state,
+        context.start,
+        context.trace.clone(),
+        control::Kind::Read,
+        move |tx, _| {
+            Box::pin(async move {
+                let p = super::prologue(
+                    tx,
+                    &authority.proof,
+                    WorkspaceId(workspace),
+                    &authority.binding,
+                    authority.workflow.as_ref(),
+                    super::Gate {
+                        role_mutation: false,
+                        lease: LeaseMode::Read,
+                    },
+                )
+                .await?;
+                let handle = handles::load_for_actor(
+                    tx,
+                    WorkspaceId(workspace),
+                    &p.session,
+                    HandleId(handle),
+                    None,
+                )
+                .await?;
+                let inode = anchorfs_persistence::namespace::load_inode(
+                    tx,
+                    WorkspaceId(workspace),
+                    handle.inode_id,
+                )
+                .await?;
+                Authority {
+                    actor: &p.actor,
+                    session: Some(&p.session),
+                    workflow: Some(receipt::WorkflowAuthority {
+                        workspace: &p.workspace,
+                        proof: authority.workflow.as_ref(),
+                        mode: LeaseMode::Read,
+                    }),
+                }
+                .check_publication(tx)
+                .await?;
+                handles::assert_live(tx, &handle).await?;
+                Ok(Ok(receipt::Answer::metadata(super::views::attributes(
+                    &inode,
+                )?)?))
+            })
+        },
+    )
+    .await;
+    receipt::finish(&state, result, StatusCode::OK, &context.trace.0).await
 }
 
 struct HandleCall {
@@ -132,10 +194,12 @@ enum HandleRequest {
     Open(OpenHandle),
     Renew(HandleId),
     Close(HandleId),
+    Truncate(HandleId, u64),
 }
 impl HandleRequest {
     fn mutation_gate(&self) -> bool {
-        matches!(self,Self::Open(b) if b.write || b.create || b.truncate)
+        matches!(self, Self::Truncate(..))
+            || matches!(self,Self::Open(b) if b.write || b.create || b.truncate)
     }
     fn digest(&self, w: WorkspaceId) -> (&'static str, [u8; 32]) {
         let (op, ids, body) = match self {
@@ -146,6 +210,11 @@ impl HandleRequest {
             ),
             Self::Renew(id) => ("handle_renew", vec![w.to_string(), id.to_string()], None),
             Self::Close(id) => ("handle_close", vec![w.to_string(), id.to_string()], None),
+            Self::Truncate(id, size) => (
+                "truncate",
+                vec![w.to_string(), id.to_string()],
+                Some(serde_json::json!({"size":size})),
+            ),
         };
         (
             op,
@@ -173,6 +242,8 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
     };
     let mutation = request.mutation_gate();
     let retention = state.config.receipt_retention;
+    let chunk_size = state.config.chunk_size;
+    let geometry = crate::pipeline::common::geometry(&state);
     let policy = handles::HandlePolicy {
         ttl: state.config.handle_ttl,
         limit: state.config.max_handles_per_session,
@@ -247,9 +318,10 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
                                         truncate: body.truncate,
                                         mode: body.mode,
                                     };
-                                    let opened =
-                                        handles::open_file(tx, &p.caller, &session, req, policy)
-                                            .await?;
+                                    let opened = handles::open_file(
+                                        tx, &p.caller, &session, req, policy, operation, chunk_size,
+                                    )
+                                    .await?;
                                     Published::metadata(super::views::handle(
                                         operation,
                                         &opened.handle,
@@ -263,6 +335,17 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
                                     Published::metadata(super::views::handle(
                                         operation, &handle, &inode,
                                     )?)
+                                }
+                                HandleRequest::Truncate(id, size) => {
+                                    let next = crate::pipeline::truncate::truncate_in(
+                                        tx, workspace, &session, id, operation, geometry, size,
+                                    )
+                                    .await?;
+                                    Published::metadata(MutationResult {
+                                        operation_id: operation.0,
+                                        inode_id: Some(next.id),
+                                        generation: Some(next.generation),
+                                    })
                                 }
                                 HandleRequest::Close(id) => {
                                     let (_, inode) =
@@ -282,5 +365,5 @@ async fn execute(call: HandleCall, request: HandleRequest) -> Result<Response, A
         },
     )
     .await;
-    receipt::response(result, status, &context.trace.0)
+    receipt::finish(&state, result, status, &context.trace.0).await
 }

@@ -37,6 +37,8 @@ pub enum HandleError {
     Limit,
     #[error("not_found")]
     NotFound,
+    #[error("forbidden")]
+    Forbidden,
     #[error(transparent)]
     Namespace(#[from] NamespaceError),
     #[error(transparent)]
@@ -99,13 +101,21 @@ pub async fn open_file(
     session: &ActorSession,
     req: OpenRequest,
     policy: HandlePolicy,
+    operation: anchorfs_core::OperationId,
+    chunk_size: u32,
 ) -> Result<Opened, HandleError> {
     validate_request(&req)?;
     let w = session.workspace_id;
     let (row, created) = if req.create {
         namespace::lock(tx, w)
             .await?
-            .open_create(caller, &req.path, req.mode.expect("validated mode"))
+            .open_create(
+                caller,
+                &req.path,
+                req.mode.expect("validated mode"),
+                operation,
+                chunk_size,
+            )
             .await?
     } else {
         (
@@ -142,10 +152,21 @@ pub async fn open_file(
         row
     };
     if req.truncate {
-        if inode.current_manifest_id.is_some() {
-            return Err(NamespaceError::NotImplemented.into());
+        let old_size = inode.size;
+        (_, inode) = crate::manifests::publish_empty(tx, w, &inode, operation, chunk_size, true)
+            .await
+            .map_err(NamespaceError::from)?;
+        if old_size > 0 {
+            crate::quota::apply(
+                tx,
+                w,
+                crate::quota::Charge {
+                    inodes: 0,
+                    bytes: -old_size,
+                },
+            )
+            .await?;
         }
-        inode=sqlx::query_as("UPDATE inodes SET size=0,generation=generation+1,mtime=transaction_timestamp(),ctime=transaction_timestamp() WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(inode.id).fetch_one(&mut **tx).await?;
     }
     lock_admission(tx, session.id).await?;
     if count_open(tx, w, session.id).await? >= i64::from(policy.limit) {
@@ -170,12 +191,46 @@ pub async fn load_for_actor(
     lock: Option<LockMode>,
 ) -> Result<HandleRow, HandleError> {
     let row:HandleRow=sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT * FROM handles WHERE workspace_id=$1 AND id=$2 AND client_session_id=$3 AND credential_id=$4 {}",lock.map_or("",LockMode::clause)))).bind(workspace.0).bind(id.0).bind(session.id.0).bind(session.credential_id.0).fetch_optional(&mut **tx).await?.ok_or(HandleError::NotFound)?;
+    assert_live(tx, &row).await?;
+    Ok(row)
+}
+/// Recheck time after later lock waits and immediately before publication.
+pub async fn assert_live(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &HandleRow,
+) -> Result<(), HandleError> {
     let expired: bool = sqlx::query_scalar("SELECT $1::timestamptz<=clock_timestamp()")
         .bind(row.expires_at)
         .fetch_one(&mut **tx)
         .await?;
     if expired || row.closed_at.is_some() {
         return Err(HandleError::Stale);
+    }
+    Ok(())
+}
+pub async fn load_for_write(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: WorkspaceId,
+    session: &ActorSession,
+    id: HandleId,
+    lock: Option<LockMode>,
+) -> Result<HandleRow, HandleError> {
+    let row = load_for_actor(tx, workspace, session, id, lock).await?;
+    if !row.access_write {
+        return Err(HandleError::Forbidden);
+    }
+    Ok(row)
+}
+pub async fn load_for_read(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: WorkspaceId,
+    session: &ActorSession,
+    id: HandleId,
+    lock: Option<LockMode>,
+) -> Result<HandleRow, HandleError> {
+    let row = load_for_actor(tx, workspace, session, id, lock).await?;
+    if !row.access_read {
+        return Err(HandleError::Forbidden);
     }
     Ok(row)
 }

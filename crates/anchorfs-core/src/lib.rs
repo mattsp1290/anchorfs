@@ -1,4 +1,5 @@
 //! Shared AnchorFS vocabulary without persistence or wire-framework coupling.
+pub mod chunking;
 pub mod digest;
 pub mod error;
 pub mod ids;
@@ -8,6 +9,7 @@ pub mod path;
 pub mod secret;
 pub mod timers;
 pub mod version;
+pub use chunking::*;
 pub use digest::*;
 pub use error::*;
 pub use ids::*;

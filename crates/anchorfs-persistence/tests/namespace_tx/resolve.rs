@@ -331,7 +331,11 @@ async fn epoch_writer_blocks_behind_inflight_mutation() {
     )
     .await
     .unwrap();
-    let receipts::ReceiptEntry::Fresh(operation) = entry else {
+    let receipts::ReceiptEntry::Fresh {
+        operation_id: operation,
+        ..
+    } = entry
+    else {
         panic!("fresh")
     };
     receipts::commit_result(

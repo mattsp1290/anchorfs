@@ -1,6 +1,113 @@
 use super::support::*;
 
 #[tokio::test]
+async fn expired_receipt_followup_recovers_after_a_crash() {
+    use anchorfs_service::pipeline::faults::{FaultAction, FaultInjector, FaultPoint};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct CrashOnce(AtomicBool);
+    impl FaultInjector for CrashOnce {
+        fn at(&self, point: FaultPoint, _: Option<anchorfs_core::OperationId>) -> FaultAction {
+            if point == FaultPoint::BeforeFollowUp && !self.0.swap(true, Ordering::SeqCst) {
+                FaultAction::Crash
+            } else {
+                FaultAction::Continue
+            }
+        }
+    }
+    let f = Fixture::new().await;
+    let renew = f.session_path(&f.worker_session, "/renew");
+    let renewed = f
+        .client
+        .call(
+            "POST",
+            &renew,
+            Some(&f.worker),
+            Some(&f.worker_session),
+            Some("crash-before-followup"),
+            None,
+        )
+        .await
+        .status(200)
+        .body;
+    let operation = Uuid::parse_str(renewed["operation_id"].as_str().unwrap()).unwrap();
+    let session = Uuid::parse_str(f.worker_session["session_id"].as_str().unwrap()).unwrap();
+    sqlx::query("UPDATE operations SET expires_at=clock_timestamp()-interval '1 second' WHERE workspace_id=$1 AND id=$2")
+        .bind(f.workspace).bind(operation).execute(&f.pool).await.unwrap();
+    let mut state = common::state_fake(f.pool.clone()).0;
+    state.backend = f.backend.service();
+    state.faults = Arc::new(CrashOnce(AtomicBool::new(false)));
+    let crash_client = Client {
+        app: build_router(state),
+    };
+    let path = format!("{}/operations/{operation}", f.workspace_path());
+    let response = crash_client
+        .call("GET", &path, Some(&f.host), None, None, None)
+        .await
+        .status(200)
+        .body;
+    assert_eq!(response["state"], "indeterminate");
+    assert!(response["result"].is_null());
+    let before: (bool, i64) = sqlx::query_as(
+        "SELECT revoked_at IS NOT NULL,session_epoch FROM client_sessions WHERE id=$1",
+    )
+    .bind(session)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(before, (false, 1));
+    f.client
+        .call("GET", &path, Some(&f.host), None, None, None)
+        .await
+        .status(200);
+    f.client
+        .call("GET", &path, Some(&f.host), None, None, None)
+        .await
+        .status(200);
+    let after: (bool, i64) = sqlx::query_as(
+        "SELECT revoked_at IS NOT NULL,session_epoch FROM client_sessions WHERE id=$1",
+    )
+    .bind(session)
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(after, (true, 2));
+    f.client
+        .call(
+            "POST",
+            &renew,
+            Some(&f.worker),
+            Some(&f.worker_session),
+            Some("crash-before-followup"),
+            None,
+        )
+        .await
+        .error(409, "fenced");
+    f.client
+        .call(
+            "POST",
+            &f.session_path(&f.worker_session, "/rebind"),
+            Some(&f.host),
+            Some(&f.host_session),
+            Some("cannot-rebind-revoked"),
+            Some(json!({})),
+        )
+        .await
+        .error(409, "fenced");
+    f.client
+        .call(
+            "POST",
+            &format!("{}/sessions", f.workspace_path()),
+            Some(&f.host),
+            None,
+            Some("replacement-worker-session"),
+            Some(json!({"credential_id":f.worker.id})),
+        )
+        .await
+        .status(201);
+    f.backend.untouched();
+}
+
+#[tokio::test]
 async fn cp4_cp12_receipts_replay_mismatch_visibility_and_tombstones() {
     let f = Fixture::new().await;
     let created = f
@@ -195,7 +302,18 @@ async fn cp4_cp12_receipts_replay_mismatch_visibility_and_tombstones() {
             None,
         )
         .await
-        .error(409, "operation_indeterminate");
+        .error(409, "fenced");
+    f.client
+        .call(
+            "POST",
+            &format!("{}/sessions", f.workspace_path()),
+            Some(&f.host),
+            None,
+            Some("recover-worker-session"),
+            Some(json!({"credential_id":f.worker.id})),
+        )
+        .await
+        .status(201);
 }
 
 #[tokio::test]
@@ -244,7 +362,11 @@ async fn cp5_same_key_http_smoke_and_pending_owner_budget() {
     )
     .await
     .unwrap();
-    let ReceiptEntry::Fresh(owner_id) = entry else {
+    let ReceiptEntry::Fresh {
+        operation_id: owner_id,
+        ..
+    } = entry
+    else {
         panic!("fresh owner expected");
     };
     let client = f.client_with_deadline(800);
