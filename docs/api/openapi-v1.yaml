@@ -1216,6 +1216,20 @@ paths:
     put:
       operationId: replaceFile
       parameters:
+      - name: Content-Length
+        in: header
+        description: Required exact body length
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+      - name: X-Anchorfs-Content-SHA256
+        in: header
+        description: Required 64 hex SHA-256 of the complete body
+        required: true
+        schema:
+          type: string
       - name: X-Anchorfs-Session-Id
         in: header
         required: true
@@ -1277,7 +1291,7 @@ paths:
         required: true
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed conditional whole-file replacement
           content:
             application/json:
               schema:
@@ -2611,7 +2625,7 @@ paths:
         required: true
       responses:
         '201':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed read pin lifecycle
           content:
             application/json:
               schema:
@@ -2641,7 +2655,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate, operation_failed
           content:
             application/json:
               schema:
@@ -2726,7 +2740,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed read pin lifecycle
           content:
             application/json:
               schema:
@@ -2756,7 +2770,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
+          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate, operation_failed
           content:
             application/json:
               schema:
@@ -3476,13 +3490,13 @@ paths:
           format: uuid
       responses:
         '200':
-          description: 'Future success: one pinned committed generation; Stage 0 returns 501'
+          description: Verified bytes from one committed manifest
           headers:
             X-Anchorfs-Generation:
               schema:
                 type: integer
                 format: int64
-              description: Committed inode generation
+              description: Inode generation at read time for unpinned reads; pinned manifest data generation for pinned reads (may lag metadata-only changes)
           content:
             application/octet-stream:
               schema:

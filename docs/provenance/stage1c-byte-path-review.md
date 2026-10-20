@@ -1,9 +1,11 @@
 # Stage 1c byte path — implementation evidence (in progress)
 
-This record is incremental. Stage 1c is **not complete**. Write, append, truncate
-and fsync routes are connected; readRange, replaceFile and read pins remain stubs.
-No complete end-to-end byte path,
-review-gauntlet completion, PR, hosted CI result or storage durability is claimed.
+This record is incremental. Stage 1c is **not complete**. All eight planned
+byte/pin routes are connected, with 34 implemented routes and four workflow-lease
+stubs verified by the service sweep. The native byte path is exercised against
+disposable PostgreSQL/MinIO. The full acceptance matrix, model and process-restart
+evidence, review gauntlet, PR and hosted CI remain incomplete; no provider storage
+durability or Linux mount capability is claimed.
 
 ## Approved inputs and origin
 
@@ -220,3 +222,131 @@ The byte tests currently observe committed contents independently through
 manifest SQL and raw SDK GETs, without the service planners. Native readRange,
 pins, streamed conditional replace and the rest of BY1–BY21/model/restart
 coverage still remain. No PR or gauntlet completion is claimed.
+
+## Reads, pins and streamed replacement checkpoint (2026-10-20)
+
+WP3 connects native readRange, createReadPin, releaseReadPin and replaceFile.
+Reads capture one manifest in a short transaction, then fetch and verify whole
+objects outside any transaction before slicing valid logical prefixes and
+zero-filling sparse extents. Pinned reads use the pin's immutable manifest and
+data generation; unpinned reads use the inode generation captured with the
+current manifest. Pin admission is session-bound, bounded and receipt-bearing
+in read lease mode, including during an active fixture workflow lease.
+
+Replace validates headers without consuming the body, resolves the receipt
+first, reserves the declared length, stages each chunk before PUT, verifies the
+complete length/digest and publishes conditionally in one final transaction.
+All body polls and backend calls use the request's hard deadline. Empty replace
+uses one atomic transaction and no reservation, and malformed empty bodies
+retain a terminal failed receipt. No transaction spans body or backend I/O.
+
+The reviewed-input record and formal engineering details are consolidated in
+[implementation amendments](stage1c-implementation-amendments.md).
+These include the durable B11 flag (D-C1), the additional already-locked
+http-body-util 0.1.5 runtime edge for typed length-error classification (D-C2),
+and the single-transaction empty path inside the data runner (D-C3). The typed
+error dependency's exact source/license and provenance row were checked before
+use; the consolidated plan amendment followed local testing, as explicitly
+recorded. No package version or package set changes. The dependency and edge
+provenance suite passed after both new runtime edges were added.
+
+Observed validation so far:
+
+- `cargo test -p anchorfs-conformance --test bytes --locked`: 17 passed before
+  the final exact two-chunk/cross-session acceptance case was added. The suite
+  proves native read/replace concurrency coherence, corruption outside a read's
+  requested prefix and missing-object errors, pinned generation/isolation/limit/
+  release/expiry behavior, pin admission during a fixture lease, first PUT before
+  the replacement body ends, replay without polling the body, strict conditional
+  conflict after chmod, malformed digest/length failure, zero-reservation empty
+  replace, stream disconnect/deadline cleanup, and lost responses for both empty
+  and nonempty replacements. Workspace/deployment/bucket oracles are checked.
+- A length-overrun test initially received dependency_unavailable because the
+  body middleware emits a typed length-limit error. The new typed classification
+  corrects that to content_length_mismatch without conflating disconnects, and
+  the entire byte suite passed afterward.
+- `cargo test -p anchorfs-service --lib --locked`: 15 passed.
+- `cargo test -p anchorfs-conformance --test service --locked`: 17 passed,
+  verifying 34 implemented / 4 stubs and header/shape validation.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: passed
+  before the final cross-session test addition.
+- `cargo test -p anchorfs-conformance --test provenance --locked`: 3 passed.
+- `cargo deny check licenses bans advisories sources`: exited 0, existing
+  duplicate-version warnings only.
+- OpenAPI regenerated. The WP3 workspace regression run exited 0 with 240
+  passing tests, including all 18 byte tests at that checkpoint. This preceded
+  the additional WP4 tests described below.
+
+Remaining work is the full WP4 acceptance matrix (including variants and fault
+schedules not established by these focused tests), bytes_model, service process
+restart, final records, both gauntlet stages, and actual PR/hosted CI evidence.
+
+
+## WP4 model, recovery and concurrency checkpoint (2026-10-20)
+
+New tests are independently authored from the approved plan, the imported
+specifications and AnchorFS contracts. Payloads are synthetic; fault schedules
+use the repository's injector/proxy, disposable PostgreSQL and MinIO. No external
+research or implementation input was consulted.
+
+Observed targeted validation:
+
+- `serve_restart_preserves_bytes`: passed. The real binary accepts 6,000 bytes
+  over HTTP, returns them through native reads, dies by SIGKILL, then restarts
+  against the same disposable database and bucket. A new session and handle see
+  identical bytes and the same generation. Readiness and both SQL invariant
+  checkers pass. No container or storage crash durability claim is made.
+- `bytes_model`: 32 generated sequences passed; measured model execution
+  21.273 seconds (28.74 seconds including fixture setup). It maintains a
+  `BTreeMap` of dense file contents and inode/data generations for three files,
+  checking native reads, stat and SQL/bucket invariants after each operation.
+  Operations include write, append, truncate, conditional replacement (including
+  stale generation), chmod, pin/read/release, close/reopen, create/open and
+  truncate-on-open. The first run's oracle incorrectly treated truncate-on-open
+  of an empty file as a generation no-op; the documented open contract always
+  publishes a new empty manifest, and the corrected oracle passed. A final
+  strengthening adds random unpinned offsets and a publication between pin
+  creation and its snapshot read; all 32 sequences passed in 27.512 seconds
+  (35.06 seconds including setup). Concurrent publication is tested separately
+  by the BY schedules.
+- `bytes recovery`: four tests passed. Pending same-key requests return the
+  owner's operation id and later replay its result. Prepublication crashes leave
+  staged objects and active charges; same-key and new-key/quota-pressure paths
+  both durably fence expired reservations, persist failed receipts and charge
+  candidates. Sub-chunk quota tests observe exact reservations of 900, 950 and
+  1,000 bytes and reject oversized materializations before upload. Three 1,500
+  byte appends and a subsequent far write/append follow current EOF exactly.
+- `bytes concurrency`: five tests passed. Cross-session overlapping writes retry
+  without losing unrelated bytes; a one-attempt configuration terminates with
+  generation_conflict; chmod alone causes no byte retry; truncate forces a
+  retry whose old tail becomes zeros. Two lost append responses replay distinct
+  offsets with exactly-once contents. Five pipeline wait points and delayed GET
+  and PUT each show zero idle-in-transaction connections. Different-file writes
+  from two sessions completed in 117.961 ms wall time in this local run; this is
+  an observation, not a throughput or latency SLO.
+- `bytes quotas`: two tests passed. Physical, staging, principal and early
+  logical limits reject without PUT; a late logical quota race fails publication
+  and retains uploaded orphan charges. Workspace, deployment and bucket
+  invariants pass.
+
+The full workspace run including the 29 byte tests, initial model and real
+binary restart exited 0: 253 tests passed. The strengthened model and three
+additional access tests passed in targeted runs after that run began. Final
+formatting, clippy with warnings denied and diff checks pass. Cargo deny passes
+all four categories (existing duplicate warnings); all seven imported hashes
+match the original manifest, and the diff against main for imported baselines
+is empty. The remaining
+WP4 matrix includes additional expiry/auth/lease/permission/provider variants,
+COMMIT connection loss, restart over pending state, deployment contention,
+randomized concurrent histories and pool saturation. Both gauntlet stages,
+PR creation and hosted CI evidence remain outstanding.
+
+
+The additional `bytes access` suite passed three tests: read/write handle access,
+replacement of a mode-000 file by an explicitly issued admin-role host,
+directory/symlink/read-role replacement rejection without receipt admission,
+real one-second pin TTL, and expired-handle fsync without any receipt creation.
+The first admin test attempt incorrectly used the fixture's write-role host;
+that caller was correctly denied. The corrected fixture issues a distinct admin
+role and uid, proving the intended permission bypass rather than relying on file
+ownership. No production permission change was needed.

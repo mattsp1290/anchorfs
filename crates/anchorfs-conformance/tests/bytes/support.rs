@@ -59,6 +59,82 @@ pub async fn append(f: &Fixture, handle: &Value, key: &str, bytes: impl Into<Vec
         )
         .await
 }
+pub async fn read(
+    f: &Fixture,
+    handle: &Value,
+    offset: u64,
+    length: u32,
+    pin: Option<Uuid>,
+) -> RawReply {
+    read_as(f, handle, &f.worker, &f.worker_session, offset, length, pin).await
+}
+pub async fn read_as(
+    f: &Fixture,
+    handle: &Value,
+    actor: &Credential,
+    session: &Value,
+    offset: u64,
+    length: u32,
+    pin: Option<Uuid>,
+) -> RawReply {
+    let pin = pin.map(|id| format!("&read_pin={id}")).unwrap_or_default();
+    f.client
+        .binary(
+            "GET",
+            &format!(
+                "{}/bytes?offset={offset}&length={length}{pin}",
+                handle_path(f, handle)
+            ),
+            Some(actor),
+            Some(session),
+            None,
+            &[],
+            Body::empty(),
+        )
+        .await
+}
+pub async fn replace(
+    f: &Fixture,
+    path: &str,
+    generation: i64,
+    key: &str,
+    bytes: impl Into<Vec<u8>>,
+) -> RawReply {
+    let bytes = bytes.into();
+    let length = bytes.len().to_string();
+    let digest = anchorfs_core::sha256(&bytes).to_string();
+    f.client
+        .binary(
+            "PUT",
+            &format!(
+                "{}/files?path={path}&expected_generation={generation}",
+                f.workspace_path()
+            ),
+            Some(&f.worker),
+            Some(&f.worker_session),
+            Some(key),
+            &[
+                ("Content-Length", &length),
+                ("X-Anchorfs-Content-SHA256", &digest),
+            ],
+            Body::from(bytes),
+        )
+        .await
+}
+pub async fn pin(f: &Fixture, path: &str, key: &str) -> Value {
+    f.client
+        .call(
+            "POST",
+            &format!("{}/read-pins", f.workspace_path()),
+            Some(&f.worker),
+            Some(&f.worker_session),
+            Some(key),
+            Some(json!({"path":path})),
+        )
+        .await
+        .status(201)
+        .body
+}
 pub fn error(reply: RawReply, status: u16, code: &str) -> Value {
     let reply = reply.status(status);
     let body = reply.json();

@@ -169,6 +169,23 @@ pub fn backend(error: anchorfs_backend::traits::BackendError) -> ApiError {
     }
     result
 }
+
+impl From<anchorfs_persistence::pins::PinError> for ApiError {
+    fn from(error: anchorfs_persistence::pins::PinError) -> Self {
+        use anchorfs_persistence::pins::PinError as P;
+        match error {
+            P::Limit => Self::new(ErrorCode::QuotaExceeded, ""),
+            P::Stale => Self::new(ErrorCode::StaleHandle, ""),
+            P::NotFound => Self::new(ErrorCode::NotFound, ""),
+            P::Database(error) => error.into(),
+            P::Mismatch => {
+                let mut error = Self::new(ErrorCode::InvalidInput, "");
+                error.message = "pin_mismatch".into();
+                error
+            }
+        }
+    }
+}
 impl From<anchorfs_persistence::sessions::SessionError> for ApiError {
     fn from(error: anchorfs_persistence::sessions::SessionError) -> Self {
         use anchorfs_persistence::sessions::SessionError;

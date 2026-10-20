@@ -275,6 +275,8 @@ mod tests {
                     .uri(path.clone())
                     .header("X-Anchorfs-Test-Delay", "true")
                     .header("Idempotency-Key", "deadline-test")
+                    .header("Content-Length", "1")
+                    .header("X-Anchorfs-Content-SHA256", "ab".repeat(32))
                     .header("X-Anchorfs-Session-Id", id)
                     .header("X-Anchorfs-Session-Epoch", "1")
                     .header("content-type", "application/octet-stream")
@@ -286,10 +288,8 @@ mod tests {
                     response.status(),
                     if short {
                         StatusCode::SERVICE_UNAVAILABLE
-                    } else if !path.contains("expected_generation") {
-                        StatusCode::UNAUTHORIZED
                     } else {
-                        StatusCode::NOT_IMPLEMENTED
+                        StatusCode::UNAUTHORIZED
                     },
                     "{method} {path}"
                 );
@@ -305,10 +305,8 @@ mod tests {
                     error["code"],
                     if short {
                         "dependency_unavailable"
-                    } else if !path.contains("expected_generation") {
-                        "unauthenticated"
                     } else {
-                        "not_implemented"
+                        "unauthenticated"
                     }
                 );
                 if short {

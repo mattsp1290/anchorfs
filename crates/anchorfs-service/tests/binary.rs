@@ -8,6 +8,8 @@ use testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner};
 use testcontainers_modules::postgres::Postgres;
 #[path = "common/minio.rs"]
 mod minio;
+#[path = "binary/restart.rs"]
+mod restart;
 const DIGEST: &str = "sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3";
 struct ChildGuard(Child);
 impl Drop for ChildGuard {

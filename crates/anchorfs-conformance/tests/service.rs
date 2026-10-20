@@ -29,6 +29,10 @@ const IMPLEMENTED: &[&str] = &[
     "append",
     "truncate",
     "fsync",
+    "readRange",
+    "replaceFile",
+    "createReadPin",
+    "releaseReadPin",
 ];
 mod common;
 use anchorfs_persistence::settings::DurabilityProfile;
@@ -54,6 +58,7 @@ async fn call(
         .uri(uri)
         .header("content-type", content_type)
         .header("content-length", body.len())
+        .header("X-Anchorfs-Content-SHA256", "ab".repeat(32))
         .header(
             "X-Anchorfs-Session-Id",
             "00000000-0000-4000-8000-000000000001",
@@ -325,7 +330,7 @@ async fn implemented_routes_demand_bearer_and_others_return_501() {
         }
     }
     assert_eq!(count, 38);
-    assert_eq!(implemented_count, 30);
+    assert_eq!(implemented_count, 34);
 }
 #[tokio::test]
 async fn invalid_body_returns_400_not_501() {
@@ -403,7 +408,7 @@ async fn body_limits_exact() {
             write + 1,
             413,
         ),
-        ("/files?path=file&expected_generation=1", write + 1, 501),
+        ("/files?path=file&expected_generation=1", write + 1, 401),
         ("/files?path=file&expected_generation=1", replace + 1, 413),
     ] {
         let (s, v) = call(
@@ -550,6 +555,8 @@ async fn session_and_workflow_wire_bindings_are_validated() {
                         format!("Bearer {}.{}", uuid::Uuid::new_v4(), "a".repeat(64)),
                     )
                     .header("Idempotency-Key", "wire-test")
+                    .header("Content-Length", body.len())
+                    .header("X-Anchorfs-Content-SHA256", "ab".repeat(32))
                     .header(
                         "content-type",
                         if binary {
@@ -586,6 +593,8 @@ async fn session_and_workflow_wire_bindings_are_validated() {
                 .method(method.to_uppercase().as_str())
                 .uri(uri(path, op))
                 .header("Idempotency-Key", "wire-test")
+                .header("Content-Length", body.len())
+                .header("X-Anchorfs-Content-SHA256", "ab".repeat(32))
                 .header(
                     "X-Anchorfs-Session-Id",
                     "00000000-0000-4000-8000-000000000001",
