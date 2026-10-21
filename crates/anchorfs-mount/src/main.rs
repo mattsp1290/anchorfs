@@ -37,8 +37,13 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let filter =
-        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    // Dependency debug events can contain kernel-supplied names. JSON logs
+    // stay at info; local text logs may opt into RUST_LOG debug.
+    let filter = if cfg.args.log_format == "json" {
+        tracing_subscriber::EnvFilter::new("info")
+    } else {
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())
+    };
     let format = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr);

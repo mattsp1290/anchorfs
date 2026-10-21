@@ -11,7 +11,11 @@ use std::{
 #[test]
 fn mount_lookup_stat_readdir_match_api() {
     let _serial = serial();
-    let f = Fixture::new();
+    let f = Fixture::with(
+        |c| c.max_list_page = 2,
+        1 << 30,
+        std::sync::Arc::new(anchorfs_service::pipeline::faults::NoFaults),
+    );
     f.run(f.api.create_directory("a", 0o755, &IdempotencyKey::new()))
         .unwrap();
     f.put("a/b.txt", b"hello");
@@ -78,6 +82,15 @@ fn mount_write_fsync_release_visible_to_api_and_back() {
         assert_eq!(file.write(&data).unwrap(), data.len());
         file.sync_all().unwrap();
         assert_eq!(f.read("f"), data);
+        let h = f.open("f", false);
+        let (observed, generation) = f
+            .run(f.api.read_range(h.handle_id, 0, data.len() as u32))
+            .unwrap();
+        assert_eq!(&observed[..], &data);
+        let committed_generation:String=f.run(sqlx::query_scalar("SELECT result->>'generation' FROM operations WHERE workspace_id=$1 AND op_type='write_at' AND state='committed' ORDER BY committed_at DESC LIMIT 1").bind(f.workspace).fetch_one(&f.pool)).unwrap();
+        assert_eq!(generation, committed_generation.parse::<i64>().unwrap());
+        f.run(f.api.close_handle(h.handle_id, &IdempotencyKey::new()))
+            .unwrap();
         assert!(f.count("write_at") >= 5);
         f.put("f", b"new");
         let mut read = [0u8; 3];

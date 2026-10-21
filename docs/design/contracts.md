@@ -277,15 +277,15 @@ Official platform references consulted 2026-10-17. This is a target matrix, not 
 
 | Target | Contract | Source | Status |
 |---|---|---|---|
-| Linux kernel | ≥5.10 with CONFIG_FUSE_FS | https://docs.kernel.org/filesystems/fuse/fuse.html | unverified until Stage 2 |
-| FUSE protocol | ≥7.31 | https://github.com/torvalds/linux/blob/v5.10/include/uapi/linux/fuse.h | unverified until Stage 2 |
-| mount helper | fusermount3, fuse 3.x | https://github.com/libfuse/libfuse | unverified until Stage 2 |
-| Strict file profile | direct_io=true, writeback_cache=false, allow_mmap=false | spec 02 Reads and caching | profile serialization verified; kernel behavior unverified until Stage 2 |
-| Metadata cache | attr_ttl=entry_ttl=negative_ttl=0 | spec 02 Reads and caching | profile serialization verified; kernel behavior unverified until Stage 2 |
-| Permissions | default_permissions=true; server checks mandatory | spec 03 Identity and permissions | mount options compile; enforcement unverified until Stage 1/2 |
+| Linux kernel | ≥5.10 with CONFIG_FUSE_FS | https://docs.kernel.org/filesystems/fuse/fuse.html | observed on Linux 6.8.0-124-generic; full Stage 2b gate in progress |
+| FUSE protocol | ≥7.31 | https://github.com/torvalds/linux/blob/v5.10/include/uapi/linux/fuse.h | observed on Linux 6.8.0-124-generic; full Stage 2b gate in progress |
+| mount helper | fusermount3, fuse 3.x | https://github.com/libfuse/libfuse | observed on Linux 6.8.0-124-generic; full Stage 2b gate in progress |
+| Strict file profile | direct_io=true, writeback_cache=false, allow_mmap=false | spec 02 Reads and caching | serialization and Linux 6.8.0-124-generic kernel tests passed; final gates in progress |
+| Metadata cache | attr_ttl=entry_ttl=negative_ttl=0 | spec 02 Reads and caching | serialization and Linux 6.8.0-124-generic kernel tests passed; final gates in progress |
+| Permissions | default_permissions=true; server checks mandatory | spec 03 Identity and permissions | server conformance and Linux 6.8.0-124-generic permission tests passed |
 | Other OS | CLI prints profile; mount returns UnsupportedPlatform | independent plan D5 | macOS stub tests verified; other targets unverified |
 
-Only default_permissions is a mount option here. direct_io is an open/reply flag and TTLs are reply fields to apply in Stage 2; no auto-cache/writeback option is enabled. mmap, flock/fcntl, ACLs, xattrs initially, device nodes, sockets/FIFOs and renameat2 flags beyond none are unsupported. No filesystem operation is implemented by the skeleton.
+The Stage 2b options are default_permissions, nosuid, nodev, noatime, fsname=anchorfs and subtype=anchorfs. Direct I/O is an open/reply flag and TTLs are reply fields; auto-cache and writeback remain disabled. Shared writable mmap, flock/fcntl, ACLs, xattrs, device nodes, sockets/FIFOs and renameat2 flags beyond none are unsupported. The Linux mount profile below records the implemented translation and limits.
 
 ## Provider matrix
 
@@ -473,3 +473,64 @@ conflict after a timestamp change. Years outside 1 through 9999 are rejected.
 This is an independent extension for the approved mount's `utimens` path.
 A non-owner writer cannot touch a file using this extension. `UTIME_NOW` in
 the mount uses client wall time; `ctime` continues to use the server clock.
+
+## Linux mount profile (Stage 2b)
+
+The native client and Linux FUSE mount implement the strict profile. Kernel
+acceptance is recorded separately in `docs/provenance/stage2b-linux-mount-review.md`;
+other kernels, cross-node mounts and provider durability remain unverified.
+Server inode ids are FUSE inode numbers except the workspace root, mapped to 1.
+Entry and attribute TTLs are zero; opens select direct I/O without keep-cache,
+writeback-cache or shared-mmap capabilities. Reads do not update atime.
+
+Lookup and path mutation callbacks reconstruct names and check the expected
+parent/target inode identity before requesting a mutation. Replies with inode
+identities are checked again. A time-of-check/time-of-use window remains between
+that check and the server's path resolution. Open file operations use server
+handle ids. When Linux omits fh from getattr, the mount can use another live
+handle for that same inode, which preserves fstat after unlink. Getattr through
+an open handle costs a receipt-free fsync round trip. Directory handles retain a
+paged listing snapshot; readdir does not populate the inode lookup table.
+
+Writes commit synchronously in bounded API slices. O_APPEND selects server EOF
+for each slice. Ambiguous outcomes retain their key and resolve their original
+receipt; only definitive generation conflicts retry under new keys, at most
+three times. A partial write reports only bytes known committed. An unresolved
+slice reports EIO and its operation id is logged when available.
+
+Live workflow authority requires a host-minted bound session and the paired
+workflow token/epoch. The mount never renews or releases workflow leases. A
+fenced mount returns ESTALE until its process is replaced; a host rebind alone
+does not clear the latch. Workspace contention returns EBUSY without latching.
+Ordinary mounts probe root after a fenced operation so a publication race does
+not destroy a still-valid session. A bound mount latches a fenced mutation
+except reservation_expired even when the server still permits reads after
+mere lease expiry. A post-startup 401 maps to ESTALE and latches, an explicit
+deviation from spec 03's EACCES row. A stale handle fences that handle.
+
+The session and handles renew using local monotonic intervals derived from
+operator-supplied TTL hints; the hints must match the service. Renewal is best
+effort and a long pause still fences. Session identity and workflow epoch are
+validated at startup. Worker credentials need a pre-minted session; a host
+credential can self-mint. Clean shutdown revokes only self-minted sessions.
+SIGTERM/SIGINT first attempt a non-lazy unmount; if tools keep it busy the mount
+continues serving with its handles intact. Forced process death leaves its
+self-minted session to expire. Flush returns success for synchronous writes,
+including after fencing, so close does not invent a second write error.
+
+Kernel default_permissions and server authorization both apply. The mount
+assumes its euid/egid and the authenticated workspace identity are aligned;
+allow-other is an explicit opt-in and needs host FUSE permission configuration.
+Setuid/setgid/sticky bits and special file nodes are rejected with EPERM.
+Flock and fcntl locks are forwarded and rejected with ENOLCK; initialization
+fails if the kernel cannot forward them. Xattrs and other unsupported callbacks
+return ENOSYS (the kernel may expose EOPNOTSUPP); renameat2 flags return EINVAL.
+Shared writable mmap is unsupported. Private pages mapped before fencing may
+remain readable; Git success is a smoke observation and makes no mmap or
+POSIX-compliance claim. Statfs reports zero capacity, a deliberate limitation.
+
+Credentials and workflow tokens come from files or environment, never argv.
+The client refuses plaintext without allow-plaintext, disables environment
+proxies and redirects, and validates TLS using rustls with optional PEM roots.
+The https/CA-bundle path is unexercised. JSON logs stay at info to avoid dependency
+debug events containing names; local text logging may opt into debug.

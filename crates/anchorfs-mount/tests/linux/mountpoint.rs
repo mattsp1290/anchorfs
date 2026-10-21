@@ -189,12 +189,15 @@ impl TempMount {
                 .is_err()
             {
                 expired.store(true, Ordering::SeqCst);
-                let _ = Command::new("fusermount3").arg("-uz").arg(&path).status();
+                // A helper's exec can flush inherited FUSE descriptors. Kill
+                // a paused process directly before attempting cleanup helpers.
                 if let Some(pid) = pid {
-                    let _ = Command::new("kill")
-                        .args(["-KILL", &pid.to_string()])
-                        .status();
+                    let _ = nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(pid as i32),
+                        nix::sys::signal::Signal::SIGKILL,
+                    );
                 }
+                let _ = Command::new("fusermount3").arg("-uz").arg(&path).status();
             }
         }));
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -213,13 +216,22 @@ impl TempMount {
         this
     }
     pub fn signal(&self, name: &str) {
-        assert!(
-            Command::new("kill")
-                .args([name, &self.process.as_ref().unwrap().id().to_string()])
-                .status()
-                .unwrap()
-                .success()
-        );
+        use nix::{
+            sys::signal::{Signal, kill},
+            unistd::Pid,
+        };
+        let signal = match name {
+            "-STOP" => Signal::SIGSTOP,
+            "-CONT" => Signal::SIGCONT,
+            "-TERM" => Signal::SIGTERM,
+            _ => panic!("unsupported test signal"),
+        };
+        // Avoid forking with an open fd into a paused FUSE filesystem.
+        kill(
+            Pid::from_raw(self.process.as_ref().unwrap().id() as i32),
+            signal,
+        )
+        .unwrap();
     }
     pub fn stop(&mut self) {
         self.signal("-TERM");

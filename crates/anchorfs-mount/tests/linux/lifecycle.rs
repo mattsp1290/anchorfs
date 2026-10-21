@@ -79,6 +79,7 @@ fn replaced_ancestor_directory_is_estale() {
     let dir = fs::File::open(b.path.join("d")).unwrap();
     fs::rename(a.path.join("d"), a.path.join("old")).unwrap();
     fs::create_dir(a.path.join("d")).unwrap();
+    let receipts = f.receipt_count();
     let before = f.count("handle_open");
     let unlink_before = f.count("unlink");
     let mkdir_before = f.count("directory_create");
@@ -105,6 +106,7 @@ fn replaced_ancestor_directory_is_estale() {
             Some(libc::ESTALE)
         );
     }
+    assert_eq!(f.receipt_count(), receipts);
     assert_eq!(f.count("handle_open"), before);
     assert_eq!(f.count("unlink"), unlink_before);
     assert_eq!(f.count("directory_create"), mkdir_before);

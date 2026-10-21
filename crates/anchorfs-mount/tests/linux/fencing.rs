@@ -122,14 +122,29 @@ fn takeover_fences_bound_mount() {
     let a = TempMount::process(&f, &f.worker, Some(&s), Some(proof(&l)), 1048576);
     fs::write(a.path.join("before"), b"old").unwrap();
     f.sql("UPDATE workspaces SET workflow_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1");
+    let successor_host=Credential::from(&f.run(raw(&f.endpoint,&f.admin,None,"POST","/v1/credentials",Some(json!({"workspace_id":f.workspace,"kind":"host","role":"write","uid":unsafe{libc::geteuid()},"gid":unsafe{libc::getegid()},"max_reservation_bytes":1u64<<30})))));
+    assert_ne!(successor_host.id, f.host.id);
+    let host_session = f.raw(
+        &successor_host,
+        None,
+        "POST",
+        "/sessions",
+        Some(json!({"credential_id":successor_host.id})),
+    );
     let next = f.raw(
-        &f.host,
-        Some(&f.host_session),
+        &successor_host,
+        Some(&host_session),
         "POST",
         "/workflow-lease/takeover",
         Some(json!({})),
     );
-    let session = bound(&f, &next);
+    let session = f.raw(
+        &successor_host,
+        None,
+        "POST",
+        "/sessions",
+        Some(json!({"credential_id":f.worker.id,"bind_to_workflow_lease":next["token"]})),
+    );
     let b = TempMount::process(&f, &f.worker, Some(&session), Some(proof(&next)), 1048576);
     stale(fs::write(a.path.join("stale"), b"bad").unwrap_err());
     fs::write(b.path.join("after"), b"new").unwrap();
@@ -243,6 +258,13 @@ fn renewal_keeps_handles_and_session_alive() {
                 .fetch_one(&f.pool),
         )
         .unwrap();
+    let session_before: time::OffsetDateTime = f
+        .run(
+            sqlx::query_scalar("SELECT max(expires_at) FROM client_sessions WHERE workspace_id=$1")
+                .bind(f.workspace)
+                .fetch_one(&f.pool),
+        )
+        .unwrap();
     std::thread::sleep(Duration::from_secs(65));
     let mut bytes = [0; 3];
     file.read_exact_at(&mut bytes, 0).unwrap();
@@ -256,6 +278,14 @@ fn renewal_keeps_handles_and_session_alive() {
         )
         .unwrap();
     assert!(after > before);
+    let session_after: time::OffsetDateTime = f
+        .run(
+            sqlx::query_scalar("SELECT max(expires_at) FROM client_sessions WHERE workspace_id=$1")
+                .bind(f.workspace)
+                .fetch_one(&f.pool),
+        )
+        .unwrap();
+    assert!(session_after > session_before);
     assert!(f.count("handle_renew") >= 5);
     assert!(f.count("session_renew") >= 3);
     drop(file);

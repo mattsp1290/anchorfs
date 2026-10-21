@@ -298,13 +298,14 @@ async fn client_resolves_deadline_after_publication() {
     .await
     .unwrap();
     assert_eq!(count, 1);
-    let requests = proxy.requests.lock().unwrap();
-    let attempts = requests
-        .iter()
-        .filter(|r| r.contains(&format!("idempotency-key: {}", key.as_str())))
-        .count();
+    let attempts = {
+        let requests = proxy.requests.lock().unwrap();
+        requests
+            .iter()
+            .filter(|r| r.contains(&format!("idempotency-key: {}", key.as_str())))
+            .count()
+    };
     assert_eq!(attempts, 3);
-    drop(requests);
     assert_eq!(
         client.stat(Some("late")).await.unwrap().inode_id,
         mutation.inode_id.unwrap()

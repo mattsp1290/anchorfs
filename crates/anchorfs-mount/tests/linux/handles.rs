@@ -202,6 +202,7 @@ fn setattr_times_mode_truncate() {
             fs::metadata(m.path.join("f")).unwrap().mode() & 0o777,
             0o640
         );
+        let changes = f.count("attributes_set");
         assert_eq!(
             unsafe { libc::chown(path.as_ptr(), unsafe_uid() + 1, unsafe_gid()) },
             -1
@@ -214,6 +215,7 @@ fn setattr_times_mode_truncate() {
             unsafe { libc::chown(path.as_ptr(), unsafe_uid(), unsafe_gid()) },
             0
         );
+        assert_eq!(f.count("attributes_set"), changes);
         let file = OpenOptions::new()
             .read(true)
             .write(true)

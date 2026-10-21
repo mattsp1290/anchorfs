@@ -96,3 +96,20 @@ client deadline; the same key resolves to one receipt and one directory.
 The relay retains only request lines and idempotency keys, never credential
 headers. Read requests explicitly accept binary byte responses, and tracing
 records the returned trace id without request headers or bodies.
+
+## Full-suite timer diagnosis
+
+The first full host run passed renewal over 65 seconds with 20/40-second
+handle/session TTLs. Its SIGSTOP case hung in the harness's external signal
+helper; the stopped mount was confirmed through /proc and resumed from the
+separate authorized SSH session. The watchdog had already expired, so that run
+is not a passing gate. The harness now sends signals directly with the existing
+nix dependency and kills only its paused test child before spawning timeout
+cleanup helpers. This avoids fork/exec flushing inherited FUSE descriptors
+while that filesystem is stopped. No production signal handling or timeout is
+weakened. The full suite will be rerun after the affected run terminates.
+
+Additional acceptance assertions cover server-clamped two-entry directory pages,
+readRange generation versus the committed receipt, no chown metadata receipt,
+no receipt of any state after stale ancestor rejection, and advancing session
+expiry as well as advancing handle expiry during renewal.
