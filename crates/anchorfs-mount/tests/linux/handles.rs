@@ -93,6 +93,22 @@ fn hard_link_names_survive_unlink_of_one() {
         assert!(!m.path.join("b").exists());
     });
     drop(m);
+    f.put("remote-a", b"remote link");
+    f.run(
+        f.api
+            .create_link("remote-a", "remote-b", &IdempotencyKey::new()),
+    )
+    .unwrap();
+    let a = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let b = TempMount::in_process(&f);
+    fs::metadata(b.path.join("remote-a")).unwrap();
+    fs::metadata(b.path.join("remote-b")).unwrap();
+    // Make the soon-to-be-removed alias the last one observed by B.
+    fs::metadata(b.path.join("remote-a")).unwrap();
+    fs::remove_file(a.path.join("remote-a")).unwrap();
+    assert_eq!(fs::read(b.path.join("remote-b")).unwrap(), b"remote link");
+    drop(a);
+    drop(b);
     f.invariants();
 }
 #[test]

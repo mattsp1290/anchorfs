@@ -1,126 +1,125 @@
-# Stage 2b implementation evidence (in progress)
+# Stage 2b Linux mount implementation and verification
 
-This record is incremental. Missing tests or reviews remain incomplete; the
-plan is intent, not runtime evidence.
+The client, timestamp amendment, Linux mount and kernel suite are implemented on
+`feat/stage2b-linux-mount`. Verification below names the actual source revisions;
+the independent review gauntlet, final pushes, PR and hosted CI are still pending.
 
-## Inputs and origin
+## Approved inputs and independent design
 
-Implementation began on `feat/stage2b-linux-mount` from
-`1211158b6ee35e083e9785b1b181ceade4d441d6` on 2026-10-21. All seven imported
-specification SHA-256 values and the overview's design, API, dependency,
-lockfile and CI identities matched before editing. The imported baseline and
-manifest remain unchanged.
+Implementation began from `1211158b6ee35e083e9785b1b181ceade4d441d6` on 2026-10-21.
+Before editing, all seven imported specification hashes and the overview's
+contracts, persistent-state, OpenAPI, dependency, lockfile and CI identities
+matched. The original imported specs and import manifest remain unchanged.
+A hash proves identity, not originality or legal suitability.
 
-New code and synthetic fixtures are independently authored from the approved
-Stage 2b plan, `docs/spec/`, AnchorFS service DTOs/routes/tests, core path and
-error types, and the chosen MIT-licensed fuser 0.18.0 dependency API. No
-competitor implementation, client, SDK, private trace or research archive was
-consulted. This statement describes inputs to this implementation session;
-it is not legal clearance or a claim that fresh context erases past exposure.
+| Work | Approved requirement / source |
+|---|---|
+| Partial native client, authority headers and receipt recovery | spec 02 retry receipts; spec 03 native API; AnchorFS route annotations, DTOs and receipt implementation; plan WP1 |
+| Explicit atime/mtime | spec 03 mode/owner updates and filesystem behavior; explicit owner decision D7; existing inodes columns; independent local amendment in contracts.md; WP2 |
+| Shared and lease-bound FUSE mount | spec 01 R1/R3/R5/R6, spec 02 strict reads/cache profile, spec 03 filesystem/error/workflow contract, spec 07 worker lifecycle; WP3 |
+| Kernel suite and Git smoke | spec 05 Stage 2 and T5/T7/T12/T17/T19; spec 07 cases 1–2 and 5–6; independently authored synthetic tests; WP4 |
 
-`cargo info reqwest@0.12.28` and `cargo info libc@0.2.191` confirmed the
-approved repository origins and MIT OR Apache-2.0 licenses before the new
-edges. Cargo.lock currently adds only the client workspace member and workspace
-edges; no registry package was added. The source of the native client wire
-shapes is AnchorFS's own `dto.rs`, an approved repository input.
+New code and fixtures are independently authored from those inputs, AnchorFS's
+own code/tests/designs, and approved general-purpose dependency/platform APIs.
+The wire shapes derive from AnchorFS `dto.rs`, not another vendor's SDK.
+The fuser 0.18.0 public trait/configuration API and time 0.3.55 SystemTime
+interop source were inspected in the local registry. No competitor client,
+implementation, SDK, binary, private protocol, trace or research archive was
+consulted. Fresh review context is procedural separation and is not legal
+clearance or an assertion that historical exposure was erased.
 
-## Executed checkpoints (2026-10-21)
+Official kernel I/O reference consulted on 2026-10-21:
+https://docs.kernel.org/filesystems/fuse/fuse-io.html. The overview's older
+https://docs.kernel.org/filesystems/fuse.html URL returned 404; no behavior was
+inferred from that failed fetch.
 
-- Client unit tests: 2 passed (headers/plaintext policy; core errno hints).
-- Client conformance: 3 passed against disposable PostgreSQL and MinIO.
-  The response-loss case drops all three responses for each of mkdir, open,
-  positional write, append and session creation; typed receipt lookup returns
-  each original result, and SQL verifies one publication per mutation.
-- Timestamp conformance: 2 passed (owner/admin/forbidden, invalid instants,
-  symlink times, replay/digest mismatch, active lease gate).
-- Timestamp persistence test: 1 passed (explicit instants, generation, empty
-  update rejection).
-- Service OpenAPI snapshot tests: 5 passed. Service binary tests: 12 passed,
-  including process restart byte persistence.
-- `cargo deny check licenses bans advisories sources`: passed (existing
-  duplicate-version warnings).
-- Linux host readiness: kernel 6.8.0-124-generic, non-root uid, /dev/fuse,
-  fusermount3 3.14.0, Docker 29.2.1, local temp filesystem. No host mount test
-  has run yet.
+## Dependency and tool provenance
 
-## Implementation corrections to the plan
+Before promotion, `cargo info reqwest@0.12.28` confirmed MIT OR Apache-2.0 and
+https://github.com/seanmonstar/reqwest; `cargo info libc@0.2.191` confirmed the
+same license expression and https://github.com/rust-lang/libc. Existing fuser
+is MIT; time and the remaining workspace inputs retain their approved licenses.
+The exact registry package/version/source/checksum sets in Cargo.lock equal
+main's. Changes add only the client workspace member and dependency edges.
+There is no migration; persistent coverage remains 156 columns.
 
-Executable service routes and OpenAPI take precedence over the WP1 shorthand:
-`unlink` and `remove_directory` send `path` as a query parameter, not a DELETE
-JSON body. Conformance exercises both. Client retries derive the receipt scope
-from the wrapped operation: session creation uses admin receipts; all other
-wrapped mutations use workspace receipts.
+`dependencies.md` records runtime reqwest, Linux libc, the shipped webpki trust
+roots and test fixture roles. fusermount3 and git are external processes, never
+linked, vendored or distributed here. The Linux test target reuses the existing
+MinIO fixture and independently authored API relay by path. Container images
+retain their approved immutable digests; fixtures never use infrastructure data.
 
-## Remaining gates
+## Executed verification
 
-Mount implementation, portable tests, real Linux kernel suite, Linux host
-run, full regression gates, fresh independent cleanroom reviews, both review
-gauntlet stages, hosted CI and PR creation remain incomplete.
+- Client units: headers/plaintext policy, core errno hints and persisted key
+  validation/identity round trip passed. Client conformance: four cases passed
+  against disposable PostgreSQL/MinIO, including all three response attempts
+  lost for mkdir/open/write/append/session mint, and a separate committed
+  response delayed past every injected client deadline. Typed receipt lookup
+  returns the original result and SQL proves a single logical mutation.
+- Timestamp conformance: two cases passed (owner/admin/forbidden, invalid years,
+  symlink times, generation/ctime, replay/digest mismatch and live lease gate).
+  The persistence timestamp/empty-update test passed. OpenAPI snapshot: five
+  passed; binary suite: twelve passed, including process-restart byte persistence.
+- `05cf134`: full Linux workspace fmt, all-target clippy, build and workspace
+  tests passed. Serial mount suite: 23 tests (22 acceptance scenarios plus its
+  helper target), zero failures/skips, 396.94 s on kernel 6.8.0-124-generic.
+  The suite also passed within workspace tests using test-threads=4.
+- Host observations: shared writable mmap failed with ENODEV (19); private
+  read-only mmap succeeded, including on Git's index. Git init/add/two commits,
+  clean status, log, branch checkout/switch and committed blob inspection passed.
+  Per-command wall times are in the host log and are smoke observations only.
+- `ef2b9f0`: Linux all-target workspace clippy passed; mount units 14/14, CLI
+  2/2 and affected kernel cases 20/20 passed in 110.02 s. The subset excluded
+  only previously passing Git, append and the two long timer scenarios. New
+  coverage includes late read suppression, immediate bound fencing without
+  a root probe, checked timestamp bounds and positive rmdir/regular mknod.
+- Full macOS workspace tests, workspace build, all-target clippy, all-target
+  compile-only tests and the required core/backend/mount subset passed.
+  `cargo deny check licenses bans advisories sources` passed with existing
+  duplicate-version warnings. Final gauntlet checkpoints rerun applicable gates.
 
-## Kernel integration checkpoint (in progress)
+The Linux host readiness checks observed a non-root uid, /dev/fuse, fusermount3
+3.14.0, Docker 29.2.1 and local temp/checkout/target filesystems. Host identities,
+credentials and NFS paths are not recorded here. The workflow is documented in
+`docs/ops/linux-host-verification.md`.
 
-The first host kernel run (6.8.0-124-generic) passed 15 of 21 selected kernel
-cases, including Git smoke under a lease, 128 append records, explicit unsupported
-operations, partial writes, two-process visibility, revocation, the lease race
-and SIGTERM with a helper holding an open file. Two timer cases were excluded
-from that iteration. Six failures are being corrected; this is not a passing
-milestone gate. Four failures were test SQL names inconsistent with migrations.
+## Independent corrections and recorded deviations
 
-The two orphan-metadata failures showed that Linux can omit FUSE_GETATTR_FH on
-fstat after unlink. The implementation now resolves getattr through an already
-open server handle for the requested inode when the kernel omits fh; it checks
-the returned inode identity. It never re-resolves a detached name. This is an
-independent correction based on the synthetic real-kernel test, extending the
-WP3 fh-only assumption. Path-based mutation prechecks remain in place.
+- Executable routes/OpenAPI take precedence over WP1's shorthand: unlink and
+  rmdir take path as a query parameter, not a DELETE JSON body.
+- Linux can omit FUSE_GETATTR_FH on fstat after unlink. Getattr can use an
+  existing live server handle for that exact inode, with an identity check;
+  it never re-resolves a detached name. Kernel orphan tests exercise this.
+- Fresh lookups promote their verified hard-link alias so a remotely removed
+  older alias cannot keep breaking opens through a surviving link. M18 covers
+  cross-mount removal; the portable table test covers re-observation.
+- A bound fenced mutation latches before any await. Read replies and subsequent
+  slices check the latch; a deterministic BeforeGet schedule verifies that a
+  late read result is rejected. Committed write slices keep accurate byte counts.
+- Timestamp conversion uses a checked nanosecond constructor, validates years
+  before any truncate/metadata mutation, and returns EINVAL without panicking.
+- Flush succeeds for synchronous writes, including when fenced, so close does
+  not invent another write error. This follows WP3's callback table and is an
+  exception to its broad fence-callback sentence.
+- Test signals use existing nix calls directly. Fork/exec with an open descriptor
+  into a SIGSTOP-paused FUSE mount could block the old external signal helper.
+  The watchdog kills only its paused child before invoking cleanup helpers;
+  the corrected SIGSTOP case passed independently and in the full suite.
+- Production unmount is non-lazy, keeps serving on refusal and polls its helper
+  while listening for a second shutdown signal. Linux spawn stays target-gated;
+  the portable mount_options signature and non-Linux CLI failure remain intact.
+- Post-startup 401 maps to ESTALE (the recorded spec 03 table deviation).
+  Ordinary fenced publications probe session validity; workspace busy does not
+  latch. In-process rebind, server parent-inode guards and exercised HTTPS remain
+  deferred as agreed in the plan.
 
-`flush` acknowledges synchronous writes without an extra remote operation,
-including on a fenced mount, so close(2) does not invent an error after the
-caller already observed the write/fsync outcome. This follows WP3's callback
-table and is an exception to its broad fence-callback sentence.
+## Independent reviews and delivery
 
-Official Linux I/O-mode documentation consulted on 2026-10-21:
-https://docs.kernel.org/filesystems/fuse/fuse-io.html. The strict profile selects
-FOPEN_DIRECT_IO and leaves shared-mmap and writeback-cache capabilities disabled.
-The overview's https://docs.kernel.org/filesystems/fuse.html URL returns 404;
-this does not affect the dependency source or executable kernel tests.
-
-The corrected host kernel checkpoint passed 19 tests (0 failures; 4 filtered)
-in 182.79 s, including all earlier failures. Git and append had passed in the
-first iteration; real renewal and SIGSTOP expiry remain unrun at this checkpoint.
-The full local macOS workspace suite also passed; final gates will be repeated
-on the committed kernel-suite revision after lint cleanup.
-
-A fourth client conformance case, `client_resolves_deadline_after_publication`,
-passed: each of three committed HTTP responses is delayed past the injected
-client deadline; the same key resolves to one receipt and one directory.
-The relay retains only request lines and idempotency keys, never credential
-headers. Read requests explicitly accept binary byte responses, and tracing
-records the returned trace id without request headers or bodies.
-
-## Full-suite timer diagnosis
-
-The first full host run passed renewal over 65 seconds with 20/40-second
-handle/session TTLs. Its SIGSTOP case hung in the harness's external signal
-helper; the stopped mount was confirmed through /proc and resumed from the
-separate authorized SSH session. The watchdog had already expired, so that run
-is not a passing gate. The harness now sends signals directly with the existing
-nix dependency and kills only its paused test child before spawning timeout
-cleanup helpers. This avoids fork/exec flushing inherited FUSE descriptors
-while that filesystem is stopped. No production signal handling or timeout is
-weakened. The full suite will be rerun after the affected run terminates.
-
-Additional acceptance assertions cover server-clamped two-entry directory pages,
-readRange generation versus the committed receipt, no chown metadata receipt,
-no receipt of any state after stale ancestor rejection, and advancing session
-expiry as well as advancing handle expiry during renewal.
-
-The plan-fidelity audit tightened bound fencing to set the latch immediately,
-before any await, without an ordinary-mount root probe. M9b now asserts no root
-probe accompanies the fenced mutation as well as no requests after it. Startup
-logs the renewed session expiry, and API failure events carry the configured
-max_io_bytes for diagnosing server-limit mismatches. The Linux spawn API stays
-target-gated; non-Linux CLI execution reports UnsupportedPlatform and the
-portable mount_options signature is unchanged.
+The two fresh-context Opus reviews, canonical fixer summaries, separate standard
+and thermonuclear push checkpoints, pinned upstream rubric, PR and hosted CI
+will be recorded after execution. No review verdict or hosted pass is inferred
+from planning approval or a local passing test.
 
 ## Limits carried from the approved plan
 
@@ -148,26 +147,3 @@ already captured directory snapshot do not require an API request. This is
 not a latency or object-request-count guarantee for arbitrary workloads.
 Self-minted sessions left by forced termination can consume the credential's
 64-session bound until expiry; production hosts should pre-mint sessions.
-
-Read replies now recheck the latch after their remote request, and each read/write
-slice checks current mount/handle state. An in-flight read that completes after
-another callback latches the bound mount must not expose its late result;
-`bound_fence_rejects_inflight_read_result` uses a deterministic BeforeGet gate to
-exercise that schedule. Successful committed write results retain their byte
-counts. The client also supports restoring persisted visible-ASCII idempotency
-keys, with malformed header values rejected before any request.
-
-A timestamp boundary audit inspected the already approved `time` 0.3.55
-SystemTime interop API. Mount conversion now uses the checked nanosecond
-constructor and validates years before any truncate/metadata mutation, rather
-than risking a conversion panic. Linux unit and kernel setattr cases exercise
-the year-10000 rejection. The selected dependency API/source is an approved
-input; no dependency edge or registry identity changes.
-
-At commit `05cf134`, Linux workspace fmt/clippy/build and the full workspace
-suite passed. The serial mount suite passed 23 tests (22 acceptance scenarios
-plus its helper target), no failures/skips, in 396.94 s on 6.8.0-124-generic.
-The same mount suite also passed inside the workspace run with test-threads=4.
-Private read-only mmap succeeded; shared writable mmap failed with ENODEV (19).
-The final fencing/timestamp audit additions are being verified separately before
-review; both gauntlet checkpoints will rerun the full applicable gates.

@@ -72,9 +72,10 @@ impl InodeTable {
             nlookup: 0,
             detached: false,
         });
-        if !node.names.contains(&(parent, name.clone())) {
-            node.names.push((parent, name));
-        }
+        // A lookup proves this alias is current. Prefer it over an older
+        // alias which another mount may have removed without notifying us.
+        node.names.retain(|(p, n)| *p != parent || *n != name);
+        node.names.insert(0, (parent, name));
         node.nlookup = node.nlookup.saturating_add(1);
         node.detached = false;
         Ok(ino)
@@ -211,6 +212,17 @@ mod tests {
         assert_eq!(t.path(4).unwrap().unwrap().as_str(), "b");
         t.record_name(5, 1, n("b"), InodeKind::File).unwrap();
         assert_eq!(t.path(4), Err(ErrnoName::ESTALE));
+    }
+    #[test]
+    fn fresh_lookup_prefers_the_verified_hard_link_alias() {
+        let mut table = InodeTable::new(2);
+        table.record_name(3, 1, n("old"), InodeKind::File).unwrap();
+        table.record_name(3, 1, n("live"), InodeKind::File).unwrap();
+        table.record_name(3, 1, n("old"), InodeKind::File).unwrap();
+        assert_eq!(table.path(3).unwrap().unwrap().as_str(), "old");
+        table.detach(3);
+        table.record_name(3, 1, n("live"), InodeKind::File).unwrap();
+        assert_eq!(table.path(3).unwrap().unwrap().as_str(), "live");
     }
     #[test]
     fn path_bounds_and_invalid_names() {

@@ -1,5 +1,6 @@
 //! Partial AnchorFS-native API client for mounts and host consumers.
-//! Does not wrap credentials, workflow leases, read pins or conditional replacement.
+//! Does not wrap workspace creation, credentials, session rebind, workflow leases,
+//! read pins or conditional replacement.
 pub mod auth;
 pub mod endpoint;
 pub mod error;

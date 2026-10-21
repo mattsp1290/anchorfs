@@ -11,7 +11,7 @@ pub mod runtime;
 pub enum MountError {
     #[error("mounting is supported only on Linux")]
     UnsupportedPlatform,
-    #[error("only the strict stage 0 mount profile is supported")]
+    #[error("only the strict mount profile is supported")]
     UnsupportedProfile,
     #[error("configuration: {0}")]
     Config(String),

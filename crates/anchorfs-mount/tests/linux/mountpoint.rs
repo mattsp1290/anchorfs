@@ -233,7 +233,17 @@ impl TempMount {
         )
         .unwrap();
     }
+    fn disarm_watchdog(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(watchdog) = self.watchdog.take() {
+            let _ = watchdog.join();
+        }
+    }
     pub fn stop(&mut self) {
+        // The watchdog must not retain a numeric pid after we reap the child.
+        self.disarm_watchdog();
         self.signal("-TERM");
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
@@ -250,6 +260,7 @@ impl TempMount {
 }
 impl Drop for TempMount {
     fn drop(&mut self) {
+        self.disarm_watchdog();
         let unmount = Command::new("fusermount3")
             .arg("-u")
             .arg(&self.path)
@@ -271,12 +282,6 @@ impl Drop for TempMount {
             rt.block_on(mount.shutdown());
         }
         self.runtime.take();
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
-        }
-        if let Some(watch) = self.watchdog.take() {
-            let _ = watch.join();
-        }
         let _ = std::fs::remove_dir(&self.path);
         let _ = std::fs::remove_file(self.path.with_extension("log"));
         if !std::thread::panicking() {

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-/// Initial profile; mmap is unsupported. `default_permissions` is a mount
+/// Strict profile; shared writable mmap is unsupported. `default_permissions` is a mount
 /// option and auto-cache is never enabled. Direct I/O is an open-time reply
-/// setting; TTLs are lookup/getattr reply settings, applied in Stage 2.
+/// setting; zero TTLs are applied to lookup/getattr replies.
 /// Writeback caching must remain disabled during FUSE initialization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MountProfile {
