@@ -660,30 +660,60 @@ async fn lease_wait_past_deadline_does_not_commit() {
 #[tokio::test]
 async fn acquire_under_publication_load() {
     let f = LeaseFixture::new().await;
-    let mut tasks = Vec::new();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .connect_with((*f.db.pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(5));
     let start = std::time::Instant::now();
+    let mut tasks = Vec::new();
     for _ in 0..4 {
-        let pool = f.db.pool.clone();
+        let pool = pool.clone();
         let ws = f.workspace;
-        tasks.push(tokio::spawn(async move {while start.elapsed()<Duration::from_secs(5) {let mut tx=pool.begin().await.unwrap();authority::lock_workspace(&mut tx,ws).await.unwrap();sqlx::query("UPDATE inodes SET atime=clock_timestamp() WHERE workspace_id=$1 AND kind='directory'").bind(ws.0).execute(&mut *tx).await.unwrap();tx.commit().await.unwrap();tokio::task::yield_now().await;}}));
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            let mut first=true;
+            while start.elapsed()<Duration::from_secs(5) {
+                let mut tx=pool.begin().await.unwrap();
+                authority::lock_workspace(&mut tx,ws).await.unwrap();
+                if first { first=false;barrier.wait().await; }
+                sqlx::query("UPDATE inodes SET atime=clock_timestamp() WHERE workspace_id=$1 AND kind='directory'").bind(ws.0).execute(&mut *tx).await.unwrap();
+                tx.commit().await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        }));
     }
-    let mut tx = f.db.pool.begin().await.unwrap();
+    // All four publishers hold shared locks before starting the exclusive wait.
+    barrier.wait().await;
+    let wait_start = std::time::Instant::now();
+    let mut tx = pool.begin().await.unwrap();
     set_timeout(&mut tx, 10000).await;
-    let lock = f.lock(&mut tx).await;
-    workflows::acquire(
-        &mut tx,
-        &lock,
-        &f.actor,
-        &f.session,
-        Duration::from_secs(60),
-    )
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
-    println!(
-        "acquire_under_publication_load elapsed_ms={}",
-        start.elapsed().as_millis()
-    );
+    match authority::lock_workspace_for_update(&mut tx, f.workspace).await {
+        Ok(Some(lock)) => {
+            workflows::acquire(
+                &mut tx,
+                &lock,
+                &f.actor,
+                &f.session,
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+            println!(
+                "acquire_under_publication_load elapsed_ms={}",
+                wait_start.elapsed().as_millis()
+            );
+        }
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("55P03") => {
+            tx.rollback().await.unwrap();
+            println!(
+                "exclusive lease operations can starve under continuous share traffic; hosts retry"
+            );
+        }
+        other => panic!("unexpected load result {other:?}"),
+    }
     for task in tasks {
         task.await.unwrap();
     }

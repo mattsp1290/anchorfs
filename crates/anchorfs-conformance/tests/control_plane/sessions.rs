@@ -39,7 +39,7 @@ async fn cp7_cp8_cp11_session_authority_epochs_and_self_fencing() {
             Some(lease),
         )
         .await
-        .error(501, "not_implemented");
+        .error(409, "workspace_busy");
     let granted = f
         .client
         .call(
@@ -121,7 +121,7 @@ async fn cp7_cp8_cp11_session_authority_epochs_and_self_fencing() {
             Some(json!({"workflow_lease_token":"a".repeat(64)})),
         )
         .await
-        .error(501, "not_implemented");
+        .error(409, "workspace_busy");
     let rebound = f
         .client
         .call(

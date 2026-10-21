@@ -162,3 +162,24 @@ impl Client {
         }
     }
 }
+
+/// Synthetic lease proof headers on the real HTTP router.
+pub fn lease_client(client: &Client, token: &str, epoch: i64) -> Client {
+    let token = token.to_owned();
+    Client {
+        app: client.app.clone().layer(axum::middleware::from_fn(
+            move |mut req: axum::extract::Request, next: axum::middleware::Next| {
+                let token = token.clone();
+                async move {
+                    req.headers_mut()
+                        .insert("X-Anchorfs-Workflow-Token", token.parse().unwrap());
+                    req.headers_mut().insert(
+                        "X-Anchorfs-Workflow-Epoch",
+                        epoch.to_string().parse().unwrap(),
+                    );
+                    next.run(req).await
+                }
+            },
+        )),
+    }
+}

@@ -403,6 +403,9 @@ mod lease_extractor_tests {
                 req = req.header("X-Anchorfs-Workflow-Epoch", e);
             }
             let (mut parts, _) = req.body(()).unwrap().into_parts();
+            parts
+                .extensions
+                .insert(crate::middleware::TraceId("extractor-test".into()));
             let result = RequiredWorkflowGrant::from_request_parts(&mut parts, &()).await;
             if valid {
                 let proof = result.unwrap().0;

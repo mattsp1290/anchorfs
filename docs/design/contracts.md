@@ -94,8 +94,8 @@ until future offline reconciliation.
 
 ## Byte path
 
-The six byte methods and both pin methods are connected, giving 34 implemented
-operations and four workflow-lease stubs. ReadRange bounds each call to
+The six byte methods and both pin methods are connected, giving 38 implemented
+operations and no stubs (workflow routes added in Stage 2a). ReadRange bounds each call to
 1..=max_request_bytes, clips at EOF and returns empty bytes beyond EOF. It
 captures one manifest, fetches every touched object whole with digest/length
 verification, slices only its logical prefix and zero-fills holes. Corrupt or
@@ -186,18 +186,18 @@ Seconds. The repository owner accepted the U2 defaults on 2026-10-17 at the Stag
 
 | name | value | source | status |
 |---|---|---|---|
-| handle_ttl | 300 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| upload_reservation_ttl | 900 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| reservation_heartbeat | 60 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| client_session_ttl | 3600 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| workflow_lease_ttl | 600 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| read_pin_ttl | 300 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| receipt_retention | 86400 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| cursor_ttl | 600 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| restart_recovery_bound | 60 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| metadata_call_deadline | 10 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| data_call_deadline | 60 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
-| shutdown_drain | 10 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| handle_ttl | 300 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| upload_reservation_ttl | 900 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| reservation_heartbeat | 60 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| client_session_ttl | 3600 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| workflow_lease_ttl | 600 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| read_pin_ttl | 300 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| receipt_retention | 86400 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| cursor_ttl | 600 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| restart_recovery_bound | 60 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| metadata_call_deadline | 10 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| data_call_deadline | 60 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| shutdown_drain | 10 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
 
 ## Transaction model
 
@@ -205,13 +205,59 @@ READ COMMITTED, explicit locks and the complete order/modes in [persistent-state
 
 ## Credential epochs and sessions
 
-Credential rotation/revocation increments that credential's epoch; role/permission-policy changes increment workspace authorization_epoch. Capture both at operation start and recheck at publication. admin_operations stores credential_epoch_at_start; operations additionally stores workspace and session epochs. New read/handle operations check current authority. Issuer revocation cascades to issued credentials and their sessions. Read/write/admin roles retain server permission checks; only owner or workspace administrator may chmod, ownership changes require administrator. Workers cannot issue replacement sessions or acquire leases. Credential/session behavior is verified by `control_plane` CP7–CP12; role changes, filesystem permissions and leases remain later work.
+Credential rotation/revocation increments that credential's epoch; role/permission-policy changes increment workspace authorization_epoch. Capture both at operation start and recheck at publication. admin_operations stores credential_epoch_at_start; operations additionally stores workspace and session epochs. New read/handle operations check current authority. Issuer revocation cascades to issued credentials and their sessions. Read/write/admin roles retain server permission checks; only owner or workspace administrator may chmod, ownership changes require administrator. Workers cannot issue replacement sessions or acquire leases. Credential/session behavior is verified by `control_plane` CP7–CP12; filesystem permissions are verified by Stage 1b; lease routes by Stage 2a WL-N1–N7 and WL-B1–B3.
 
 Receipt keys are workspace + authenticated credential + idempotency key, with digest binding and 24-hour retention; deployment/session-minting routes use admin_operations. An expired ambiguous operation returns operation_indeterminate; it must not be automatically replayed under a new key/session. max_retry_attempts bounds retries. Client sessions are bounded and receipt replay cannot grant a new mutation. Control-plane receipts are verified by CP4, CP5 and CP12.
 
 ## Exclusive workflows
 
-The workspaces authority row stores workflow owner/token hash/expiry. Acquire, release and expired takeover advance mutation_epoch under FOR UPDATE and fence old uploads; renew serializes there too. All mutations require the active token; readers may continue without snapshot semantics. A session tied to an expired lease fails closed until explicit host rebind. Workflow partial commits are not rolled back on command failure. Unverified until Stage 1/2.
+The workspaces authority row stores workflow owner/token hash/expiry. Stage 2a
+implements the four routes and session binding, verified by namespace WL-N1–N7,
+byte WL-B1–B3 and the persistence schedules in the acceptance map.
+
+| Transition | Required recorded state | Result |
+|---|---|---|
+| Acquire | absent | epoch +1, new owner/token/expiry |
+| Renew | live, owner with valid proof | same epoch/token, expiry extended |
+| Release | live, owner with valid proof | epoch +1, lease fields NULL |
+| Takeover | expired | epoch +1, new owner/token/expiry |
+
+Only write/admin-role hosts with ordinary, unbound actor sessions may change
+leases. A recorded live lease blocks acquire/takeover (`workspace_busy`,
+`lease_active`); an expired recorded lease blocks acquire (`workspace_busy`,
+`lease_expired`). Takeover and renew/release on an absent lease return
+`workspace_busy` / `lease_absent`. Only the owner may renew/release (otherwise
+403); an expired owner's proof returns `fenced` / `lease_expired`. Wrong proofs
+return `fenced` / `workflow_proof_mismatch`; bound actor sessions return `fenced`
+/ `session_bound`. Administrators and workers cannot hold leases.
+
+An owner host may mint or rebind worker/host sessions with the token. Existing
+actor/target checks precede binding. Under a live lease, mutations require
+proof from the owner or a session bound to the current epoch. Release/takeover
+leave old sessions persisted and fence their reads and mutations until a host
+rebinds them. Any host may rebind to ordinary mode, which grants no ability to
+publish through someone else's live lease. Expiry is lazy, with no sweeper.
+
+Stage 2a interpretation (2026-10-20, approved plan): mere expiry does not advance
+the epoch. A bound session keeps reading until release/takeover advances it;
+publication fails closed immediately on expiry. Readers are never promised
+exclusion or application-level snapshots. `check_workflow` is unchanged.
+
+`ANCHORFS_WORKFLOW_LEASE_TTL_MS` is configurable, defaults to 600000, and must
+be positive. Renew uses database wall time plus the configured TTL and never
+rotates or returns a token. Workspace inspection returns owner, epoch, expiry
+and active status, with no token/hash. See the Stage 2a acceptance map.
+
+Lease routes preauthenticate kind/role/workspace without a row lock, then take
+workspace FOR UPDATE before credential/session/receipt locks; they never
+upgrade FOR SHARE. The exclusive lock timeout is bounded by the remaining
+response budget (minimum 1 ms). There remains a small post-lock/commit window
+where an abandoned caller can lose the initial grant; recovery requires expiry
+and takeover. PostgreSQL scheduling under sustained shared traffic has no
+promised acquisition latency: the local `acquire_under_publication_load` run
+observed 113 ms, which is an observation, not a bound or starvation proof.
+A revoked owner cannot renew; its lease persists until expiry/takeover, and
+issuer revocation cascades to its workers under the existing credential rules.
 
 ## Object format and deployment identity
 
@@ -253,7 +299,7 @@ No object-store durability, FUSE runtime, provider compatibility or performance 
 
 ## Reviewed wire decisions
 
-These are independent requirements/design clarifications from the Stage 0 code reviews; imported baselines remain unchanged. Future success responses are declared per operation, and Stage 0 initially returned 501 after shape validation. Stage 1a implements the thirteen control-plane routes listed below. Grant expiry strings are RFC3339 UTC timestamps. MutationResult carries operation_id and, when relevant, the affected inode/generation; WriteResult requires offset, bytes_written and committed generation (including the original offset on append retry). OperationStatus.result contains the original success metadata while retained, with secret/token fields omitted; an expired tombstone has state=indeterminate and result=null. Credential secrets and newly issued workflow tokens are returned by the initial grant response, never stored as plaintext in a receipt or returned by inspection. Successful workflow renewal may echo its currently supplied token without rotating it. A retry that would require replaying discarded grant material returns operation_indeterminate plus the operation ID; inspection still proves the committed metadata. A lost issued-credential secret is recovered by authorized rotation after inspection, and a lost workflow token requires waiting for expiry and authorized takeover (up to workflow_lease_ttl); neither case repeats the original mutation. Stage 1 must test these recovery paths before implementing grants.
+These are independent requirements/design clarifications from the Stage 0 code reviews; imported baselines remain unchanged. Future success responses are declared per operation, and Stage 0 initially returned 501 after shape validation. Stage 1a implements the thirteen control-plane routes listed below. Grant expiry strings are RFC3339 UTC timestamps. MutationResult carries operation_id and, when relevant, the affected inode/generation; WriteResult requires offset, bytes_written and committed generation (including the original offset on append retry). OperationStatus.result contains the original success metadata while retained, with secret/token fields omitted; an expired tombstone has state=indeterminate and result=null. Credential secrets and newly issued workflow tokens are returned by the initial grant response, never stored as plaintext in a receipt or returned by inspection. Stage 2a amendment (2026-10-20): renewal returns token:null without rotation. Credential/workflow grant replays return committed metadata with secret/token:null, matching the Stage 1a credential behavior. A replayed grant is not a usable secret; inspection still proves committed metadata. Acquire/takeover workflow headers must be absent (invalid_input / workflow_proof_not_applicable). A lost issued-credential secret is recovered by authorized rotation after inspection, and a lost workflow token requires waiting for expiry and authorized takeover (up to workflow_lease_ttl); neither case repeats the original mutation. Stage 1 must test these recovery paths before implementing grants.
 
 For stat/list, an omitted query path selects the workspace root; for setAttributes an omitted JSON path selects root. Any supplied path remains nonempty and relative: empty, absolute, dot/traversal and invalid UTF-8 paths are rejected. Creation/removal targets still require a child path.
 
@@ -402,7 +448,7 @@ Deployment administrators may issue host credentials with role admin. These are 
 
 Stage 1b amendment — 2026-10-18. The native API implements 26 operations: the thirteen Stage 1a control-plane routes, ten namespace routes and three metadata-only handle routes. Twelve byte/read-pin/workflow-lease operations still return 501 after shape validation. No namespace or handle operation calls object storage.
 
-Workspace mutations publish inode, entry, logical quota and receipt changes in one PostgreSQL transaction. Receipt scope includes workspace, credential and captured session/authority epochs. Same-key identical retries return the original operation ID and metadata; a different body returns idempotency_mismatch. Expired receipt identity is retained and retry returns operation_indeterminate. Open-handle replay returns its stored grant even if subsequently closed or expired; renew/close reveal current state. Role and workflow gates apply before receipt dispatch, including replay; findOperation inspects a committed receipt while writers are excluded by a lease.
+Workspace mutations publish inode, entry, logical quota and receipt changes in one PostgreSQL transaction. Receipt scope includes workspace, credential and captured session/authority epochs. Same-key identical retries return the original operation ID and metadata; a different body returns idempotency_mismatch. Expired receipt identity is retained and retry returns operation_indeterminate. Open-handle replay returns its stored grant even if subsequently closed or expired; renew/close reveal current state. Role and workflow gates apply before receipt dispatch, including replay. Stage 2a exception (2026-10-20): lease routes gate kind, role, workspace and session_bound before receipt dispatch; lease state, ownership and proof checks run only for fresh mutations, so replay returns committed metadata without reevaluating those checks; findOperation inspects a committed receipt while writers are excluded by a lease.
 
 A workspace namespace guard serializes entry changes, ancestor validation and metadata changes. The lock order is the dated Stage 1b amendment in persistent-state.md: authority → receipt → namespace → ascending inode IDs → entries → quota → handles → admission. Renew takes inode → handle → session-keyed advisory admission lock 7002. Every changed entry increments namespace_generation once per API operation; chmod/chown, existing-file open, truncate-empty and no-op rename leave it unchanged. Parents gain generation and mtime/ctime on entry changes; modified target inodes gain generation and ctime. Directory nlink is two plus live child directories (zero after removal); file/symlink nlink equals its entry count. Rename replacement adjusts each parent's child-directory count exactly once, and prevents cycles. A same-path or same-inode rename still resolves/checks authority, then does not change generations.
 

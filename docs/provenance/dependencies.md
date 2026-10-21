@@ -106,3 +106,5 @@ is involved. Its typed LengthLimitError distinguishes malformed declared body
 length from transport/disconnect errors without matching error-message prose.
 This is the plan's allowed reviewed dependency exception: neither package
 version nor the resolved package set changes.
+
+Stage 2a (2026-10-20) adds no dependency or dependency edge; Cargo.lock is unchanged from main.

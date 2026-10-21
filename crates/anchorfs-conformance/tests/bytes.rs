@@ -26,5 +26,7 @@ mod stress;
 mod support;
 #[path = "bytes/truncate.rs"]
 mod truncate;
+#[path = "bytes/workflows.rs"]
+mod workflows;
 #[path = "bytes/writes.rs"]
 mod writes;
