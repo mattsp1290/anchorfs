@@ -35,10 +35,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchorfs-client"
+version = "0.1.0"
+dependencies = [
+ "anchorfs-core",
+ "bytes",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "anchorfs-conformance"
 version = "0.1.0"
 dependencies = [
  "anchorfs-backend",
+ "anchorfs-client",
  "anchorfs-core",
  "anchorfs-persistence",
  "anchorfs-service",

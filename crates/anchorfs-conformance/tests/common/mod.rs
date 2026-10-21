@@ -129,3 +129,4 @@ pub fn state_fake(pool: PgPool) -> (AppState, Arc<fake_backend::FakeBackend>) {
     };
     (state, backend)
 }
+pub mod api_proxy;

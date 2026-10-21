@@ -99,6 +99,8 @@ fn crate_edges_match_plan() {
     }
     let expected = [
         ("persistence", "core"),
+        ("client", "core"),
+        ("conformance", "client"),
         ("backend", "core"),
         ("mount", "core"),
         ("service", "core"),

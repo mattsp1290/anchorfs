@@ -20,7 +20,7 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | http-body-util | 0.1.5 | MIT | https://github.com/hyperium/http-body | typed length-limit error classification for streamed replacement; reviewed 2026-10-20 |
 | nix | 0.31.3 | MIT | https://github.com/nix-rust/nix | test process signals |
 | rand | 0.9.5 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | random secrets; conformance fixtures |
-| reqwest | 0.12.28 | MIT OR Apache-2.0 | https://github.com/seanmonstar/reqwest | binary HTTP tests and the conformance fault proxy |
+| reqwest | 0.12.28 | MIT OR Apache-2.0 | https://github.com/seanmonstar/reqwest | native-API client (`anchorfs-client`), binary HTTP tests and the conformance fault proxy |
 | serde | 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde | serialization |
 | serde_json | 1.0.154 | MIT OR Apache-2.0 | https://github.com/serde-rs/json | JSON and persistence receipt payloads |
 | proptest | 1.12.0 | MIT OR Apache-2.0 | https://github.com/proptest-rs/proptest | namespace model/property tests (dev-dependency) |
@@ -124,3 +124,10 @@ RUSTSEC-2026-0381. The owner-approved exception supersedes the plan's unchanged
 lockfile constraint; imported specifications and the import manifest remain
 unchanged. See [D-WL1 and verification](stage2a-implementation-amendments.md).
 The post-update cargo-deny licenses/bans/advisories/sources gate passes.
+
+## Stage 2b reqwest runtime role (2026-10-21)
+
+Before incorporation, `cargo info reqwest@0.12.28` confirmed MIT OR Apache-2.0
+and https://github.com/seanmonstar/reqwest. The existing pinned general-purpose
+HTTP library is an approved input. The shipped mount will embed existing
+`webpki-roots` trust roots via rustls; the https path remains unexercised.

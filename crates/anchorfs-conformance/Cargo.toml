@@ -35,3 +35,5 @@ futures-core.workspace = true
 async-trait.workspace = true
 sqlx.workspace = true
 time.workspace = true
+
+anchorfs-client.workspace = true

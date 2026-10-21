@@ -15,6 +15,7 @@ unsafe_code = "deny"
 all = "warn"
 
 [workspace.dependencies]
+anchorfs-client = { path = "crates/anchorfs-client" }
 anchorfs-core = { path = "crates/anchorfs-core" }
 anchorfs-persistence = { path = "crates/anchorfs-persistence" }
 anchorfs-backend = { path = "crates/anchorfs-backend" }
