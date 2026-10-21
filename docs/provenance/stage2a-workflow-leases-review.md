@@ -76,7 +76,14 @@ Both initial review stages read the entire diff and all full changed files.
 The requested model alias was unavailable; the available inherited runtime was
 used and disclosed. No particular unavailable model is claimed. Fresh contexts
 are procedural separation, not legal clearance or erased historical exposure.
-Hosted CI remains pending until the PR run completes.
+Thermonuclear checkpoint `5fefab1d19ecfacde8a97574ef444da7fe4a9352` was
+pushed and verified against origin before opening draft
+[PR #6](https://github.com/mattsp1290/anchorfs/pull/6). All five hosted jobs
+(lint, deny, Linux workspace tests, Linux ARM64 build and macOS
+build/clippy/test-compilation/core-backend-mount tests) passed in
+[CI run 39531660970](https://github.com/mattsp1290/anchorfs/actions/runs/39531660970)
+for that exact code revision. The final evidence-only update records this
+completed run; it adds no code or dependency changes.
 
 ## Limits
 
