@@ -5,7 +5,7 @@ info:
   license:
     name: MIT
     identifier: MIT
-  version: 1.0.0-stage2a
+  version: 1.0.0-stage2b
 paths:
   /v1/workspaces:
     post:
@@ -4294,6 +4294,20 @@ components:
           - 'null'
           format: int32
           minimum: 0
+        atime:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Explicit RFC3339 time requires the inode owner or a workspace administrator.
+            Omission leaves it unchanged. PostgreSQL retains microsecond precision.
+        mtime:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Explicit RFC3339 time requires the inode owner or a workspace administrator.
+            Omission leaves it unchanged. PostgreSQL retains microsecond precision.
     SymlinkContents:
       type: object
       required:

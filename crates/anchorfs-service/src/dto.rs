@@ -203,6 +203,14 @@ pub struct SetAttributes {
     pub mode: Option<u32>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
+    /// Explicit RFC3339 time requires the inode owner or a workspace administrator.
+    /// Omission leaves it unchanged. PostgreSQL retains microsecond precision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub atime: Option<String>,
+    /// Explicit RFC3339 time requires the inode owner or a workspace administrator.
+    /// Omission leaves it unchanged. PostgreSQL retains microsecond precision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtime: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

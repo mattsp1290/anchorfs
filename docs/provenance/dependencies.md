@@ -18,6 +18,7 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | futures-core | 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | bounded body streaming in anchorfs-service and failing streams in the conformance fault proxy |
 | fuser | 0.18.0 | MIT | https://github.com/cberner/fuser | Linux FUSE boundary |
 | http-body-util | 0.1.5 | MIT | https://github.com/hyperium/http-body | typed length-limit error classification for streamed replacement; reviewed 2026-10-20 |
+| libc | 0.2.191 | MIT OR Apache-2.0 | https://github.com/rust-lang/libc | Linux mount open/mode constants and raw test syscalls |
 | nix | 0.31.3 | MIT | https://github.com/nix-rust/nix | test process signals |
 | rand | 0.9.5 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | random secrets; conformance fixtures |
 | reqwest | 0.12.28 | MIT OR Apache-2.0 | https://github.com/seanmonstar/reqwest | native-API client (`anchorfs-client`), binary HTTP tests and the conformance fault proxy |
@@ -125,9 +126,15 @@ lockfile constraint; imported specifications and the import manifest remain
 unchanged. See [D-WL1 and verification](stage2a-implementation-amendments.md).
 The post-update cargo-deny licenses/bans/advisories/sources gate passes.
 
-## Stage 2b reqwest runtime role (2026-10-21)
+## Stage 2b dependency role review (2026-10-21)
 
-Before incorporation, `cargo info reqwest@0.12.28` confirmed MIT OR Apache-2.0
-and https://github.com/seanmonstar/reqwest. The existing pinned general-purpose
-HTTP library is an approved input. The shipped mount will embed existing
-`webpki-roots` trust roots via rustls; the https path remains unexercised.
+Before incorporating the runtime reqwest edge, `cargo info reqwest@0.12.28`
+confirmed MIT OR Apache-2.0 and https://github.com/seanmonstar/reqwest.
+The existing pinned general-purpose HTTP library is an approved input; no
+competitor client or SDK was consulted. The shipped mount will embed the
+existing `webpki-roots` trust roots through reqwest's rustls feature. The
+`https` transport remains unexercised by this milestone's acceptance tests.
+
+`cargo info libc@0.2.191` confirmed MIT OR Apache-2.0 and
+https://github.com/rust-lang/libc before the planned Linux direct edge.
+No new registry package is authorized by this milestone.

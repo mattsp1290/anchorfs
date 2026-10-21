@@ -35,6 +35,7 @@ futures-core = { version = "=0.3.34" }
 http-body-util = { version = "=0.1.5" }
 hmac = { version = "=0.13.0" }
 fuser = { version = "=0.18.0" }
+libc = { version = "=0.2.191" }
 nix = { version = "=0.31.3", features = ["signal", "process"] }
 proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
 rand = { version = "=0.9.5" }

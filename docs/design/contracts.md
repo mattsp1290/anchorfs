@@ -461,3 +461,15 @@ Logical quota counts each non-root inode once plus its size (symlink target byte
 Limits: no byte routes or manifests, and truncate-on-open of an inode with a manifest is 501 until the byte milestone. Workflow routes remain 501; only the owner/token/epoch and bound-session predicates are implemented and exercised with disposable fixture lease rows. Maintenance state is currently ignored. Expiry sweepers and physical tombstone bounds are deferred; repeated create/unlink can grow inode rows at zero live logical charge. Development signing keys are ephemeral, so restart or differing replica keys invalidate cursors; clients restart listing. Durable deployments require a configured key. These behaviors do not claim full POSIX compliance, competitor compatibility, mount support or provider durability beyond the tested local contracts.
 
 Publication-time clarification — 2026-10-18: namespace and handle receipt jobs carry the admitted workflow context to the common final validation after all business/receipt waits. Mutation-mode authority must still have a live matching owner/bound-session proof immediately before publication. Read-mode renew/close continue during lease expiry; self-fencing control-plane jobs have no workflow context. Handle renewal takes inode → handle → admission, then conditionally extends only if the original persisted expiry is still in the future. Crossing expiry while waiting for admission returns stale_handle, preventing renewal from reactivating a slot already admitted to a different open.
+
+## Explicit inode times (Stage 2b, 2026-10-21)
+
+`setAttributes` accepts optional RFC3339 `atime` and `mtime`. Explicit times
+require the inode owner or a workspace administrator and are permitted on files,
+directories and symlinks. Omitted times are unchanged; stored instants have
+PostgreSQL microsecond precision. Each successful update advances generation
+and sets `ctime` to transaction time, so conditional replacement observes a
+conflict after a timestamp change. Years outside 1 through 9999 are rejected.
+This is an independent extension for the approved mount's `utimens` path.
+A non-owner writer cannot touch a file using this extension. `UTIME_NOW` in
+the mount uses client wall time; `ctime` continues to use the server clock.

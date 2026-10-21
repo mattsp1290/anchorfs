@@ -36,6 +36,7 @@ jobs:
       - run: cargo deny check licenses bans advisories sources
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -46,6 +47,8 @@ jobs:
             target
           key: ${{ runner.os }}-${{ runner.arch }}-test-${{ hashFiles('Cargo.lock') }}
       - run: rustup show active-toolchain
+      - run: sudo apt-get update && sudo apt-get install -y fuse3 git
+      - run: ls -l /dev/fuse && fusermount3 --version && id -u && uname -r
       - run: cargo test --workspace --locked -- --test-threads=4
   build-linux-arm64:
     runs-on: ubuntu-24.04-arm

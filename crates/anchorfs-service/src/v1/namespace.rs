@@ -297,6 +297,8 @@ pub async fn set_attributes(
     if let Some(path) = &body.path {
         validate_path(path, &trace.0)?;
     }
+    let atime = parse_attribute_time(body.atime.as_deref(), &trace.0)?;
+    let mtime = parse_attribute_time(body.mtime.as_deref(), &trace.0)?;
     mutate(
         MutationCall {
             state,
@@ -307,7 +309,7 @@ pub async fn set_attributes(
             workflow,
             proof,
         },
-        Mutation::Attributes(body),
+        Mutation::Attributes { atime, mtime, body },
     )
     .await
 }
@@ -328,7 +330,11 @@ enum Mutation {
     Link(CreateLink),
     Symlink(CreateSymlink),
     Rename(Rename),
-    Attributes(SetAttributes),
+    Attributes {
+        body: SetAttributes,
+        atime: Option<time::OffsetDateTime>,
+        mtime: Option<time::OffsetDateTime>,
+    },
 }
 impl Mutation {
     fn request(&self) -> (&'static str, serde_json::Value) {
@@ -340,7 +346,9 @@ impl Mutation {
             Self::Link(b) => ("link_create", to_value(b).expect("request JSON")),
             Self::Symlink(b) => ("symlink_create", to_value(b).expect("request JSON")),
             Self::Rename(b) => ("rename", to_value(b).expect("request JSON")),
-            Self::Attributes(b) => ("attributes_set", to_value(b).expect("request JSON")),
+            Self::Attributes { body: b, .. } => {
+                ("attributes_set", to_value(b).expect("request JSON"))
+            }
         }
     }
     async fn apply(
@@ -364,7 +372,11 @@ impl Mutation {
                     .rename(caller, &path(&b.from), &path(&b.to))
                     .await?
             }
-            Self::Attributes(b) => {
+            Self::Attributes {
+                body: b,
+                atime,
+                mtime,
+            } => {
                 namespace
                     .set_attributes(
                         caller,
@@ -372,6 +384,8 @@ impl Mutation {
                         b.mode,
                         b.uid,
                         b.gid,
+                        atime,
+                        mtime,
                     )
                     .await?
             }
@@ -587,4 +601,18 @@ async fn read(
         },
     )
     .await
+}
+
+fn parse_attribute_time(
+    value: Option<&str>,
+    trace: &str,
+) -> Result<Option<time::OffsetDateTime>, ApiError> {
+    value
+        .map(|value| {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                .ok()
+                .filter(|time| (1..=9999).contains(&time.year()))
+                .ok_or_else(|| ApiError::new(anchorfs_core::ErrorCode::InvalidInput, trace))
+        })
+        .transpose()
 }
