@@ -214,7 +214,7 @@ pub async fn load_actor_session(
         expires_at: row.expires_at,
     })
 }
-#[derive(Debug, sqlx::FromRow)]
+#[derive(sqlx::FromRow)]
 pub struct WorkspaceLock {
     pub workflow_owner_credential_id: Option<uuid::Uuid>,
     pub workflow_token_hash: Option<Vec<u8>>,
@@ -256,7 +256,7 @@ pub async fn check_publication_time(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkflowProof {
     pub token: [u8; 32],
     pub epoch: i64,
@@ -318,5 +318,80 @@ pub fn identity(actor: &ActorCredential) -> anchorfs_core::Identity {
     anchorfs_core::Identity {
         uid: actor.uid,
         gid: actor.gid,
+    }
+}
+
+/// Reject ineligible callers before waiting for an exclusive workspace lock.
+/// This deliberately takes no credential lock; load_actor rechecks under lock.
+pub async fn preauthenticate(
+    tx: &mut Transaction<'_, Postgres>,
+    proof: &CredentialProof,
+    workspace: WorkspaceId,
+) -> Result<ActorCredential, AuthorityError> {
+    let actor = credential(tx, proof, "", None).await?;
+    if !same_workspace(&actor, workspace) {
+        return Err(AuthorityError::NotFound);
+    }
+    if actor.kind != CredentialKind::Host || !role_permits_mutation(&actor) {
+        return Err(AuthorityError::Forbidden);
+    }
+    Ok(actor)
+}
+/// Lease transitions must acquire this lock first, never upgrade FOR SHARE.
+pub async fn lock_workspace_for_update(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: WorkspaceId,
+) -> Result<Option<WorkspaceLock>, sqlx::Error> {
+    sqlx::query_as("SELECT id, authorization_epoch, mutation_epoch, state, workflow_owner_credential_id, workflow_token_hash, workflow_expires_at FROM workspaces WHERE id=$1 FOR UPDATE")
+        .bind(workspace.0).fetch_optional(&mut **tx).await
+}
+impl WorkspaceLock {
+    pub fn lease_state(&self, now: OffsetDateTime) -> crate::workflows::LeaseState {
+        match self.workflow_expires_at {
+            None => crate::workflows::LeaseState::Free,
+            Some(t) if t > now => crate::workflows::LeaseState::Live,
+            Some(_) => crate::workflows::LeaseState::Dead,
+        }
+    }
+}
+impl std::fmt::Debug for WorkflowProof {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkflowProof")
+            .field("token", &"[redacted]")
+            .field("epoch", &self.epoch)
+            .finish()
+    }
+}
+impl std::fmt::Debug for WorkspaceLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceLock")
+            .field("id", &self.id)
+            .field("mutation_epoch", &self.mutation_epoch)
+            .field("workflow_token_hash", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod lease_debug_tests {
+    use super::*;
+    #[test]
+    fn workflow_debug_redacts_token_and_hash() {
+        let token = [171; 32];
+        let proof = WorkflowProof { token, epoch: 2 };
+        let lock = WorkspaceLock {
+            workflow_owner_credential_id: Some(uuid::Uuid::nil()),
+            workflow_token_hash: Some(token.to_vec()),
+            workflow_expires_at: None,
+            id: uuid::Uuid::nil(),
+            authorization_epoch: 1,
+            mutation_epoch: 2,
+            state: "active".into(),
+        };
+        for value in [format!("{proof:?}"), format!("{lock:?}")] {
+            assert!(value.contains("[redacted]"));
+            assert!(!value.contains("171"));
+            assert!(!value.contains(&"ab".repeat(32)));
+        }
     }
 }

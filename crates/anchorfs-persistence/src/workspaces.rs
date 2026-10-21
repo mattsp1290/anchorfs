@@ -17,6 +17,10 @@ pub struct WorkspaceView {
     pub id: uuid::Uuid,
     pub authorization_epoch: i64,
     pub mutation_epoch: i64,
+    pub workflow_owner_credential_id: Option<uuid::Uuid>,
+    pub workflow_mutation_epoch: Option<i64>,
+    pub workflow_expires_at: Option<OffsetDateTime>,
+    pub workflow_active: Option<bool>,
     pub inode_id: i64,
     pub generation: i64,
     pub kind: String,
@@ -53,6 +57,6 @@ pub async fn read(
     tx: &mut Transaction<'_, Postgres>,
     id: WorkspaceId,
 ) -> Result<Option<WorkspaceView>, sqlx::Error> {
-    sqlx::query_as("SELECT w.id,w.authorization_epoch,w.mutation_epoch,i.id AS inode_id,i.generation,i.kind,i.size,i.mode,i.uid,i.gid,i.nlink,i.atime,i.mtime,i.ctime FROM workspaces w JOIN inodes i ON i.workspace_id=w.id AND i.id=w.root_inode_id WHERE w.id=$1")
+    sqlx::query_as("SELECT w.id,w.authorization_epoch,w.mutation_epoch,w.workflow_owner_credential_id,CASE WHEN w.workflow_expires_at IS NOT NULL THEN w.mutation_epoch END AS workflow_mutation_epoch,w.workflow_expires_at,w.workflow_expires_at>clock_timestamp() AS workflow_active,i.id AS inode_id,i.generation,i.kind,i.size,i.mode,i.uid,i.gid,i.nlink,i.atime,i.mtime,i.ctime FROM workspaces w JOIN inodes i ON i.workspace_id=w.id AND i.id=w.root_inode_id WHERE w.id=$1")
         .bind(id.0).fetch_optional(&mut **tx).await
 }

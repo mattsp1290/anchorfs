@@ -87,6 +87,7 @@ pub async fn actor_session(
         actor.id,
         std::time::Duration::from_secs(3600),
         64,
+        None,
     )
     .await
     .unwrap();

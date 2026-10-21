@@ -19,3 +19,5 @@ pub mod objects;
 pub mod pins;
 pub mod quota;
 pub mod reservations;
+
+pub mod workflows;
