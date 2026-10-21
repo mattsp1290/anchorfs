@@ -3503,6 +3503,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: fenced
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '410':
           description: stale_handle
           content:

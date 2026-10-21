@@ -9,31 +9,43 @@ All seven imported spec hashes were recomputed against import-manifest.json
 and match. No competitor material, research archive, SDK, trace or private
 protocol was consulted. New Rust/SQL, test schedules and fixtures are
 independent designs from these requirements. No dependency, edge or migration
-was added; the lockfile and imported baselines remain unchanged.
+was added. The owner subsequently approved exactly two transitive security
+patch updates; [D-WL1](stage2a-implementation-amendments.md) records their
+source/license review and the lockfile-constraint exception. Imported baselines
+remain unchanged.
 
-## Local verification in progress
+## Local verification checkpoint
 
-- Original persistence regression suite: passed.
-- New persistence workflow schedules: 15 passed; publication-load observation
-  was 113 ms in the recorded local run. No latency guarantee is inferred.
+- At implementation commit `2513967cd1b139e382521ceaf1e8d4f10c32b9ca`, the full
+  workspace test command completed with exit 0. This did not cover every
+  concurrency schedule; subsequent corrections add explicit lock-order and
+  abandoned-grant regression tests.
+- `object_staging_receipt_fence_and_lease_have_no_fk_lock_cycle`: passed against
+  pinned disposable PostgreSQL, using actual staging, fencing, receipt and lease
+  helpers and checking terminal receipt/quota/orphan state.
+- Namespace workflow suite after corrections: 10 passed, including the HTTP
+  deadline regression and eight blocked acquire requests before holder release.
+- Original persistence schedules: 15 passed; publication-load observation was
+  113 ms in the recorded local run. No latency guarantee is inferred.
 - Byte workflow suite: 3 passed against pinned disposable PostgreSQL/MinIO.
-- Clippy workspace/all-targets/locked with warnings denied: passed.
-- Full workspace regression: first run used a stale version of WL-N6 and
-  reported its fixture failure; the corrected focused WL-N6 passes. The 52 byte
-  regressions passed. A final full run is still required.
-- `cargo deny check licenses bans advisories sources`: licenses/bans/sources
-  pass; advisories fail for existing rustls-webpki 0.103.15
-  (RUSTSEC-2026-0382) and webpki-roots 1.0.9 (RUSTSEC-2026-0381).
-  Owner decision requested before changing the explicit unchanged-lockfile gate.
-- Push preflight: repo root, origin SSH, feature branch, gh authentication with
-  repo scope and ADMIN repository permission verified; PREFLIGHT_RESULT=READY.
+- Post-correction workspace/all-target clippy with warnings denied: passed.
+- `cargo deny check licenses bans advisories sources`: all four checks pass
+  after the owner-approved two-package security exception (D-WL1).
+- Post-patch backend/core/mount tests and all three provenance checks passed.
+- Final full post-correction/post-patch workspace regression: running. Hosted CI
+  and final independent review gates remain pending; no result is inferred.
+- Push preflight previously verified repo root, origin SSH, feature branch,
+  authenticated repo scope and ADMIN permission; it is repeated before pushing.
 
 ## Review and hosted gates
 
-Review gauntlet and hosted CI are pending. No review verdict is claimed yet.
-Fresh reviewers must receive only the approved-input packet and branch evidence;
-prior reviews/research history are excluded. Fresh contexts are procedural
-separation, not legal clearance or erased historical exposure.
+The canonical fixer applied all six selected diagnostic fixes under the
+owner's explicit instruction to continue autonomously. A fresh review pair
+will assess this corrected branch using an approved-input packet and no prior
+reviewer conclusions. Earlier diagnostic artifacts are retained outside this
+record and do not satisfy the independent gate. Hosted CI remains pending.
+Fresh contexts are procedural separation, not legal clearance or erased
+historical exposure.
 
 ## Limits
 

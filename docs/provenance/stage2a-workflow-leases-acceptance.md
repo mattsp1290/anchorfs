@@ -29,3 +29,14 @@ unbound worker's busy-path probe; lease holders use proof on writable opens.
 No existing handle behavior was changed. The unbound probe fails at the lease
 gate before checking its read-only handle's write access; ordinary writable
 handles are exercised before acquisition and after host rebind.
+
+
+Review-fix regressions: persistence bytes_tx
+`object_staging_receipt_fence_and_lease_have_no_fk_lock_cycle` checks actual
+workspace/staging/fence/receipt helpers and terminal orphan accounting.
+Namespace `lease_pool_wait_past_deadline_does_not_create_an_abandoned_grant`
+checks late pool acquisition cannot grant after response timeout, with an
+early-release successful control. Eight-client HTTP acquisition now observes
+all eight database lock waiters before releasing its holder. D-WL1 explicitly
+amends the original unchanged-lockfile gate for the two approved security
+patches; no package/edge/migration or imported-baseline change is introduced.

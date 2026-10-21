@@ -186,18 +186,18 @@ Seconds. The repository owner accepted the U2 defaults on 2026-10-17 at the Stag
 
 | name | value | source | status |
 |---|---|---|---|
-| handle_ttl | 300 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| upload_reservation_ttl | 900 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| reservation_heartbeat | 60 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| client_session_ttl | 3600 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| handle_ttl | 300 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| upload_reservation_ttl | 900 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| reservation_heartbeat | 60 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| client_session_ttl | 3600 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
 | workflow_lease_ttl | 600 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| read_pin_ttl | 300 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| receipt_retention | 86400 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| cursor_ttl | 600 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| restart_recovery_bound | 60 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| metadata_call_deadline | 10 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| data_call_deadline | 60 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
-| shutdown_drain | 10 | spec 02/03; independent default | configurable: ANCHORFS_WORKFLOW_LEASE_TTL_MS; lifecycle verified by WL-N1–N7 |
+| read_pin_ttl | 300 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| receipt_retention | 86400 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| cursor_ttl | 600 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| restart_recovery_bound | 60 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| metadata_call_deadline | 10 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| data_call_deadline | 60 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
+| shutdown_drain | 10 | spec 02/03; independent default | verified: contracts_timers_match_defaults (values only); lifecycle Stage 1/2 |
 
 ## Transaction model
 

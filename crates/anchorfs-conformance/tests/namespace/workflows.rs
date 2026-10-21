@@ -780,6 +780,12 @@ async fn concurrent_acquires_have_one_winner() {
             actors.push((actor.clone(), f.session_for(actor).await));
         }
     }
+    let mut holder = f.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE")
+        .bind(f.workspace)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
     let mut tasks = Vec::new();
     for (actor, session) in &actors {
         let c = Client {
@@ -800,6 +806,17 @@ async fn concurrent_acquires_have_one_winner() {
             .await
         }));
     }
+    // Accept either the intended exclusive SELECT or an erroneous later UPDATE:
+    // a SHARE-then-upgrade regression must reach the contested lock too.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND wait_event_type='Lock' AND query ILIKE '%workspaces%' AND (query ILIKE '%FOR UPDATE%' OR query ILIKE '%UPDATE workspaces%')")
+                .fetch_one(&f.pool).await.unwrap();
+            if waiting==8 {break;}
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.expect("all eight HTTP requests reached workspace contention");
+    holder.commit().await.unwrap();
     let mut winner = None;
     let mut losses = 0;
     for (i, task) in tasks.into_iter().enumerate() {
@@ -1034,5 +1051,80 @@ async fn lease_routes_reject_workers_read_hosts_and_bound_actors() {
         "workspace_busy",
         "lease_active",
     );
+    f.invariants().await;
+}
+
+#[tokio::test]
+async fn lease_pool_wait_past_deadline_does_not_create_an_abandoned_grant() {
+    let f = Fixture::new().await;
+    for late in [true, false] {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(2))
+            .connect_with((*f.pool.connect_options()).clone())
+            .await
+            .unwrap();
+        let (mut state, _backend) = crate::common::state_fake(pool.clone());
+        let mut config = (*state.config).clone();
+        config.metadata_call_deadline = Duration::from_millis(600);
+        state.config = Arc::new(config);
+        state.control_permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let permits = state.control_permits.clone();
+        let client = Client {
+            app: build_router(state),
+        };
+        let held = pool.acquire().await.unwrap();
+        let actor = f.host.clone();
+        let session = f.host_session.clone();
+        let path = lease_path(&f, "");
+        let key = if late {
+            "late-pool-grant"
+        } else {
+            "early-pool-grant"
+        };
+        let task = tokio::spawn(async move {
+            client
+                .call("POST", &path, Some(&actor), Some(&session), Some(key), None)
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while permits.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        if late {
+            task.await.unwrap().error(503, "outcome_unknown");
+            // Release after the HTTP response but before the pool's own timeout.
+            drop(held);
+            let _finished = tokio::time::timeout(Duration::from_secs(2), permits.acquire())
+                .await
+                .unwrap()
+                .unwrap();
+            let (epoch, recorded): (i64, bool) = sqlx::query_as(
+                "SELECT mutation_epoch,workflow_expires_at IS NOT NULL FROM workspaces WHERE id=$1",
+            )
+            .bind(f.workspace)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+            assert_eq!((epoch, recorded), (1, false));
+            let receipts: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM operations WHERE workspace_id=$1 AND idempotency_key=$2",
+            )
+            .bind(f.workspace)
+            .bind(key)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+            assert_eq!(receipts, 0);
+        } else {
+            drop(held);
+            let grant = task.await.unwrap().status(201).body;
+            assert!(grant["token"].is_string());
+            assert_eq!(grant["mutation_epoch"], 2);
+        }
+    }
     f.invariants().await;
 }

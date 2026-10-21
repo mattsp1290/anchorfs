@@ -189,7 +189,9 @@ async fn mutate(request: LeaseMutation) -> Result<Response, ApiError> {
         control::Kind::Mutation,
         move |tx, budget| {
             Box::pin(async move {
+                ensure_budget(budget)?;
                 authority::preauthenticate(tx, &proof, workspace).await?;
+                ensure_budget(budget)?;
                 // Bound exclusive waits by the response budget: abandoned lock waiters
                 // must not later acquire and commit a grant whose token was never seen.
                 let millis = lock_wait_millis(lock_timeout, budget.remaining());
@@ -213,6 +215,7 @@ async fn mutate(request: LeaseMutation) -> Result<Response, ApiError> {
                 if session.bound_mutation_epoch.is_some() {
                     return Err(workflows::WorkflowError::SessionBound.into());
                 }
+                ensure_budget(budget)?;
                 let scope = ReceiptScope::Workspace {
                     workspace,
                     credential: actor.id,
@@ -241,6 +244,8 @@ async fn mutate(request: LeaseMutation) -> Result<Response, ApiError> {
                     },
                     move |tx, operation| {
                         Box::pin(async move {
+                            // Receipt dispatch may itself have waited on an existing key.
+                            ensure_budget(budget)?;
                             match kind {
                                 Mutation::Acquire => {
                                     Published::workflow_grant(super::views::workflow_grant(
@@ -303,6 +308,12 @@ async fn mutate(request: LeaseMutation) -> Result<Response, ApiError> {
     )
     .await;
     receipt::finish(&state, result, status, &trace.0).await
+}
+fn ensure_budget(budget: control::Budget) -> Result<(), ApiError> {
+    if budget.remaining().is_zero() {
+        return Err(ApiError::new(ErrorCode::DependencyUnavailable, ""));
+    }
+    Ok(())
 }
 fn lock_wait_millis(configured: std::time::Duration, remaining: std::time::Duration) -> u128 {
     configured

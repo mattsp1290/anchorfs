@@ -1,6 +1,6 @@
 # Persistent state ownership
 
-Schema contract version 1. [Migrations](../../crates/anchorfs-persistence/migrations/) define the database constraints. Inputs are approved specs 02, 03, 04 and 07 and the independently selected Stage 0 plan. Stage 0 recorded conceptual transactions. Stage 1a implements control-plane transactions, Stage 1b namespace transactions, and Stage 1c byte publication plus logical/staging/physical quota accounting, as annotated below. Workflow lease routes, object reclamation and isolated storage restore remain deferred. Schema coverage alone proves structural constraints; the named executable tests supply behavioral evidence.
+Schema contract version 1. [Migrations](../../crates/anchorfs-persistence/migrations/) define the database constraints. Inputs are approved specs 02, 03, 04 and 07 and the independently selected Stage 0 plan. Stage 0 recorded conceptual transactions. Stage 1a implements control-plane transactions, Stage 1b namespace transactions, and Stage 1c byte publication plus logical/staging/physical quota accounting, as annotated below. Stage 2a implements workflow lease routes and session binding. Object reclamation and isolated storage restore remain deferred. Schema coverage alone proves structural constraints; the named executable tests supply behavioral evidence.
 
 Deployment-scope createWorkspace, createCredential, rotateCredential, revokeCredential and createSession use admin_operations receipts. All session-bound workspace mutations use operations. Both bind a request digest and credential epoch; workspace operations additionally bind session and workspace epochs. A receipt permits outcome retrieval, never new authority.
 
@@ -82,7 +82,7 @@ SQL type/nullability/checks below are structural invariants; semantic invariants
 
 | Column | Owner transaction (conceptual, Stage 1+) | Invariant | Crash boundary | Recovery rule |
 |---|---|---|---|---|
-| namespace_locks.workspace_id | workspace_create / namespace_mutation (implemented: workspaces::create; workflows::acquire/renew/release/takeover) | `uuid PRIMARY KEY REFERENCES workspaces(id)`; exclusive namespace lock serializes ancestor validation; generation binds listing cursors | B6 | use committed namespace and receipt; do not replay ambiguous rename under a new key |
+| namespace_locks.workspace_id | workspace_create / namespace_mutation (implemented: workspaces::create (creation only)) | `uuid PRIMARY KEY REFERENCES workspaces(id)`; exclusive namespace lock serializes ancestor validation; generation binds listing cursors | B6 | use committed namespace and receipt; do not replay ambiguous rename under a new key |
 | namespace_locks.namespace_generation | workspace_create / namespace_mutation (implemented: workspaces::create, NamespaceGuard::bump) | `bigint NOT NULL DEFAULT 1`; exclusive namespace lock serializes ancestor validation; generation binds listing cursors | B6 | use committed namespace and receipt; do not replay ambiguous rename under a new key |
 
 ## credentials
