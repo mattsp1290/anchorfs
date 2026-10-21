@@ -103,6 +103,7 @@ fn crate_edges_match_plan() {
         ("conformance", "client"),
         ("backend", "core"),
         ("mount", "core"),
+        ("mount", "client"),
         ("service", "core"),
         ("service", "persistence"),
         ("service", "backend"),

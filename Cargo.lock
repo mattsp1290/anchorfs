@@ -96,15 +96,21 @@ dependencies = [
 name = "anchorfs-mount"
 version = "0.1.0"
 dependencies = [
+ "anchorfs-client",
  "anchorfs-core",
+ "bytes",
  "clap",
  "fuser",
+ "libc",
  "serde",
  "serde_json",
  "thiserror",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]
