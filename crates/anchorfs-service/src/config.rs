@@ -363,3 +363,15 @@ impl Config {
         Arc::new(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn workflow_ttl_default_matches_the_frozen_timer_contract() {
+        assert_eq!(
+            Config::contract_defaults().workflow_lease_ttl,
+            Timers::default().workflow_lease_ttl
+        );
+    }
+}

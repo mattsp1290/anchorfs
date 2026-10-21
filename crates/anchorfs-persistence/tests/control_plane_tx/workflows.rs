@@ -507,6 +507,25 @@ async fn unauthenticated_acquire_does_not_block_readers() {
         Err(AuthorityError::Unauthenticated)
     ));
     tx.rollback().await.unwrap();
+    let mut setup = f.db.pool.begin().await.unwrap();
+    let worker = issue(
+        &mut setup,
+        &f.actor,
+        new_credential(Some(f.workspace), Kind::Worker),
+    )
+    .await;
+    setup.commit().await.unwrap();
+    let mut tx = f.db.pool.begin().await.unwrap();
+    assert!(matches!(
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            authority::preauthenticate(&mut tx, &worker, f.workspace)
+        )
+        .await
+        .unwrap(),
+        Err(AuthorityError::Forbidden)
+    ));
+    tx.rollback().await.unwrap();
     bad.secret = anchorfs_core::Secret::new(f.host.secret.expose().clone());
     sqlx::query("UPDATE credentials SET revoked_at=clock_timestamp() WHERE id=$1")
         .bind(bad.id.0)
@@ -524,7 +543,23 @@ async fn unauthenticated_acquire_does_not_block_readers() {
         Err(AuthorityError::Unauthenticated)
     ));
     tx.rollback().await.unwrap();
+    let pool = f.db.pool.clone();
+    let workspace = f.workspace;
+    let control = tokio::spawn(async move {
+        let mut tx = pool.begin().await.unwrap();
+        authority::lock_workspace_for_update(&mut tx, workspace)
+            .await
+            .unwrap()
+            .unwrap();
+        tx.rollback().await.unwrap();
+    });
+    wait_lock(&f.db.pool).await;
+    assert!(
+        !control.is_finished(),
+        "exclusive control must wait for shared holder"
+    );
     holder.rollback().await.unwrap();
+    control.await.unwrap();
     f.invariants().await;
 }
 #[tokio::test]

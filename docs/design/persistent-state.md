@@ -451,6 +451,12 @@ act on operation identity without actor/session locks. B11 follow-ups take the
 session FOR UPDATE and then read their operation. No backend I/O may run in an
 open database transaction.
 
+Stage 2a correction (2026-10-20): replacement's per-chunk staging transaction
+now takes workspace FOR SHARE before reservation FOR SHARE and object INSERT.
+The existing workspace lock prevents INSERT's implicit workspace FK check from
+introducing a reservation-to-workspace wait. Body reads and backend I/O remain
+outside this short metadata transaction.
+
 The Stage 1b quota-before-handles wording above is corrected to the implemented
 inode → handle → quota order used by close. The Stage 0 deployment-quota-first
 placement is superseded. Namespace operations otherwise retain their relative
