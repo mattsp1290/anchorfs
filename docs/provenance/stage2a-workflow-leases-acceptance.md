@@ -14,7 +14,7 @@ actual results and review stages belong in the evidence record.
 | 6: fail closed on release/takeover, explicit rebind; expiry reads | namespace `bound_sessions_fail_closed_until_rebind`, `expired_lease_requires_takeover`; both byte fencing scenarios; persistence `bind_then_release_leaves_bound_session_fenced`, `release_fences_a_session_bound_after_lock_wait`, `worker_with_token_and_no_lease_is_forbidden`, `any_host_may_rebind_a_session_bound_to_another_hosts_lease` |
 | 7: visible status, secrets omitted | namespace `workspace_reports_lease_status`; lifecycle receipt queries; service `workflow_grant_strips_token_from_stored_value`, `request_debug_redacts_lease_tokens`; persistence `workflow_debug_redacts_token_and_hash` |
 | 8: lock order and concurrency | namespace `concurrent_acquires_have_one_winner`, `lease_routes_reject_workers_read_hosts_and_bound_actors`; persistence `concurrent_acquires_serialize_without_deadlock`, `unauthenticated_acquire_does_not_block_readers`, `lease_wait_past_deadline_does_not_commit`, `acquire_under_publication_load`, `invariant_detects_bound_epoch_above_workspace`, `worker_read_role_and_bound_sessions_cannot_hold_leases` |
-| 9: contract closure | conformance `service` (38/0), `design_coverage` (156), `provenance`; service `openapi_snapshot`, config binary bounds; fmt/clippy/deny; unchanged lockfile/import identities |
+| 9: contract closure | conformance `service` (38/0), `design_coverage` (156), `provenance`; service `openapi_snapshot`, config binary bounds; fmt/clippy/deny; exactly two approved security patches; unchanged imported baselines |
 
 The persistence suite includes fifteen new tests: fourteen schedule/authority
 checks (including the publication-load observation) and the documentation-only
@@ -40,3 +40,7 @@ early-release successful control. Eight-client HTTP acquisition now observes
 all eight database lock waiters before releasing its holder. D-WL1 explicitly
 amends the original unchanged-lockfile gate for the two approved security
 patches; no package/edge/migration or imported-baseline change is introduced.
+
+Thermonuclear decomposition retains these test names under namespace workflows
+submodules: predicates, lifecycle, binding and contention. The parent workflows
+filter still runs all ten scenarios.

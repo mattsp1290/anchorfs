@@ -203,7 +203,6 @@ pub async fn renew_session(
         workspace: WorkspaceId(workspace),
         target: SessionId(target),
         kind: Mutation::Renew,
-        body: None,
     })
     .await
 }
@@ -279,8 +278,7 @@ pub async fn rebind_session(
         key,
         workspace: WorkspaceId(workspace),
         target: SessionId(target),
-        kind: Mutation::Rebind(body.workflow_lease_token.clone()),
-        body: Some(serde_json::to_value(body).expect("request JSON")),
+        kind: Mutation::Rebind(body),
     })
     .await
 }
@@ -355,13 +353,12 @@ pub async fn revoke_session(
         workspace: WorkspaceId(workspace),
         target: SessionId(target),
         kind: Mutation::Revoke,
-        body: None,
     })
     .await
 }
 enum Mutation {
     Renew,
-    Rebind(Option<String>),
+    Rebind(RebindSession),
     Revoke,
 }
 impl Mutation {
@@ -383,7 +380,6 @@ struct SessionMutation {
     workspace: WorkspaceId,
     target: SessionId,
     kind: Mutation,
-    body: Option<serde_json::Value>,
 }
 async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
     let SessionMutation {
@@ -396,9 +392,12 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
         workspace,
         target,
         kind,
-        body,
     } = request;
     let op_type = kind.op_type();
+    let body = match &kind {
+        Mutation::Rebind(body) => Some(serde_json::to_value(body).expect("request JSON")),
+        Mutation::Renew | Mutation::Revoke => None,
+    };
     let digest = receipt::request_digest(
         op_type,
         &[&workspace.to_string(), &target.to_string()],
@@ -474,7 +473,7 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
                                     )
                                     .await?,
                                 )),
-                                Mutation::Rebind(token) => {
+                                Mutation::Rebind(body) => {
                                     Published::metadata(super::views::session(
                                         operation,
                                         sessions::rebind(
@@ -485,7 +484,9 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
                                             target,
                                             ttl,
                                             limit,
-                                            token.as_deref().map(|token| (&workspace_lock, token)),
+                                            body.workflow_lease_token
+                                                .as_deref()
+                                                .map(|token| (&workspace_lock, token)),
                                         )
                                         .await?,
                                     ))

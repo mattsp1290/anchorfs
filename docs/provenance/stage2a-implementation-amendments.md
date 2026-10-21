@@ -83,3 +83,17 @@ The HTTP eight-acquirer test now observes eight blocked workspace requests
 before releasing its shared-lock holder. Timer cells unrelated to leases and
 the namespace guard owner are restored; readRange declares its observed 409
 fenced response. Final passing results and fresh review gates remain pending.
+
+## D-WL3: thermonuclear structural corrections
+
+The owner-authorized canonical fixer addressed both Important findings from
+the pinned thermonuclear review. Namespace workflow scenarios now live under
+a small workflows parent with predicate, lifecycle, binding and contention
+suites and shared route support. All ten existing scenarios and their
+controlled waits/assertions are retained. Session rebind now owns one typed
+RebindSession request in its mutation variant; receipt JSON and execution
+are derived from that same value. Null-token rebind and body-free renew/revoke
+digest representations are unchanged. These are independent local structural
+changes from review of AnchorFS code; they add no behavior, dependency,
+schema migration or external source input. Final results supersede earlier
+pending checkpoints in the Stage 2a review evidence record.

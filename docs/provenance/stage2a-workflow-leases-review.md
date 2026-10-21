@@ -32,20 +32,51 @@ remain unchanged.
 - `cargo deny check licenses bans advisories sources`: all four checks pass
   after the owner-approved two-package security exception (D-WL1).
 - Post-patch backend/core/mount tests and all three provenance checks passed.
-- Final full post-correction/post-patch workspace regression: running. Hosted CI
-  and final independent review gates remain pending; no result is inferred.
+- Full post-correction/post-patch workspace regression passed at the standard
+  checkpoint. The thermonuclear checkpoint also passed fmt, all-target clippy with
+  warnings denied, all four cargo-deny checks, the full workspace test suite,
+  workspace build, workspace no-run compilation and diff checks. This includes
+  52 byte, 26 namespace, 32 control-plane transaction, 19 byte transaction,
+  20 service unit, 12 binary and five OpenAPI tests, both models and
+  provenance/156-column coverage. Generated YAML matches byte-for-byte;
+  imported hashes and unchanged migrations were rechecked. Hosted CI follows
+  draft PR creation.
 - Push preflight previously verified repo root, origin SSH, feature branch,
   authenticated repo scope and ADMIN permission; it is repeated before pushing.
 
 ## Review and hosted gates
 
 The canonical fixer applied all six selected diagnostic fixes under the
-owner's explicit instruction to continue autonomously. A fresh review pair
-will assess this corrected branch using an approved-input packet and no prior
-reviewer conclusions. Earlier diagnostic artifacts are retained outside this
-record and do not satisfy the independent gate. Hosted CI remains pending.
-Fresh contexts are procedural separation, not legal clearance or erased
-historical exposure.
+owner's explicit instruction to continue autonomously. Earlier diagnostic
+artifacts are retained but do not satisfy the independent gate.
+
+The valid standard review used fresh contexts and an explicit approved-input
+packet, with no peer conclusions shared. Lease Transactions and Contract
+Evidence both returned APPROVE and no blocking provenance findings. The
+standard fixer resolved one documentation suggestion (fixed:1, skipped:0,
+needs-manual:0), then passed fmt, all-target clippy, cargo-deny, the full workspace
+tests, build, no-run and diff checks. Checkpoint
+`ffc70cef87bfeb2f2ea85a2389b81afa55332898` was pushed and verified against origin.
+Artifacts: `reviews/feat-stage2a-workflow-leases-2026-10-20-213956-8224def2da74`.
+
+After that verified push, the live upstream thermonuclear rubric was fetched
+at `cursor/plugins` commit `190d28736eff128ec94f502a22c7fe0c4b56cd37` from
+https://raw.githubusercontent.com/cursor/plugins/190d28736eff128ec94f502a22c7fe0c4b56cd37/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md .
+Its complete quality criteria were applied by a fresh adversarial reviewer.
+The initial verdict was REQUEST_CHANGES for two Important structural findings,
+with no blocking provenance findings. The canonical fixer resolved both
+(fixed:2, skipped:0, needs-manual:0): focused workflow test modules and one typed
+rebind request owning digest/execution. The same reviewer's labeled recheck
+returned APPROVE within the fix/regression scope, no new findings and no
+blocking provenance findings; it independently passed 13 relevant tests and
+verified all ten workflow test bodies are byte-identical. Artifacts:
+`reviews/feat-stage2a-workflow-leases-thermonuclear-2026-10-20-215545-ffc70cef87bf`.
+
+Both initial review stages read the entire diff and all full changed files.
+The requested model alias was unavailable; the available inherited runtime was
+used and disclosed. No particular unavailable model is claimed. Fresh contexts
+are procedural separation, not legal clearance or erased historical exposure.
+Hosted CI remains pending until the PR run completes.
 
 ## Limits
 
