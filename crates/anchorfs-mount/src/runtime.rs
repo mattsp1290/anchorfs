@@ -81,15 +81,14 @@ impl Mount {
                 "workspace root changed during startup".into(),
             ));
         }
-        if let Some(w) = client.authority().workflow {
-            if !root
+        if let Some(w) = client.authority().workflow
+            && !root
                 .workflow
                 .is_some_and(|live| live.active && live.mutation_epoch == w.epoch)
-            {
-                return Err(MountError::Authorization(
-                    "workflow epoch does not match a live lease".into(),
-                ));
-            }
+        {
+            return Err(MountError::Authorization(
+                "workflow epoch does not match a live lease".into(),
+            ));
         }
         let session = client.authority().session.expect("session established");
         client
@@ -195,15 +194,14 @@ impl Mount {
             tracing::warn!(status=e.status,code=%e.code,trace_id=%e.trace_id,operation_id=?e.operation_id,"native API call failed");
             if e.status == 401 {
                 self.fence.store(true, Ordering::SeqCst);
+                return ErrnoName::ESTALE;
             }
-            if e.code == "stale_handle"
-                || (e.code == "fenced" && fh.is_some() && matches!(class, CallClass::Read))
+            let handle_fenced = e.code == "stale_handle"
+                || (e.code == "fenced" && matches!(class, CallClass::Read));
+            if let Some(id) = fh.filter(|_| handle_fenced)
+                && let Some(file) = lock(&self.files).entries.get_mut(&id)
             {
-                if let Some(id) = fh {
-                    if let Some(file) = lock(&self.files).entries.get_mut(&id) {
-                        file.fenced = true;
-                    }
-                }
+                file.fenced = true;
             }
             if e.code == "fenced" {
                 let bound_mutation = self.client.authority().workflow.is_some()
@@ -269,6 +267,17 @@ impl Mount {
         fh: Option<u64>,
     ) -> Result<InodeAttributes, ErrnoName> {
         self.live()?;
+        // Linux can omit FUSE_GETATTR_FH for fstat after the last name is
+        // unlinked. Resolve that inode through an existing server handle,
+        // never through a detached/replaced path.
+        let fh = fh.or_else(|| {
+            let server_id = lock(&self.inodes).server_id(ino);
+            lock(&self.files)
+                .entries
+                .iter()
+                .find(|(_, file)| file.server_ino == server_id && !file.fenced)
+                .map(|(fh, _)| *fh)
+        });
         let attributes = if let Some(fh) = fh {
             let file = self.file(fh)?;
             self.api(

@@ -14,6 +14,7 @@ pub struct ApiProxy {
     pub dropped: Arc<AtomicUsize>,
     pub requests: Arc<Mutex<Vec<String>>>,
     drop_next: Arc<AtomicUsize>,
+    delay_next: Arc<AtomicUsize>,
     task: JoinHandle<()>,
 }
 impl ApiProxy {
@@ -22,6 +23,8 @@ impl ApiProxy {
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let drop_next = Arc::new(AtomicUsize::new(0));
         let dropped = Arc::new(AtomicUsize::new(0));
+        let delay_next = Arc::new(AtomicUsize::new(0));
+        let delays = delay_next.clone();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let (drops, count, log) = (drop_next.clone(), dropped.clone(), requests.clone());
         let task = tokio::spawn(async move {
@@ -30,6 +33,7 @@ impl ApiProxy {
                     break;
                 };
                 let (drops, count, log) = (drops.clone(), count.clone(), log.clone());
+                let delays = delays.clone();
                 tokio::spawn(async move {
                     let result: std::io::Result<()> = async {
                         let mut incoming = Vec::new();
@@ -46,7 +50,14 @@ impl ApiProxy {
                             assert!(incoming.len() < 65536, "bounded test headers");
                         };
                         let headers = String::from_utf8(incoming[..header_end].to_vec()).unwrap();
-                        log.lock().unwrap().push(headers.clone());
+                        let mut summary = headers.lines().next().unwrap_or("").to_owned();
+                        for line in headers.lines().filter(|line| {
+                            line.to_ascii_lowercase().starts_with("idempotency-key:")
+                        }) {
+                            summary.push('\n');
+                            summary.push_str(line);
+                        }
+                        log.lock().unwrap().push(summary);
                         let length: usize = headers
                             .lines()
                             .find_map(|line| {
@@ -79,6 +90,12 @@ impl ApiProxy {
                             .await?;
                         let mut response = Vec::new();
                         upstream.read_to_end(&mut response).await?;
+                        if delays
+                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                            .is_ok()
+                        {
+                            tokio::time::sleep(std::time::Duration::from_millis(1700)).await;
+                        }
                         if drops
                             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                             .is_ok()
@@ -99,11 +116,15 @@ impl ApiProxy {
             dropped,
             requests,
             drop_next,
+            delay_next,
             task,
         }
     }
     pub fn drop_responses(&self, n: usize) {
         self.drop_next.store(n, Ordering::SeqCst);
+    }
+    pub fn delay_responses(&self, n: usize) {
+        self.delay_next.store(n, Ordering::SeqCst);
     }
     pub fn count(&self) -> usize {
         self.requests.lock().unwrap().len()

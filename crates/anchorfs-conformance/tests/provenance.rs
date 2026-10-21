@@ -104,6 +104,9 @@ fn crate_edges_match_plan() {
         ("backend", "core"),
         ("mount", "core"),
         ("mount", "client"),
+        ("mount", "service"),
+        ("mount", "persistence"),
+        ("mount", "backend"),
         ("service", "core"),
         ("service", "persistence"),
         ("service", "backend"),
@@ -139,6 +142,7 @@ fn test_image_record_matches_fixtures() {
         "crates/anchorfs-conformance/tests/common/mod.rs",
         "crates/anchorfs-persistence/tests/migrations.rs",
         "crates/anchorfs-service/tests/binary.rs",
+        "crates/anchorfs-mount/tests/linux/fixture.rs",
     ] {
         fixtures.extend(digests(&fs::read_to_string(root().join(file)).unwrap()));
     }

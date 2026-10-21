@@ -26,3 +26,16 @@ clap.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 fuser.workspace = true
 libc.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+anchorfs-service.workspace = true
+anchorfs-persistence.workspace = true
+anchorfs-backend.workspace = true
+aws-sdk-s3.workspace = true
+sqlx.workspace = true
+testcontainers.workspace = true
+testcontainers-modules.workspace = true
+axum.workspace = true
+reqwest.workspace = true
+nix.workspace = true
+libc.workspace = true

@@ -1,0 +1,280 @@
+use super::fixture::{Credential, Fixture};
+use anchorfs_mount::{
+    config::{MountArgs, MountConfig},
+    runtime::Mount,
+};
+use clap::Parser;
+use serde_json::Value;
+use std::{
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
+static SERIAL: Mutex<()> = Mutex::new(());
+pub fn serial() -> MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+}
+pub fn require_fuse() {
+    assert!(
+        Path::new("/dev/fuse").exists()
+            && Command::new("fusermount3")
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success()),
+        "FUSE unavailable: /dev/fuse missing or fusermount3 not on PATH"
+    );
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "mount tests require non-root"
+    );
+}
+fn local(path: &Path) {
+    let out = Command::new("stat")
+        .args(["-f", "-c", "%T"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let fs = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !matches!(fs.trim(), "nfs" | "nfs4"),
+        "mount tests require local disk"
+    );
+}
+fn mounted(path: &Path) -> bool {
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .unwrap()
+        .lines()
+        .any(|l| {
+            l.split_whitespace()
+                .nth(4)
+                .map(|s| {
+                    s.replace("\\040", " ")
+                        .replace("\\011", "\t")
+                        .replace("\\134", "\\")
+                })
+                .as_deref()
+                == path.to_str()
+        })
+}
+pub struct TempMount {
+    pub path: PathBuf,
+    pub process: Option<Child>,
+    session: Option<fuser::BackgroundSession>,
+    mount: Option<Arc<Mount>>,
+    runtime: Option<tokio::runtime::Runtime>,
+    cancel: Option<std::sync::mpsc::Sender<()>>,
+    watchdog: Option<std::thread::JoinHandle<()>>,
+    expired: Arc<AtomicBool>,
+}
+impl TempMount {
+    pub fn process(
+        f: &Fixture,
+        credential: &Credential,
+        session: Option<&Value>,
+        workflow: Option<(&str, i64)>,
+        max_io: u32,
+    ) -> Self {
+        Self::start(f, credential, session, workflow, max_io, true)
+    }
+    pub fn in_process(f: &Fixture) -> Self {
+        Self::start(f, &f.host, None, None, 1048576, false)
+    }
+    fn start(
+        f: &Fixture,
+        credential: &Credential,
+        session: Option<&Value>,
+        workflow: Option<(&str, i64)>,
+        max_io: u32,
+        process: bool,
+    ) -> Self {
+        require_fuse();
+        local(&std::env::temp_dir());
+        local(Path::new(env!("CARGO_MANIFEST_DIR")));
+        local(std::env::current_exe().unwrap().parent().unwrap());
+        let path = std::env::temp_dir()
+            .join("anchorfs-mount-tests")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&path).unwrap();
+        let mut args = vec![
+            "mount".to_owned(),
+            path.to_str().unwrap().into(),
+            "--endpoint".into(),
+            f.endpoint.clone(),
+            "--workspace".into(),
+            f.workspace.to_string(),
+            "--allow-plaintext".into(),
+            "--max-io-bytes".into(),
+            max_io.to_string(),
+            "--handle-ttl-hint-ms".into(),
+            f.config.handle_ttl.as_millis().to_string(),
+            "--session-ttl-hint-ms".into(),
+            f.config.client_session_ttl.as_millis().to_string(),
+        ];
+        if let Some(s) = session {
+            args.extend([
+                "--session-id".into(),
+                s["session_id"].as_str().unwrap().into(),
+                "--session-epoch".into(),
+                s["session_epoch"].as_i64().unwrap().to_string(),
+            ]);
+        }
+        if let Some((_, epoch)) = workflow {
+            args.extend(["--workflow-epoch".into(), epoch.to_string()]);
+        }
+        let mut this = Self {
+            path,
+            process: None,
+            session: None,
+            mount: None,
+            runtime: None,
+            cancel: None,
+            watchdog: None,
+            expired: Arc::new(AtomicBool::new(false)),
+        };
+        if process {
+            let log = std::fs::File::create(this.path.with_extension("log")).unwrap();
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_anchorfs-mount"));
+            cmd.args(&args)
+                .env("ANCHORFS_MOUNT_CREDENTIAL", &credential.bearer)
+                .env_remove("ANCHORFS_MOUNT_WORKFLOW_TOKEN")
+                .stdout(Stdio::null())
+                .stderr(log);
+            if let Some((token, _)) = workflow {
+                cmd.env("ANCHORFS_MOUNT_WORKFLOW_TOKEN", token);
+            }
+            this.process = Some(cmd.spawn().unwrap());
+        } else {
+            #[derive(Parser)]
+            struct Cli {
+                #[command(flatten)]
+                args: MountArgs,
+            }
+            let cfg: MountConfig = Cli::parse_from(args)
+                .args
+                .with_secrets(&credential.bearer, workflow.map(|w| w.0))
+                .unwrap();
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .unwrap();
+            let mount = rt.block_on(Mount::start(cfg, rt.handle().clone())).unwrap();
+            this.session = Some(anchorfs_mount::platform::spawn(mount.clone()).unwrap());
+            this.mount = Some(mount);
+            this.runtime = Some(rt);
+        }
+        let test_name = std::thread::current().name().unwrap_or("").to_owned();
+        let watchdog_seconds = if test_name.contains("git_smoke") {
+            600
+        } else if test_name.contains("renewal_keeps") || test_name.contains("sigstop_paused") {
+            180
+        } else {
+            120
+        };
+        let (cancel, receive) = std::sync::mpsc::channel();
+        let path = this.path.clone();
+        let pid = this.process.as_ref().map(Child::id);
+        let expired = this.expired.clone();
+        this.cancel = Some(cancel);
+        this.watchdog = Some(std::thread::spawn(move || {
+            if receive
+                .recv_timeout(Duration::from_secs(watchdog_seconds))
+                .is_err()
+            {
+                expired.store(true, Ordering::SeqCst);
+                let _ = Command::new("fusermount3").arg("-uz").arg(&path).status();
+                if let Some(pid) = pid {
+                    let _ = Command::new("kill")
+                        .args(["-KILL", &pid.to_string()])
+                        .status();
+                }
+            }
+        }));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !mounted(&this.path) {
+            if let Some(child) = &mut this.process
+                && let Some(status) = child.try_wait().unwrap()
+            {
+                panic!(
+                    "mount exited {status}: {}",
+                    std::fs::read_to_string(this.path.with_extension("log")).unwrap_or_default()
+                );
+            }
+            assert!(Instant::now() < deadline, "mount startup timed out");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        this
+    }
+    pub fn signal(&self, name: &str) {
+        assert!(
+            Command::new("kill")
+                .args([name, &self.process.as_ref().unwrap().id().to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    pub fn stop(&mut self) {
+        self.signal("-TERM");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(status) = self.process.as_mut().unwrap().try_wait().unwrap() {
+                assert!(status.success(), "mount exit {status}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "unmount did not finish");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!mounted(&self.path));
+        self.process.take();
+    }
+}
+impl Drop for TempMount {
+    fn drop(&mut self) {
+        let unmount = Command::new("fusermount3")
+            .arg("-u")
+            .arg(&self.path)
+            .output();
+        if !unmount.is_ok_and(|s| s.status.success()) {
+            let _ = Command::new("fusermount3")
+                .arg("-uz")
+                .arg(&self.path)
+                .output();
+        }
+        if let Some(mut child) = self.process.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(session) = self.session.take() {
+            let _ = session.umount_and_join();
+        }
+        if let (Some(rt), Some(mount)) = (&self.runtime, &self.mount) {
+            rt.block_on(mount.shutdown());
+        }
+        self.runtime.take();
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(watch) = self.watchdog.take() {
+            let _ = watch.join();
+        }
+        let _ = std::fs::remove_dir(&self.path);
+        let _ = std::fs::remove_file(self.path.with_extension("log"));
+        if !std::thread::panicking() {
+            assert!(
+                !self.expired.load(Ordering::SeqCst),
+                "mount test watchdog expired"
+            );
+        }
+    }
+}
+pub fn on_mount<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| scope.spawn(f).join().unwrap())
+}

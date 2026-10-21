@@ -10,7 +10,7 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | aws-credential-types | 1.3.0 | Apache-2.0 | https://github.com/smithy-lang/smithy-rs | lazy credential provider future for synchronous network-free construction |
 | aws-smithy-http-client | 1.5.0 | Apache-2.0 | https://github.com/smithy-lang/smithy-rs | explicit CA trust bundle with TLS verification |
 | aws-config | 1.12.0 | Apache-2.0 | https://github.com/smithy-lang/smithy-rs | official AWS configuration |
-| aws-sdk-s3 | 1.152.0 | Apache-2.0 | https://github.com/awslabs/aws-sdk-rust | official S3 client; raw observer in conformance tests |
+| aws-sdk-s3 | 1.152.0 | Apache-2.0 | https://github.com/awslabs/aws-sdk-rust | official S3 client; raw observer in conformance tests; mount fixture bucket setup |
 | axum | 0.8.9 | MIT | https://github.com/tokio-rs/axum | HTTP server |
 | bytes | 1.12.1 | MIT | https://github.com/tokio-rs/bytes | binary buffers |
 | cargo_metadata | 0.23.1 | MIT | https://github.com/oli-obk/cargo_metadata | workspace edge verification |
@@ -138,3 +138,17 @@ existing `webpki-roots` trust roots through reqwest's rustls feature. The
 `cargo info libc@0.2.191` confirmed MIT OR Apache-2.0 and
 https://github.com/rust-lang/libc before the planned Linux direct edge.
 No new registry package is authorized by this milestone.
+
+## Runtime tools for Stage 2b
+
+`fusermount3` (fuse3 3.14.0 on the verification host; Ubuntu's fuse3 package
+in CI) is an external helper process, never linked, vendored or distributed by
+AnchorFS. libfuse is LGPL-2.1; the utility is GPL-2.0. `git` is GPL-2.0 and is
+executed only as a synthetic smoke workload. These are permitted platform and
+test tools from the reviewed Stage 2b plan; no competitor dependency is added.
+
+The Linux mount test target reuses the repository's MinIO fixture source and
+API response-loss relay by path. The new fixture, syscall tests and workloads
+are independently authored from the plan and the existing service contract.
+All added dev-dependencies were already pinned and licensed workspace inputs;
+only workspace crate/dependency edges change in Cargo.lock.

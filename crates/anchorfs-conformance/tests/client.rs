@@ -276,3 +276,38 @@ async fn client_wire_types_deserialize_service_dtos() {
     );
     f.invariants().await;
 }
+
+#[tokio::test]
+async fn client_resolves_deadline_after_publication() {
+    let f = Fixture::new().await;
+    let (mut client, proxy, _server) = native(&f).await;
+    client.metadata_deadline = Duration::from_millis(500);
+    let key = IdempotencyKey::new();
+    proxy.delay_responses(3);
+    let mutation = client.create_directory("late", 0o755, &key).await.unwrap();
+    assert_eq!(
+        client.find_operation(&key).await.unwrap().operation_id,
+        mutation.operation_id
+    );
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM operations WHERE workspace_id=$1 AND idempotency_key=$2",
+    )
+    .bind(f.workspace)
+    .bind(key.as_str())
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    let requests = proxy.requests.lock().unwrap();
+    let attempts = requests
+        .iter()
+        .filter(|r| r.contains(&format!("idempotency-key: {}", key.as_str())))
+        .count();
+    assert_eq!(attempts, 3);
+    drop(requests);
+    assert_eq!(
+        client.stat(Some("late")).await.unwrap().inode_id,
+        mutation.inode_id.unwrap()
+    );
+    f.invariants().await;
+}

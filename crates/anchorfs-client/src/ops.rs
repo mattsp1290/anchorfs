@@ -22,6 +22,7 @@ impl Client {
     fn workspace_route(&self, suffix: &str) -> String {
         format!("/v1/workspaces/{}{suffix}", self.workspace)
     }
+    #[tracing::instrument(skip_all, fields(trace_id = tracing::field::Empty))]
     async fn once(
         &self,
         method: Method,
@@ -31,11 +32,16 @@ impl Client {
         key: Option<&IdempotencyKey>,
         timeout: Duration,
     ) -> Result<Response, ClientError> {
+        let accept = if method == Method::GET && path.ends_with("/bytes") {
+            "application/octet-stream"
+        } else {
+            "application/json"
+        };
         let mut request = self
             .authority()
             .apply(self.http.request(method, self.endpoint.route(path)))
             .query(query)
-            .header("Accept", "application/json")
+            .header("Accept", accept)
             .timeout(timeout);
         if let Some(key) = key {
             request = request.header("Idempotency-Key", key.as_str());
@@ -55,6 +61,7 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_owned();
+        tracing::Span::current().record("trace_id", trace_id.as_str());
         tracing::debug!(%trace_id, status = status.as_u16(), "native API response");
         let bytes = response.bytes().await.map_err(ClientError::transport)?;
         if status.is_success() {
@@ -84,6 +91,7 @@ impl Client {
         let timeout = deadline.saturating_add(Duration::from_secs(1));
         let budget = Budget::new(timeout.saturating_mul(3));
         let mut last = ClientError::Deadline;
+        let mut ambiguous = false;
         for attempt in 0..budget.attempts {
             let remaining = budget.deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -102,6 +110,8 @@ impl Client {
             {
                 Ok(response) => return Ok(response),
                 Err(error) => {
+                    ambiguous |= matches!(error, ClientError::Transport(_) | ClientError::Deadline)
+                        || error.code() == Some("outcome_unknown");
                     let retry = matches!(error, ClientError::Transport(_) | ClientError::Deadline)
                         || error.code() == Some("dependency_unavailable")
                         || (key.is_some() && error.code() == Some("outcome_unknown"));
@@ -123,7 +133,13 @@ impl Client {
                 }
             }
         }
-        Err(last)
+        if key.is_some() && ambiguous && last.code() == Some("dependency_unavailable") {
+            Err(ClientError::Transport(
+                "an earlier attempt had an unresolved response".into(),
+            ))
+        } else {
+            Err(last)
+        }
     }
     async fn get<T: DeserializeOwned>(
         &self,

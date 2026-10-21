@@ -519,7 +519,8 @@ impl Filesystem for AnchorFs {
         }
     }
     fn flush(&self, _: &Request, _: INodeNo, _: FileHandle, _: LockOwner, reply: ReplyEmpty) {
-        empty_reply!(reply, self.mount.live());
+        // Synchronous writes expose their own errors; close must not invent one.
+        reply.ok();
     }
     fn fsync(&self, _: &Request, _: INodeNo, fh: FileHandle, _: bool, reply: ReplyEmpty) {
         empty_reply!(
@@ -533,7 +534,7 @@ impl Filesystem for AnchorFs {
                         Some(fh.0),
                     )
                     .await?;
-                Ok(())
+                Ok::<(), ErrnoName>(())
             })
         );
     }
@@ -684,6 +685,146 @@ impl Filesystem for AnchorFs {
         } else {
             reply.error(Errno::ENOLCK);
         }
+    }
+    fn readdirplus(
+        &self,
+        _: &Request,
+        _: INodeNo,
+        _: FileHandle,
+        _: u64,
+        reply: ReplyDirectoryPlus,
+    ) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn access(&self, _: &Request, _: INodeNo, _: AccessFlags, reply: ReplyEmpty) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn setxattr(
+        &self,
+        _: &Request,
+        _: INodeNo,
+        _: &OsStr,
+        _: &[u8],
+        _: i32,
+        _: u32,
+        reply: ReplyEmpty,
+    ) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn getxattr(&self, _: &Request, _: INodeNo, _: &OsStr, _: u32, reply: ReplyXattr) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn listxattr(&self, _: &Request, _: INodeNo, _: u32, reply: ReplyXattr) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn removexattr(&self, _: &Request, _: INodeNo, _: &OsStr, reply: ReplyEmpty) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn ioctl(
+        &self,
+        _: &Request,
+        _: INodeNo,
+        _: FileHandle,
+        _: IoctlFlags,
+        _: u32,
+        _: &[u8],
+        _: u32,
+        reply: ReplyIoctl,
+    ) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn poll(
+        &self,
+        _: &Request,
+        _: INodeNo,
+        _: FileHandle,
+        _: PollNotifier,
+        _: PollEvents,
+        _: PollFlags,
+        reply: ReplyPoll,
+    ) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn fallocate(
+        &self,
+        _: &Request,
+        _: INodeNo,
+        _: FileHandle,
+        _: u64,
+        _: u64,
+        _: i32,
+        reply: ReplyEmpty,
+    ) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn lseek(&self, _: &Request, _: INodeNo, _: FileHandle, _: i64, _: i32, reply: ReplyLseek) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn copy_file_range(
+        &self,
+        _: &Request,
+        _: INodeNo,
+        _: FileHandle,
+        _: u64,
+        _: INodeNo,
+        _: FileHandle,
+        _: u64,
+        _: u64,
+        _: CopyFileRangeFlags,
+        reply: ReplyWrite,
+    ) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
+    }
+    fn bmap(&self, _: &Request, _: INodeNo, _: u32, _: u64, reply: ReplyBmap) {
+        reply.error(if self.mount.live().is_err() {
+            Errno::ESTALE
+        } else {
+            Errno::ENOSYS
+        });
     }
 }
 pub fn platform_supported() -> bool {
