@@ -28,6 +28,7 @@ pub struct Config {
     pub max_read_pins_per_session: u32,
     pub max_retry_attempts: u32,
     pub handle_ttl: Duration,
+    pub workflow_lease_ttl: Duration,
     pub max_handles_per_session: u32,
     pub cursor_ttl: Duration,
     pub max_list_page: u32,
@@ -91,6 +92,7 @@ impl Config {
             max_read_pins_per_session: limits.max_read_pins_per_session,
             max_retry_attempts: limits.max_retry_attempts,
             handle_ttl: timers.handle_ttl,
+            workflow_lease_ttl: timers.workflow_lease_ttl,
             max_handles_per_session: limits.max_handles_per_session,
             cursor_ttl: timers.cursor_ttl,
             max_list_page: limits.max_list_page,
@@ -149,6 +151,10 @@ impl Config {
             }
             None => return Err(invalid("CURSOR_SIGNING_KEY")),
         };
+        c.workflow_lease_ttl = Duration::from_millis(parse(
+            "WORKFLOW_LEASE_TTL_MS",
+            c.workflow_lease_ttl.as_millis() as u64,
+        )?);
         c.handle_ttl =
             Duration::from_millis(parse("HANDLE_TTL_MS", c.handle_ttl.as_millis() as u64)?);
         c.cursor_ttl =
@@ -201,7 +207,8 @@ impl Config {
             "DEPLOYMENT_STAGING_BYTES_LIMIT",
             c.deployment_staging_bytes_limit,
         )?;
-        if c.handle_ttl.is_zero()
+        if c.workflow_lease_ttl.is_zero()
+            || c.handle_ttl.is_zero()
             || c.cursor_ttl.is_zero()
             || c.max_handles_per_session == 0
             || c.max_list_page == 0

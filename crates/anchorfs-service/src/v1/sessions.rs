@@ -62,9 +62,7 @@ pub async fn create_session(
     IdempotencyKey(key): IdempotencyKey,
     ApiJson(body): ApiJson<CreateSession>,
 ) -> Result<Response, ApiError> {
-    if body.bind_to_workflow_lease.is_some() {
-        return Err(ApiError::not_implemented(trace.0));
-    }
+    validate_token(body.bind_to_workflow_lease.as_deref(), &trace.0)?;
     let workspace = WorkspaceId(workspace);
     let digest = receipt::request_digest(
         "session_create",
@@ -83,11 +81,12 @@ pub async fn create_session(
         control::Kind::Mutation,
         move |tx, budget| {
             Box::pin(async move {
-                let exists = authority::lock_workspace(tx, workspace).await?.is_some();
+                let lock = authority::lock_workspace(tx, workspace).await?;
                 let actor = authority::load_actor(tx, &proof, LockMode::Share).await?;
-                if !exists || !authority::same_workspace(&actor, workspace) {
+                if lock.is_none() || !authority::same_workspace(&actor, workspace) {
                     return Err(authority::AuthorityError::NotFound.into());
                 }
+                let lock = lock.expect("workspace checked");
                 let scope = ReceiptScope::Admin {
                     credential: actor.id,
                 };
@@ -117,6 +116,9 @@ pub async fn create_session(
                                 CredentialId(body.credential_id),
                                 ttl,
                                 limit,
+                                body.bind_to_workflow_lease
+                                    .as_deref()
+                                    .map(|token| (&lock, token)),
                             )
                             .await?;
                             Published::metadata(super::views::session(operation, session))
@@ -267,9 +269,7 @@ pub async fn rebind_session(
     IdempotencyKey(key): IdempotencyKey,
     ApiJson(body): ApiJson<RebindSession>,
 ) -> Result<Response, ApiError> {
-    if body.workflow_lease_token.is_some() {
-        return Err(ApiError::not_implemented(trace.0));
-    }
+    validate_token(body.workflow_lease_token.as_deref(), &trace.0)?;
     mutate(SessionMutation {
         state,
         start,
@@ -279,7 +279,7 @@ pub async fn rebind_session(
         key,
         workspace: WorkspaceId(workspace),
         target: SessionId(target),
-        kind: Mutation::Rebind,
+        kind: Mutation::Rebind(body.workflow_lease_token.clone()),
         body: Some(serde_json::to_value(body).expect("request JSON")),
     })
     .await
@@ -359,17 +359,16 @@ pub async fn revoke_session(
     })
     .await
 }
-#[derive(Clone, Copy)]
 enum Mutation {
     Renew,
-    Rebind,
+    Rebind(Option<String>),
     Revoke,
 }
 impl Mutation {
-    fn op_type(self) -> &'static str {
+    fn op_type(&self) -> &'static str {
         match self {
             Self::Renew => "session_renew",
-            Self::Rebind => "session_rebind",
+            Self::Rebind(_) => "session_rebind",
             Self::Revoke => "session_revoke",
         }
     }
@@ -475,19 +474,22 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
                                     )
                                     .await?,
                                 )),
-                                Mutation::Rebind => Published::metadata(super::views::session(
-                                    operation,
-                                    sessions::rebind(
-                                        tx,
-                                        &mutation_actor,
-                                        &mutation_session,
-                                        workspace,
-                                        target,
-                                        ttl,
-                                        limit,
-                                    )
-                                    .await?,
-                                )),
+                                Mutation::Rebind(token) => {
+                                    Published::metadata(super::views::session(
+                                        operation,
+                                        sessions::rebind(
+                                            tx,
+                                            &mutation_actor,
+                                            &mutation_session,
+                                            workspace,
+                                            target,
+                                            ttl,
+                                            limit,
+                                            token.as_deref().map(|token| (&workspace_lock, token)),
+                                        )
+                                        .await?,
+                                    ))
+                                }
                                 Mutation::Revoke => {
                                     sessions::revoke(
                                         tx,
@@ -509,4 +511,11 @@ async fn mutate(request: SessionMutation) -> Result<Response, ApiError> {
     )
     .await;
     receipt::finish(&state, result, StatusCode::OK, &trace.0).await
+}
+
+fn validate_token(token: Option<&str>, trace: &str) -> Result<(), ApiError> {
+    if token.is_some_and(|token| anchorfs_core::decode_hex_32(token).is_none()) {
+        return Err(ApiError::new(anchorfs_core::ErrorCode::InvalidInput, trace));
+    }
+    Ok(())
 }

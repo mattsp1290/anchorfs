@@ -16,6 +16,23 @@ pub fn workspace(view: WorkspaceView) -> Result<WorkspaceInfo, ApiError> {
     };
     Ok(WorkspaceInfo {
         workspace_id: view.id,
+        workflow: match (
+            view.workflow_owner_credential_id,
+            view.workflow_mutation_epoch,
+            view.workflow_expires_at,
+            view.workflow_active,
+        ) {
+            (Some(owner_credential_id), Some(mutation_epoch), Some(expires_at), Some(active)) => {
+                Some(WorkflowStatus {
+                    owner_credential_id,
+                    mutation_epoch,
+                    expires_at: timestamp(expires_at),
+                    active,
+                })
+            }
+            (None, None, None, None) => None,
+            _ => return Err(invalid_record()),
+        },
         authorization_epoch: view.authorization_epoch,
         mutation_epoch: view.mutation_epoch,
         root: InodeAttributes {
@@ -108,4 +125,27 @@ pub fn handle(
         access_write: handle.access_write,
         expires_at: timestamp(handle.expires_at),
     })
+}
+
+pub fn workflow_grant(
+    operation: OperationId,
+    grant: anchorfs_persistence::workflows::LeaseGrant,
+) -> WorkflowGrant {
+    WorkflowGrant {
+        operation_id: operation.0,
+        token: Some(grant.token.expose().clone()),
+        mutation_epoch: grant.mutation_epoch,
+        expires_at: timestamp(grant.expires_at),
+    }
+}
+pub fn workflow_renewed(
+    operation: OperationId,
+    grant: anchorfs_persistence::workflows::Renewed,
+) -> WorkflowGrant {
+    WorkflowGrant {
+        operation_id: operation.0,
+        token: None,
+        mutation_epoch: grant.mutation_epoch,
+        expires_at: timestamp(grant.expires_at),
+    }
 }

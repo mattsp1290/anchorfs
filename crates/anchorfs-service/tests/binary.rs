@@ -306,6 +306,7 @@ fn config_checksum_mode_and_probe_deadline() {
 #[test]
 fn config_byte_path_bounds() {
     for (vars, valid) in [
+        (vec![("WORKFLOW_LEASE_TTL_MS", "0")], false),
         (vec![("CHUNK_SIZE", "1024")], false),
         (vec![("CHUNK_SIZE", "8388608")], false),
         (

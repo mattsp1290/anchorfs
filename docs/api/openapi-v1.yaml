@@ -5,7 +5,7 @@ info:
   license:
     name: MIT
     identifier: MIT
-  version: 1.0.0-stage1c
+  version: 1.0.0-stage2a
 paths:
   /v1/workspaces:
     post:
@@ -2941,7 +2941,7 @@ paths:
           minimum: 1
       - name: X-Anchorfs-Workflow-Token
         in: header
-        description: 64 hex characters; required with active workflow authority
+        description: must be absent; a lease is being created, not proved
         required: false
         schema:
           type:
@@ -2949,6 +2949,7 @@ paths:
           - 'null'
       - name: X-Anchorfs-Workflow-Epoch
         in: header
+        description: must be absent; a lease is being created, not proved
         required: false
         schema:
           type:
@@ -2970,7 +2971,7 @@ paths:
           type: string
       responses:
         '201':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workflow authority change
           content:
             application/json:
               schema:
@@ -3000,13 +3001,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '501':
-          description: Stage 0 declared operation
+          description: workspace_busy, fenced, idempotency_mismatch, operation_indeterminate, operation_failed
           content:
             application/json:
               schema:
@@ -3068,7 +3063,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workflow authority change
           content:
             application/json:
               schema:
@@ -3098,13 +3093,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '501':
-          description: Stage 0 declared operation
+          description: workspace_busy, fenced, idempotency_mismatch, operation_indeterminate, operation_failed
           content:
             application/json:
               schema:
@@ -3167,7 +3156,7 @@ paths:
           type: string
       responses:
         '200':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workflow authority change
           content:
             application/json:
               schema:
@@ -3197,13 +3186,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '501':
-          description: Stage 0 declared operation
+          description: workspace_busy, fenced, idempotency_mismatch, operation_indeterminate, operation_failed
           content:
             application/json:
               schema:
@@ -3241,7 +3224,7 @@ paths:
           minimum: 1
       - name: X-Anchorfs-Workflow-Token
         in: header
-        description: 64 hex characters; required with active workflow authority
+        description: must be absent; a lease is being created, not proved
         required: false
         schema:
           type:
@@ -3249,6 +3232,7 @@ paths:
           - 'null'
       - name: X-Anchorfs-Workflow-Epoch
         in: header
+        description: must be absent; a lease is being created, not proved
         required: false
         schema:
           type:
@@ -3270,7 +3254,7 @@ paths:
           type: string
       responses:
         '201':
-          description: Future success contract; Stage 0 returns 501
+          description: Committed workflow authority change
           content:
             application/json:
               schema:
@@ -3300,13 +3284,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
         '409':
-          description: generation_conflict, idempotency_mismatch, workspace_busy, fenced, operation_indeterminate
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '501':
-          description: Stage 0 declared operation
+          description: workspace_busy, fenced, idempotency_mismatch, operation_indeterminate, operation_failed
           content:
             application/json:
               schema:
@@ -4334,7 +4312,6 @@ components:
       type: object
       required:
       - operation_id
-      - token
       - mutation_epoch
       - expires_at
       properties:
@@ -4342,12 +4319,35 @@ components:
           type: string
           format: uuid
         token:
-          type: string
+          type:
+          - string
+          - 'null'
+          description: |-
+            Present only on initial acquire/takeover; renewals and receipt replays return null.
+            A replayed grant is not a usable token.
         mutation_epoch:
           type: integer
           format: int64
         expires_at:
           type: string
+    WorkflowStatus:
+      type: object
+      required:
+      - owner_credential_id
+      - mutation_epoch
+      - expires_at
+      - active
+      properties:
+        owner_credential_id:
+          type: string
+          format: uuid
+        mutation_epoch:
+          type: integer
+          format: int64
+        expires_at:
+          type: string
+        active:
+          type: boolean
     WorkspaceInfo:
       type: object
       required:
@@ -4356,6 +4356,10 @@ components:
       - authorization_epoch
       - mutation_epoch
       properties:
+        workflow:
+          oneOf:
+          - $ref: '#/components/schemas/WorkflowStatus'
+          - type: 'null'
         workspace_id:
           type: string
           format: uuid
