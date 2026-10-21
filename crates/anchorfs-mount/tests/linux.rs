@@ -1,6 +1,7 @@
 #![cfg(target_os = "linux")]
-// Raw flock/fcntl/mmap/setxattr/mknod/renameat2 and effective-id syscalls
-// are confined to this disposable, Linux-only acceptance test binary.
+// Raw flock/fcntl, mmap/munmap, setxattr, mknod/mkfifo, renameat2,
+// utimensat/chown/truncate, close/openat/unlinkat/mkdirat and geteuid/getegid
+// calls are confined to this disposable, Linux-only acceptance test binary.
 #![allow(unsafe_code)]
 #[path = "linux/cli.rs"]
 mod cli;

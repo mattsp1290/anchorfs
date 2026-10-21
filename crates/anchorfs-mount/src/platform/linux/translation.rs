@@ -111,6 +111,8 @@ pub struct Attributes {
 pub async fn setattr(m: &Mount, ino: u64, change: Attributes) -> Result<FileAttr, ErrnoName> {
     // Reject forbidden mode bits before a size change can publish.
     let mode = change.mode.map(mode).transpose()?;
+    let atime = change.atime.map(timestamp).transpose()?;
+    let mtime = change.mtime.map(timestamp).transpose()?;
     let before = m.attributes(ino, change.fh).await?;
     if let Some(size) = change.size {
         if let Some(fh) = change.fh {
@@ -146,8 +148,8 @@ pub async fn setattr(m: &Mount, ino: u64, change: Attributes) -> Result<FileAttr
         mode,
         uid: change.uid.filter(|v| *v != before.uid),
         gid: change.gid.filter(|v| *v != before.gid),
-        atime: change.atime.map(timestamp).transpose()?,
-        mtime: change.mtime.map(timestamp).transpose()?,
+        atime,
+        mtime,
     };
     if attributes.mode.is_some()
         || attributes.uid.is_some()
@@ -176,15 +178,27 @@ pub async fn setattr(m: &Mount, ino: u64, change: Attributes) -> Result<FileAttr
     attr(m, &m.attributes(ino, change.fh).await?)
 }
 fn timestamp(value: TimeOrNow) -> Result<String, ErrnoName> {
-    let instant: time::OffsetDateTime = match value {
+    let value = match value {
         TimeOrNow::Now => SystemTime::now(),
-        TimeOrNow::SpecificTime(t) => t,
+        TimeOrNow::SpecificTime(value) => value,
+    };
+    let nanos = match value.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(duration) => i128::try_from(duration.as_nanos()).map_err(|_| ErrnoName::EINVAL)?,
+        Err(error) => {
+            -i128::try_from(error.duration().as_nanos()).map_err(|_| ErrnoName::EINVAL)?
+        }
+    };
+    // From<SystemTime> can panic for dates outside time's supported range.
+    let instant =
+        time::OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| ErrnoName::EINVAL)?;
+    if !(1..=9999).contains(&instant.year()) {
+        return Err(ErrnoName::EINVAL);
     }
-    .into();
     instant
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|_| ErrnoName::EINVAL)
 }
+
 pub async fn remove(m: &Mount, parent: u64, name: Name, directory: bool) -> Result<(), ErrnoName> {
     let path = m.child_path(parent, &name).await?;
     let key = IdempotencyKey::new();
@@ -214,4 +228,27 @@ pub async fn stat_child(
 }
 pub fn path_str(path: &Option<WorkspacePath>) -> Option<&str> {
     path.as_ref().map(WorkspacePath::as_str)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn timestamp_bounds_return_errno_without_panicking() {
+        let epoch = TimeOrNow::SpecificTime(SystemTime::UNIX_EPOCH);
+        assert_eq!(timestamp(epoch).unwrap(), "1970-01-01T00:00:00Z");
+        for value in [
+            SystemTime::UNIX_EPOCH
+                .checked_add(std::time::Duration::from_secs(253_402_300_800))
+                .unwrap(),
+            SystemTime::UNIX_EPOCH
+                .checked_sub(std::time::Duration::from_secs(62_167_219_200))
+                .unwrap(),
+        ] {
+            assert_eq!(
+                timestamp(TimeOrNow::SpecificTime(value)),
+                Err(ErrnoName::EINVAL)
+            );
+        }
+    }
 }

@@ -189,6 +189,18 @@ fn setattr_times_mode_truncate() {
             unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) },
             0
         );
+        let invalid = [libc::timespec {
+            tv_sec: 253_402_300_800,
+            tv_nsec: 0,
+        }; 2];
+        assert_eq!(
+            unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), invalid.as_ptr(), 0) },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EINVAL)
+        );
         let meta = fs::metadata(m.path.join("f")).unwrap();
         assert_eq!(meta.atime(), 1700000000);
         assert_eq!(meta.mtime_nsec(), 234567000);

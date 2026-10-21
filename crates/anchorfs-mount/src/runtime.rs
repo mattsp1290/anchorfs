@@ -91,10 +91,11 @@ impl Mount {
             ));
         }
         let session = client.authority().session.expect("session established");
-        client
+        let renewed = client
             .renew_session(session.session_id.0, &IdempotencyKey::new())
             .await
             .map_err(auth)?;
+        tracing::info!(expires_at=%renewed.expires_at, "mount session renewed at startup");
         if !cfg.args.allow_other && (nix_uid() != probe.uid || nix_gid() != probe.gid) {
             tracing::warn!(
                 "mount uid/gid differ from workspace root; default_permissions can reject the caller"
@@ -136,6 +137,9 @@ impl Mount {
                     }
                     session_at = Instant::now();
                 }
+                if mount.fence.load(Ordering::SeqCst) || mount.stopping.load(Ordering::SeqCst) {
+                    continue;
+                }
                 let renew: Vec<_> = lock(&mount.files)
                     .entries
                     .iter()
@@ -147,6 +151,9 @@ impl Mount {
                     .map(|(fh, f)| (*fh, f.handle_id))
                     .collect();
                 for (fh, id) in renew {
+                    if mount.fence.load(Ordering::SeqCst) || mount.stopping.load(Ordering::SeqCst) {
+                        break;
+                    }
                     let result = mount.client.renew_handle(id, &IdempotencyKey::new()).await;
                     match result {
                         Ok(_) => {
@@ -180,7 +187,12 @@ impl Mount {
         fh: Option<u64>,
     ) -> Result<T, ErrnoName> {
         match result {
-            Ok(value) => Ok(value),
+            Ok(value) => {
+                if matches!(class, CallClass::Read) {
+                    self.live()?;
+                }
+                Ok(value)
+            }
             Err(error) => Err(self.api_error(error, class, fh).await),
         }
     }
@@ -190,8 +202,11 @@ impl Mount {
         class: CallClass,
         fh: Option<u64>,
     ) -> ErrnoName {
+        if self.fence.load(Ordering::SeqCst) {
+            return ErrnoName::ESTALE;
+        }
         if let ClientError::Api(e) = &error {
-            tracing::warn!(status=e.status,code=%e.code,trace_id=%e.trace_id,operation_id=?e.operation_id,"native API call failed");
+            tracing::warn!(status=e.status,code=%e.code,trace_id=%e.trace_id,operation_id=?e.operation_id,max_io_bytes=self.cfg.args.max_io_bytes,"native API call failed");
             if e.status == 401 {
                 self.fence.store(true, Ordering::SeqCst);
                 return ErrnoName::ESTALE;
@@ -207,11 +222,16 @@ impl Mount {
                 let bound_mutation = self.client.authority().workflow.is_some()
                     && matches!(class, CallClass::Mutation)
                     && e.message != "reservation_expired";
-                let probe = self.client.stat(None).await;
-                let dead =
-                    matches!(&probe,Err(ClientError::Api(p)) if p.status==401 || p.code=="fenced");
-                if bound_mutation || dead {
+                if bound_mutation {
+                    // Mere lease expiry still permits server reads. Latch before
+                    // any await so another callback cannot start a new read.
                     self.fence.store(true, Ordering::SeqCst);
+                } else {
+                    let probe = self.client.stat(None).await;
+                    let dead = matches!(&probe,Err(ClientError::Api(p)) if p.status==401 || p.code=="fenced");
+                    if dead {
+                        self.fence.store(true, Ordering::SeqCst);
+                    }
                 }
             }
         }

@@ -113,3 +113,61 @@ Additional acceptance assertions cover server-clamped two-entry directory pages,
 readRange generation versus the committed receipt, no chown metadata receipt,
 no receipt of any state after stale ancestor rejection, and advancing session
 expiry as well as advancing handle expiry during renewal.
+
+The plan-fidelity audit tightened bound fencing to set the latch immediately,
+before any await, without an ordinary-mount root probe. M9b now asserts no root
+probe accompanies the fenced mutation as well as no requests after it. Startup
+logs the renewed session expiry, and API failure events carry the configured
+max_io_bytes for diagnosing server-limit mismatches. The Linux spawn API stays
+target-gated; non-Linux CLI execution reports UnsupportedPlatform and the
+portable mount_options signature is unchanged.
+
+## Limits carried from the approved plan
+
+- single-node only (M3 proves API-mediated visibility between two processes on one kernel, not cross-node behaviour)
+- path-based operations keep a time-of-check/time-of-use window between the identity pre-check and the server's lookup (handle operations do not)
+- `touch` by a non-owner writer fails
+- `UTIME_NOW` uses the client clock
+- a `SIGKILL`ed self-minting mount leaves a session until its TTL
+- `MAP_PRIVATE` pages mapped before a fence stay readable
+- the `https`/`--ca-bundle` path is unexercised
+- `allow_other` kernel path untested
+- a `401` after startup maps to `ESTALE` (deviation from the spec 03 table)
+- no kernel caching, so every syscall is at least one API round trip and read amplification is one object per touched chunk
+- no mmap claim
+- Git success is a smoke observation
+- `statfs` reports no capacity
+- `fstat` on open files costs a receipt-free `fsync` round trip
+- renewal is best-effort and a long pause still fences (by design)
+- arm64 FUSE untested
+- TLS U1 open (mount tests use `--allow-plaintext` on loopback)
+
+The plan's “every syscall” shorthand above describes remote file and metadata
+operations. Unsupported callbacks, statfs, flush, forget and iteration over an
+already captured directory snapshot do not require an API request. This is
+not a latency or object-request-count guarantee for arbitrary workloads.
+Self-minted sessions left by forced termination can consume the credential's
+64-session bound until expiry; production hosts should pre-mint sessions.
+
+Read replies now recheck the latch after their remote request, and each read/write
+slice checks current mount/handle state. An in-flight read that completes after
+another callback latches the bound mount must not expose its late result;
+`bound_fence_rejects_inflight_read_result` uses a deterministic BeforeGet gate to
+exercise that schedule. Successful committed write results retain their byte
+counts. The client also supports restoring persisted visible-ASCII idempotency
+keys, with malformed header values rejected before any request.
+
+A timestamp boundary audit inspected the already approved `time` 0.3.55
+SystemTime interop API. Mount conversion now uses the checked nanosecond
+constructor and validates years before any truncate/metadata mutation, rather
+than risking a conversion panic. Linux unit and kernel setattr cases exercise
+the year-10000 rejection. The selected dependency API/source is an approved
+input; no dependency edge or registry identity changes.
+
+At commit `05cf134`, Linux workspace fmt/clippy/build and the full workspace
+suite passed. The serial mount suite passed 23 tests (22 acceptance scenarios
+plus its helper target), no failures/skips, in 396.94 s on 6.8.0-124-generic.
+The same mount suite also passed inside the workspace run with test-threads=4.
+Private read-only mmap succeeded; shared writable mmap failed with ENODEV (19).
+The final fencing/timestamp audit additions are being verified separately before
+review; both gauntlet checkpoints will rerun the full applicable gates.

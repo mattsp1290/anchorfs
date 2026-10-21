@@ -170,7 +170,31 @@ fn expired_lease_latches_bound_mount_without_takeover() {
         .open(a.path.join("f"))
         .unwrap();
     f.sql("UPDATE workspaces SET workflow_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1");
+    let root_probes = || {
+        let route = format!("/v1/workspaces/{}/stat", f.workspace);
+        relay
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| {
+                let mut words = request.split_whitespace();
+                words.next() == Some("GET")
+                    && words.next().is_some_and(|target| {
+                        let (path, query) = target.split_once('?').unwrap_or((target, ""));
+                        path == route && query.is_empty()
+                    })
+            })
+            .count()
+    };
+    let probes_before = root_probes();
+    assert!(probes_before > 0, "relay must observe startup root probes");
     stale(file.write_at(b"bad", 0).unwrap_err());
+    assert_eq!(
+        root_probes(),
+        probes_before,
+        "bound fencing must latch without an asynchronous root probe"
+    );
     let before = relay.count();
     let mut bytes = [0; 3];
     stale(file.read_at(&mut bytes, 0).unwrap_err());
@@ -324,6 +348,7 @@ fn sigstop_paused_mount_is_fenced_on_resume() {
     f.invariants();
 }
 struct Gate {
+    point: anchorfs_service::pipeline::faults::FaultPoint,
     armed: std::sync::atomic::AtomicBool,
     arrived: std::sync::atomic::AtomicBool,
     release: tokio::sync::watch::Sender<bool>,
@@ -335,11 +360,10 @@ impl anchorfs_service::pipeline::faults::FaultInjector for Gate {
         _: Option<anchorfs_core::OperationId>,
     ) -> anchorfs_service::pipeline::faults::FaultAction {
         use std::sync::atomic::Ordering::SeqCst;
-        if point == anchorfs_service::pipeline::faults::FaultPoint::BeforePublish
-            && self.armed.swap(false, SeqCst)
-        {
+        if point == self.point && self.armed.swap(false, SeqCst) {
+            let receiver = self.release.subscribe();
             self.arrived.store(true, SeqCst);
-            anchorfs_service::pipeline::faults::FaultAction::Wait(self.release.subscribe())
+            anchorfs_service::pipeline::faults::FaultAction::Wait(receiver)
         } else {
             anchorfs_service::pipeline::faults::FaultAction::Continue
         }
@@ -351,6 +375,7 @@ fn ordinary_mount_survives_lease_race() {
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
     let (release, _) = tokio::sync::watch::channel(false);
     let gate = Arc::new(Gate {
+        point: anchorfs_service::pipeline::faults::FaultPoint::BeforePublish,
         armed: AtomicBool::new(false),
         arrived: AtomicBool::new(false),
         release,
@@ -389,4 +414,58 @@ fn ordinary_mount_survives_lease_race() {
 fn close_ok(file: std::fs::File) {
     use std::os::fd::IntoRawFd;
     assert_eq!(unsafe { libc::close(file.into_raw_fd()) }, 0);
+}
+
+#[test]
+fn bound_fence_rejects_inflight_read_result() {
+    let _serial = serial();
+    use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+    let (release, _) = tokio::sync::watch::channel(false);
+    let gate = Arc::new(Gate {
+        point: anchorfs_service::pipeline::faults::FaultPoint::BeforeGet,
+        armed: AtomicBool::new(false),
+        arrived: AtomicBool::new(false),
+        release,
+    });
+    let f = Fixture::with(|_| {}, 1 << 30, gate.clone());
+    f.put("f", b"old");
+    f.put("trigger", b"x");
+    let l = lease(&f);
+    let session = bound(&f, &l);
+    let m = TempMount::process(&f, &f.worker, Some(&session), Some(proof(&l)), 1048576);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(m.path.join("f"))
+        .unwrap();
+    // A different inode avoids serializing this write behind the gated
+    // read in the kernel; both handles share the mount's authority latch.
+    let writer = OpenOptions::new()
+        .write(true)
+        .open(m.path.join("trigger"))
+        .unwrap();
+    gate.armed.store(true, SeqCst);
+    std::thread::scope(|scope| {
+        let reader = scope.spawn(|| {
+            let mut bytes = [0; 3];
+            file.read_at(&mut bytes, 0)
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !gate.arrived.load(SeqCst) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        f.sql("UPDATE workspaces SET workflow_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1");
+        let write = writer.write_at(b"bad", 0);
+        // Always release the service gate before asserting, so failure cannot
+        // leave the scoped reader waiting until its deadline.
+        gate.release.send(true).unwrap();
+        stale(write.unwrap_err());
+        stale(reader.join().unwrap().unwrap_err());
+    });
+    assert_eq!(f.read("f"), b"old");
+    drop(writer);
+    drop(file);
+    drop(m);
+    f.invariants();
 }

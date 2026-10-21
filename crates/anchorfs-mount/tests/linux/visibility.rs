@@ -62,6 +62,20 @@ fn mount_lookup_stat_readdir_match_api() {
         names.sort();
         api.sort();
         assert_eq!(names, api);
+        fs::create_dir(m.path.join("empty")).unwrap();
+        fs::remove_dir(m.path.join("empty")).unwrap();
+        assert_eq!(
+            fs::remove_dir(m.path.join("a")).unwrap_err().raw_os_error(),
+            Some(libc::ENOTEMPTY)
+        );
+        let regular =
+            std::ffi::CString::new(m.path.join("regular").as_os_str().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::mknod(regular.as_ptr(), libc::S_IFREG | 0o600, 0) },
+            0
+        );
+        assert!(fs::metadata(m.path.join("regular")).unwrap().is_file());
+        fs::remove_file(m.path.join("regular")).unwrap();
     });
     drop(m);
     f.invariants();

@@ -118,10 +118,12 @@ fn linux(cfg: anchorfs_mount::config::MountConfig) -> ExitCode {
         }
         // fuser's unmount helper can detach lazily. First require a successful
         // non-lazy unmount so open tool files remain usable on EBUSY.
-        let status = std::process::Command::new("fusermount3")
-            .arg("-u")
-            .arg(&mount.cfg.args.mountpoint)
-            .status();
+        let Some(status) =
+            nonlazy_unmount(&rt, &mut term, &mut interrupt, &mount.cfg.args.mountpoint)
+        else {
+            tracing::error!("shutdown interrupted while unmounting");
+            std::process::exit(5);
+        };
         if !status.is_ok_and(|s| s.success()) {
             tracing::warn!("unmount refused; keeping mount and handles serving");
             continue;
@@ -137,6 +139,41 @@ fn linux(cfg: anchorfs_mount::config::MountConfig) -> ExitCode {
                 tracing::error!("shutdown interrupted or FUSE runtime failed");
                 std::process::exit(5);
             }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn nonlazy_unmount(
+    runtime: &tokio::runtime::Runtime,
+    term: &mut tokio::signal::unix::Signal,
+    interrupt: &mut tokio::signal::unix::Signal,
+    mountpoint: &std::path::Path,
+) -> Option<std::io::Result<std::process::ExitStatus>> {
+    let mut helper = match std::process::Command::new("fusermount3")
+        .arg("-u")
+        .arg(mountpoint)
+        .spawn()
+    {
+        Ok(helper) => helper,
+        Err(error) => return Some(Err(error)),
+    };
+    loop {
+        match helper.try_wait() {
+            Ok(Some(status)) => return Some(Ok(status)),
+            Err(error) => return Some(Err(error)),
+            Ok(None) => {}
+        }
+        let interrupted = runtime.block_on(async {
+            tokio::select! {
+                _ = term.recv() => true,
+                _ = interrupt.recv() => true,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => false,
+            }
+        });
+        if interrupted {
+            let _ = helper.kill();
+            return None;
         }
     }
 }

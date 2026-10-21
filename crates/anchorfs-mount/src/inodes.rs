@@ -38,6 +38,14 @@ impl InodeTable {
             Ok(server_id as u64)
         }
     }
+    pub fn child_ino(&self, server_id: i64) -> Result<u64, ErrnoName> {
+        let ino = self.ino(server_id)?;
+        if ino == 1 {
+            Err(ErrnoName::EIO)
+        } else {
+            Ok(ino)
+        }
+    }
     pub fn server_id(&self, ino: u64) -> i64 {
         if ino == 1 { self.root } else { ino as i64 }
     }
@@ -48,10 +56,7 @@ impl InodeTable {
         name: Name,
         kind: InodeKind,
     ) -> Result<u64, ErrnoName> {
-        let ino = self.ino(server_id)?;
-        if ino == 1 {
-            return Err(ErrnoName::EIO);
-        }
+        let ino = self.child_ino(server_id)?;
         // A fresh lookup can observe a different inode at a known name.
         for (&other, node) in &mut self.nodes {
             if other != ino {
@@ -179,6 +184,7 @@ mod tests {
         let mut t = InodeTable::new(42);
         assert_eq!(t.ino(42), Ok(1));
         assert_eq!(t.server_id(1), 42);
+        assert_eq!(t.child_ino(42), Err(ErrnoName::EIO));
         assert_eq!(t.ino(1), Err(ErrnoName::EIO));
         t.record_name(50, 1, n("d"), InodeKind::Directory).unwrap();
         t.record_name(51, 50, n("f"), InodeKind::File).unwrap();

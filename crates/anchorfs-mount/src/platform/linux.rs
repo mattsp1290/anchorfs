@@ -406,9 +406,18 @@ impl Filesystem for AnchorFs {
         reply: ReplyData,
     ) {
         let result = self.mount.block(async {
-            let file = self.mount.file(fh.0)?;
+            self.mount.file(fh.0)?;
             let mut bytes = Vec::new();
             while bytes.len() < size as usize {
+                let file = match self.mount.file(fh.0) {
+                    Ok(file) => file,
+                    Err(error) => {
+                        if bytes.is_empty() {
+                            return Err(error);
+                        }
+                        break;
+                    }
+                };
                 let n = (size as usize - bytes.len()).min(self.mount.cfg.args.max_io_bytes as usize)
                     as u32;
                 let at = offset
@@ -466,12 +475,12 @@ impl Filesystem for AnchorFs {
                 |at, bytes, key| {
                     let file = &file;
                     async move {
-                        self.mount.live().map_err(|_| {
+                        self.mount.file(fh.0).map_err(|_| {
                             anchorfs_client::error::ClientError::Api(
                                 anchorfs_client::error::ApiFailure {
-                                    status: 409,
-                                    code: "fenced".into(),
-                                    message: "mount fenced".into(),
+                                    status: 410,
+                                    code: "stale_handle".into(),
+                                    message: "local mount or handle fenced".into(),
                                     trace_id: String::new(),
                                     operation_id: None,
                                     retry_after_ms: None,
@@ -579,6 +588,7 @@ impl Filesystem for AnchorFs {
             ];
             let mut cursor = None;
             loop {
+                self.mount.live()?;
                 let page = self
                     .mount
                     .api(
@@ -592,7 +602,7 @@ impl Filesystem for AnchorFs {
                     .await?;
                 for e in page.entries {
                     snapshot.push(DirEntrySnapshot {
-                        ino: lock(&self.mount.inodes).ino(e.attributes.inode_id)?,
+                        ino: lock(&self.mount.inodes).child_ino(e.attributes.inode_id)?,
                         name: e.name,
                         kind: e.attributes.kind,
                     });
@@ -653,17 +663,19 @@ impl Filesystem for AnchorFs {
         _: INodeNo,
         _: FileHandle,
         _: LockOwner,
-        _: u64,
-        _: u64,
-        _: i32,
+        start: u64,
+        end: u64,
+        typ: i32,
         _: u32,
         reply: ReplyLock,
     ) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
+        if self.mount.live().is_err() {
+            reply.error(Errno::ESTALE);
+        } else if typ == libc::F_UNLCK {
+            reply.locked(start, end, typ, 0);
         } else {
-            Errno::ENOLCK
-        });
+            reply.error(Errno::ENOLCK);
+        }
     }
     fn setlk(
         &self,
