@@ -9,6 +9,26 @@ use tokio::{
     task::JoinHandle,
 };
 
+pub struct ResponseHold {
+    reached: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
+}
+impl ResponseHold {
+    pub async fn reached(&self) {
+        self.reached.notified().await;
+    }
+    pub fn release(&self) {
+        self.resume.notify_one();
+    }
+}
+struct FailureRule {
+    pattern: String,
+    remaining: usize,
+    status: u16,
+    code: String,
+}
+type HeldResponse = Arc<Mutex<Option<(String, Arc<ResponseHold>)>>>;
+
 pub struct ApiProxy {
     pub endpoint: String,
     pub dropped: Arc<AtomicUsize>,
@@ -16,6 +36,8 @@ pub struct ApiProxy {
     drop_next: Arc<AtomicUsize>,
     delay_next: Arc<AtomicUsize>,
     task: JoinHandle<()>,
+    failures: Arc<Mutex<Option<FailureRule>>>,
+    hold: HeldResponse,
 }
 impl ApiProxy {
     pub async fn start(upstream: std::net::SocketAddr) -> Self {
@@ -27,6 +49,10 @@ impl ApiProxy {
         let delays = delay_next.clone();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let (drops, count, log) = (drop_next.clone(), dropped.clone(), requests.clone());
+        let failures: Arc<Mutex<Option<FailureRule>>> = Arc::new(Mutex::new(None));
+        let hold: HeldResponse = Arc::new(Mutex::new(None));
+        let failure_rules = failures.clone();
+        let held_response = hold.clone();
         let task = tokio::spawn(async move {
             loop {
                 let Ok((mut downstream, _)) = listener.accept().await else {
@@ -34,6 +60,8 @@ impl ApiProxy {
                 };
                 let (drops, count, log) = (drops.clone(), count.clone(), log.clone());
                 let delays = delays.clone();
+                let failures = failure_rules.clone();
+                let hold = held_response.clone();
                 tokio::spawn(async move {
                     let result: std::io::Result<()> = async {
                         let mut incoming = Vec::new();
@@ -57,6 +85,7 @@ impl ApiProxy {
                             summary.push('\n');
                             summary.push_str(line);
                         }
+                        let request_line = headers.lines().next().unwrap_or("").to_owned();
                         log.lock().unwrap().push(summary);
                         let length: usize = headers
                             .lines()
@@ -74,6 +103,19 @@ impl ApiProxy {
                             }
                             incoming.extend_from_slice(&buffer[..n]);
                         }
+                        let injected = {
+                            let mut rules = failures.lock().unwrap();
+                            rules.as_mut().filter(|r| r.remaining > 0 && request_line.contains(&r.pattern)).map(|r| {
+                                r.remaining -= 1;
+                                (r.status, r.code.clone())
+                            })
+                        };
+                        if let Some((status, code)) = injected {
+                            let body = serde_json::json!({"code":code,"message":"synthetic relay failure","trace_id":"test-relay","operation_id":null,"retry_after_ms":250}).to_string();
+                            let reply = format!("HTTP/1.1 {status} Synthetic\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                            downstream.write_all(reply.as_bytes()).await?;
+                            return downstream.shutdown().await;
+                        }
                         let mut upstream = TcpStream::connect(upstream).await?;
                         let mut forward = headers
                             .lines()
@@ -90,6 +132,16 @@ impl ApiProxy {
                             .await?;
                         let mut response = Vec::new();
                         upstream.read_to_end(&mut response).await?;
+                        let held = {
+                            let mut rule = hold.lock().unwrap();
+                            if rule.as_ref().is_some_and(|(pattern, _)| request_line.contains(pattern)) {
+                                rule.take().map(|(_, hold)| hold)
+                            } else { None }
+                        };
+                        if let Some(held) = held {
+                            held.reached.notify_one();
+                            held.resume.notified().await;
+                        }
                         if delays
                             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                             .is_ok()
@@ -118,7 +170,25 @@ impl ApiProxy {
             drop_next,
             delay_next,
             task,
+            failures,
+            hold,
         }
+    }
+    pub fn fail_requests(&self, pattern: &str, remaining: usize, status: u16, code: &str) {
+        *self.failures.lock().unwrap() = Some(FailureRule {
+            pattern: pattern.into(),
+            remaining,
+            status,
+            code: code.into(),
+        });
+    }
+    pub fn hold_response(&self, pattern: &str) -> Arc<ResponseHold> {
+        let held = Arc::new(ResponseHold {
+            reached: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+        });
+        *self.hold.lock().unwrap() = Some((pattern.into(), held.clone()));
+        held
     }
     pub fn drop_responses(&self, n: usize) {
         self.drop_next.store(n, Ordering::SeqCst);

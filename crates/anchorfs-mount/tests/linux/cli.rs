@@ -50,3 +50,35 @@ fn cli_exit_codes_and_secret_sources() {
     fs::remove_dir(path).unwrap();
     f.invariants();
 }
+
+#[test]
+fn startup_failure_revokes_self_minted_session() {
+    let _serial = serial();
+    let f = Fixture::new();
+    let address = f.endpoint.strip_prefix("http://").unwrap().parse().unwrap();
+    let relay = f.run(super::relay::ApiProxy::start(address));
+    relay.fail_requests(
+        &format!("GET /v1/workspaces/{} HTTP", f.workspace),
+        3,
+        503,
+        "dependency_unavailable",
+    );
+    let path = std::env::temp_dir().join(format!("anchorfs-startup-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&path).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_anchorfs-mount"))
+        .arg("mount")
+        .arg(&path)
+        .arg("--endpoint")
+        .arg(&relay.endpoint)
+        .arg("--workspace")
+        .arg(f.workspace.to_string())
+        .arg("--allow-plaintext")
+        .env("ANCHORFS_MOUNT_CREDENTIAL", &f.host.bearer)
+        .env_remove("ANCHORFS_MOUNT_WORKFLOW_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(3));
+    assert_eq!(f.count("session_revoke"), 1);
+    fs::remove_dir(path).unwrap();
+    f.invariants();
+}

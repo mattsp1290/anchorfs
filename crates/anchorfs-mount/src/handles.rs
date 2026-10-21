@@ -44,6 +44,7 @@ impl OpenDirs {
     }
 }
 /// Only known committed slices count. Ambiguous outcomes stop the loop.
+/// The kernel normally bounds each request to one slice; splitting is defensive.
 pub async fn write_slices<F, Fut>(
     data: &[u8],
     offset: u64,

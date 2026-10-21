@@ -46,6 +46,7 @@ fn client_headers_and_plaintext_policy() {
             .unwrap();
         let headers = request.headers();
         assert_eq!(headers["Authorization"], format!("Bearer {bearer_text}"));
+        assert!(headers["Authorization"].is_sensitive());
         assert_eq!(headers.contains_key("X-Anchorfs-Session-Id"), mode >= 1);
         assert_eq!(headers.contains_key("X-Anchorfs-Workflow-Token"), mode >= 2);
         assert_eq!(headers.contains_key("X-Anchorfs-Workflow-Epoch"), mode >= 2);
@@ -54,6 +55,7 @@ fn client_headers_and_plaintext_policy() {
         }
         if mode >= 2 {
             assert_eq!(headers["X-Anchorfs-Workflow-Epoch"], "9");
+            assert!(headers["X-Anchorfs-Workflow-Token"].is_sensitive());
         }
     }
 }

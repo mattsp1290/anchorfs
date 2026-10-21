@@ -483,8 +483,10 @@ Server inode ids are FUSE inode numbers except the workspace root, mapped to 1.
 Entry and attribute TTLs are zero; opens select direct I/O without keep-cache,
 writeback-cache or shared-mmap capabilities. Reads do not update atime.
 
-Lookup and path mutation callbacks reconstruct names and check the expected
-parent/target inode identity before requesting a mutation. Replies with inode
+Lookup and parent-plus-name mutation callbacks reconstruct names and check the
+expected parent inode identity before a request; path-addressed inode callbacks
+check that inode's identity. This does not guard a named child against replacement
+between the kernel's lookup and the server's resolution. Replies with inode
 identities are checked again. A time-of-check/time-of-use window remains between
 that check and the server's path resolution. Open file operations use server
 handle ids. When Linux omits fh from getattr, the mount can use another live
@@ -496,7 +498,28 @@ Writes commit synchronously in bounded API slices. O_APPEND selects server EOF
 for each slice. Ambiguous outcomes retain their key and resolve their original
 receipt; only definitive generation conflicts retry under new keys, at most
 three times. A partial write reports only bytes known committed. An unresolved
-slice reports EIO and its operation id is logged when available.
+slice reports EIO and its operation id is logged when available. An unresolved
+write fences that handle so an application retry cannot append the same bytes
+under a new key; later calls need a fresh handle. Per-request open flags select
+append mode, including changes through fcntl. The kernel normally already bounds
+each write to one API slice; in-process write slicing is defensive. Multi-slice
+reads stop with a short result at a generation change and check the fence again
+before replying.
+
+Each attempt has the configured deadline plus one second, with at most three
+attempts and a bounded aggregate retry budget. Mutation receipt resolution has
+its own metadata budget. Defaults permit about 183 seconds for a data request
+plus 33 seconds for receipt lookup, excluding scheduling overhead. A callback
+that issues multiple requests can take longer; there is no overall callback
+latency guarantee. Four blocked callbacks can occupy all four default FUSE
+threads.
+
+A post-commit identity mismatch can return ESTALE after a namespace mutation
+has committed; affected local names are detached and the operation id is logged.
+Callers must inspect state before retrying. A combined setattr performs truncate
+before the attribute request: a later authorization failure or concurrent change
+can leave the size committed while the attribute update fails. This is not an
+atomic multi-attribute transaction.
 
 Live workflow authority requires a host-minted bound session and the paired
 workflow token/epoch. The mount never renews or releases workflow leases. A
@@ -510,9 +533,14 @@ deviation from spec 03's EACCES row. A stale handle fences that handle.
 
 The session and handles renew using local monotonic intervals derived from
 operator-supplied TTL hints; the hints must match the service. Renewal is best
-effort and a long pause still fences. Session identity and workflow epoch are
+effort and a long pause still fences. A failed renewal retries with bounded
+backoff rather than postponing the next attempt by half a TTL. Session renewal
+has an independent task; handle renewals have backoff and at most eight concurrent
+requests. Server retry hints are respected. Session identity and workflow epoch are
 validated at startup. Worker credentials need a pre-minted session; a host
-credential can self-mint. Clean shutdown revokes only self-minted sessions.
+credential can self-mint. Startup failure after minting attempts bounded revoke.
+Clean shutdown, including an external unmount, revokes only self-minted sessions;
+cleanup is idempotent.
 SIGTERM/SIGINT first attempt a non-lazy unmount; if tools keep it busy the mount
 continues serving with its handles intact. Forced process death leaves its
 self-minted session to expire. Flush returns success for synchronous writes,

@@ -201,10 +201,12 @@ fn expired_lease_latches_bound_mount_without_takeover() {
     stale(fs::metadata(&a.path).unwrap_err());
     assert_eq!(relay.count(), before);
     let direct = native(&f.endpoint, f.workspace, &f.worker, Some(&s));
-    direct.authority.write().unwrap().workflow = Some(WorkflowAuthority {
+    let mut authority = direct.authority();
+    authority.workflow = Some(WorkflowAuthority {
         token: Secret::new(proof(&l).0.into()),
         epoch: proof(&l).1,
     });
+    let direct = direct.with_authority(authority);
     f.run(direct.stat(None)).unwrap();
     assert_eq!(f.count("write_at"), 1);
     drop(file);
@@ -260,7 +262,7 @@ fn revocation_fences_mount() {
 #[test]
 fn renewal_keeps_handles_and_session_alive() {
     let _serial = serial();
-    let f = Fixture::with(
+    let mut f = Fixture::with(
         |c| {
             c.handle_ttl = Duration::from_secs(20);
             c.client_session_ttl = Duration::from_secs(40);
@@ -269,7 +271,14 @@ fn renewal_keeps_handles_and_session_alive() {
         Arc::new(anchorfs_service::pipeline::faults::NoFaults),
     );
     f.put("f", b"old");
+    let relay = proxy(&mut f);
     let m = TempMount::in_process(&f);
+    relay.fail_requests(
+        &format!("POST /v1/workspaces/{}/sessions/", f.workspace),
+        1,
+        429,
+        "rate_limited",
+    );
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -465,6 +474,32 @@ fn bound_fence_rejects_inflight_read_result() {
     });
     assert_eq!(f.read("f"), b"old");
     drop(writer);
+    drop(file);
+    drop(m);
+    f.invariants();
+}
+
+#[test]
+fn unresolved_append_fences_handle_before_application_retry() {
+    use std::io::Write;
+    let _serial = serial();
+    let mut f = Fixture::new();
+    f.put("append", b"prefix");
+    let relay = proxy(&mut f);
+    let m = TempMount::process(&f, &f.worker, Some(&f.session), None, 4096);
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(m.path.join("append"))
+        .unwrap();
+    relay.drop_responses(3);
+    relay.fail_requests("/operations?", 1, 404, "not_found");
+    assert_eq!(
+        file.write(b"once").unwrap_err().raw_os_error(),
+        Some(libc::EIO)
+    );
+    stale(file.write(b"once").unwrap_err());
+    assert_eq!(f.read("append"), b"prefixonce");
+    assert_eq!(f.count("append"), 1);
     drop(file);
     drop(m);
     f.invariants();

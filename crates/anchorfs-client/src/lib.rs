@@ -11,19 +11,16 @@ pub mod wire;
 use auth::Authority;
 use endpoint::Endpoint;
 use error::ClientError;
-use std::{
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     endpoint: Endpoint,
-    pub workspace: uuid::Uuid,
-    pub authority: Arc<RwLock<Authority>>,
-    pub metadata_deadline: Duration,
-    pub data_deadline: Duration,
+    workspace: uuid::Uuid,
+    authority: Authority,
+    metadata_deadline: Duration,
+    data_deadline: Duration,
 }
 impl Client {
     pub fn new(
@@ -51,16 +48,23 @@ impl Client {
             http: builder.build().map_err(ClientError::transport)?,
             endpoint,
             workspace,
-            authority: Arc::new(RwLock::new(authority)),
+            authority,
             metadata_deadline: Duration::from_secs(10),
             data_deadline: Duration::from_secs(60),
         })
     }
     pub fn authority(&self) -> Authority {
-        self.authority
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.authority.clone()
+    }
+    /// Build a separate client identity. Existing clones and requests are unchanged.
+    pub fn with_authority(mut self, authority: Authority) -> Self {
+        self.authority = authority;
+        self
+    }
+    pub fn with_deadlines(mut self, metadata: Duration, data: Duration) -> Self {
+        self.metadata_deadline = metadata;
+        self.data_deadline = data;
+        self
     }
 }
 

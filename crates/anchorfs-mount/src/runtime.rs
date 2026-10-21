@@ -46,8 +46,10 @@ impl Mount {
             cfg.ca_bundle.as_deref(),
         )
         .map_err(auth)?;
-        client.metadata_deadline = Duration::from_millis(cfg.args.metadata_deadline_ms);
-        client.data_deadline = Duration::from_millis(cfg.args.data_deadline_ms);
+        client = client.with_deadlines(
+            Duration::from_millis(cfg.args.metadata_deadline_ms),
+            Duration::from_millis(cfg.args.data_deadline_ms),
+        );
         let self_minted = client.authority().session.is_none();
         if self_minted {
             let grant = client
@@ -65,15 +67,14 @@ impl Mount {
                         auth(e)
                     }
                 })?;
-            client
-                .authority
-                .write()
-                .unwrap_or_else(|p| p.into_inner())
-                .session = Some(SessionAuthority {
+            let mut authority = client.authority();
+            authority.session = Some(SessionAuthority {
                 session_id: SessionId(grant.session_id),
                 session_epoch: grant.session_epoch,
             });
+            client = client.with_authority(authority);
         }
+        let startup = async {
         let root = client.get_workspace().await.map_err(auth)?;
         let probe = client.stat(None).await.map_err(auth)?;
         if probe.inode_id != root.root.inode_id {
@@ -84,6 +85,7 @@ impl Mount {
         if let Some(w) = client.authority().workflow
             && !root
                 .workflow
+                .as_ref()
                 .is_some_and(|live| live.active && live.mutation_epoch == w.epoch)
         {
             return Err(MountError::Authorization(
@@ -101,6 +103,22 @@ impl Mount {
                 "mount uid/gid differ from workspace root; default_permissions can reject the caller"
             );
         }
+        Ok::<_, MountError>((root, probe))
+        }.await;
+        let (root, _probe) = match startup {
+            Ok(value) => value,
+            Err(error) => {
+                if self_minted {
+                    let session = client.authority().session.expect("session established");
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(10),
+                        client.revoke_session(session.session_id.0, &IdempotencyKey::new()),
+                    )
+                    .await;
+                }
+                return Err(error);
+            }
+        };
         let mount = Arc::new(Self {
             client,
             cfg,
@@ -112,9 +130,12 @@ impl Mount {
             rt,
             self_minted,
         });
+        // Session renewal has its own task: slow handle renewals cannot starve it.
         let weak = Arc::downgrade(&mount);
         mount.rt.spawn(async move {
             let mut session_at = Instant::now();
+            let mut next_try = Instant::now();
+            let mut backoff = Duration::from_millis(250);
             loop {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 let Some(mount) = weak.upgrade() else { break };
@@ -124,44 +145,94 @@ impl Mount {
                 if mount.fence.load(Ordering::SeqCst) {
                     continue;
                 }
-                if session_at.elapsed()
-                    >= Duration::from_millis(mount.cfg.args.session_ttl_hint_ms / 2)
-                {
-                    let session = mount.client.authority().session.expect("session");
-                    let result = mount
-                        .client
-                        .renew_session(session.session_id.0, &IdempotencyKey::new())
-                        .await;
-                    if let Err(error) = result {
-                        mount.api_error(error, CallClass::Read, None).await;
-                    }
-                    session_at = Instant::now();
-                }
-                if mount.fence.load(Ordering::SeqCst) || mount.stopping.load(Ordering::SeqCst) {
+                let ttl = Duration::from_millis(mount.cfg.args.session_ttl_hint_ms);
+                if session_at.elapsed() < ttl / 2 || Instant::now() < next_try {
                     continue;
                 }
-                let renew: Vec<_> = lock(&mount.files)
-                    .entries
-                    .iter()
-                    .filter(|(_, f)| {
-                        !f.fenced
-                            && f.renewed.elapsed()
-                                >= Duration::from_millis(mount.cfg.args.handle_ttl_hint_ms / 2)
-                    })
-                    .map(|(fh, f)| (*fh, f.handle_id))
-                    .collect();
-                for (fh, id) in renew {
-                    if mount.fence.load(Ordering::SeqCst) || mount.stopping.load(Ordering::SeqCst) {
-                        break;
+                let session = mount.client.authority().session.expect("session");
+                match mount
+                    .client
+                    .renew_session(session.session_id.0, &IdempotencyKey::new())
+                    .await
+                {
+                    Ok(_) => {
+                        session_at = Instant::now();
+                        backoff = Duration::from_millis(250);
                     }
-                    let result = mount.client.renew_handle(id, &IdempotencyKey::new()).await;
+                    Err(error) => {
+                        let delay = renewal_delay(&error, backoff);
+                        next_try = Instant::now() + delay;
+                        backoff = (backoff * 2).min(
+                            (ttl / 8).clamp(Duration::from_millis(250), Duration::from_secs(5)),
+                        );
+                        mount.api_error(error, CallClass::Read, None).await;
+                    }
+                }
+            }
+        });
+        let weak = Arc::downgrade(&mount);
+        mount.rt.spawn(async move {
+            let mut retries = std::collections::BTreeMap::<u64, (Instant, Duration)>::new();
+            loop {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let Some(mount) = weak.upgrade() else { break };
+                if mount.stopping.load(Ordering::SeqCst) {
+                    break;
+                }
+                if mount.fence.load(Ordering::SeqCst) {
+                    continue;
+                }
+                let due = Duration::from_millis(mount.cfg.args.handle_ttl_hint_ms / 2);
+                let renew: Vec<_> = {
+                    let files = lock(&mount.files);
+                    retries.retain(|fh, _| files.entries.contains_key(fh));
+                    files
+                        .entries
+                        .iter()
+                        .filter(|(fh, f)| {
+                            !f.fenced
+                                && f.renewed.elapsed() >= due
+                                && retries.get(fh).is_none_or(|(at, _)| Instant::now() >= *at)
+                        })
+                        .take(8)
+                        .map(|(fh, f)| (*fh, f.handle_id))
+                        .collect()
+                };
+                let mut jobs = tokio::task::JoinSet::new();
+                for (fh, id) in renew {
+                    let mount = mount.clone();
+                    jobs.spawn(async move {
+                        (
+                            fh,
+                            mount.client.renew_handle(id, &IdempotencyKey::new()).await,
+                        )
+                    });
+                }
+                while let Some(result) = jobs.join_next().await {
+                    let Ok((fh, result)) = result else { continue };
                     match result {
                         Ok(_) => {
+                            retries.remove(&fh);
                             if let Some(f) = lock(&mount.files).entries.get_mut(&fh) {
                                 f.renewed = Instant::now();
                             }
                         }
                         Err(error) => {
+                            let backoff = retries
+                                .get(&fh)
+                                .map_or(Duration::from_millis(250), |(_, b)| *b);
+                            retries.insert(
+                                fh,
+                                (
+                                    Instant::now() + renewal_delay(&error, backoff),
+                                    (backoff * 2).min(
+                                        (due / 4).clamp(
+                                            Duration::from_millis(250),
+                                            Duration::from_secs(5),
+                                        ),
+                                    ),
+                                ),
+                            );
                             mount.api_error(error, CallClass::Read, Some(fh)).await;
                         }
                     }
@@ -205,6 +276,15 @@ impl Mount {
         if self.fence.load(Ordering::SeqCst) {
             return ErrnoName::ESTALE;
         }
+        // Retrying an unresolved append under a new key can duplicate bytes.
+        // Keep the first error as EIO; require a fresh handle for later calls.
+        if matches!(class, CallClass::Mutation)
+            && error.is_indeterminate()
+            && let Some(id) = fh
+            && let Some(file) = lock(&self.files).entries.get_mut(&id)
+        {
+            file.fenced = true;
+        }
         if let ClientError::Api(e) = &error {
             tracing::warn!(status=e.status,code=%e.code,trace_id=%e.trace_id,operation_id=?e.operation_id,max_io_bytes=self.cfg.args.max_io_bytes,"native API call failed");
             if e.status == 401 {
@@ -221,7 +301,7 @@ impl Mount {
             if e.code == "fenced" {
                 let bound_mutation = self.client.authority().workflow.is_some()
                     && matches!(class, CallClass::Mutation)
-                    && e.message != "reservation_expired";
+                    && e.message != anchorfs_core::error::RESERVATION_EXPIRED;
                 if bound_mutation {
                     // Mere lease expiry still permits server reads. Latch before
                     // any await so another callback cannot start a new read.
@@ -321,7 +401,9 @@ impl Mount {
         Ok(attributes)
     }
     pub async fn shutdown(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
+        if self.stopping.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let files = std::mem::take(&mut lock(&self.files).entries);
         let _ = tokio::time::timeout(Duration::from_secs(10), async {
             for (_, f) in files {
@@ -358,4 +440,15 @@ fn nix_uid() -> u32 {
 }
 fn nix_gid() -> u32 {
     effective_id("Gid:")
+}
+
+fn renewal_delay(error: &ClientError, backoff: Duration) -> Duration {
+    match error {
+        ClientError::Api(e) => e
+            .retry_after_ms
+            .map(Duration::from_millis)
+            .unwrap_or(backoff)
+            .max(backoff),
+        _ => backoff,
+    }
 }

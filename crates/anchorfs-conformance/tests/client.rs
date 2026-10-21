@@ -280,8 +280,8 @@ async fn client_wire_types_deserialize_service_dtos() {
 #[tokio::test]
 async fn client_resolves_deadline_after_publication() {
     let f = Fixture::new().await;
-    let (mut client, proxy, _server) = native(&f).await;
-    client.metadata_deadline = Duration::from_millis(500);
+    let (client, proxy, _server) = native(&f).await;
+    let client = client.with_deadlines(Duration::from_millis(500), Duration::from_secs(60));
     let key = IdempotencyKey::new();
     proxy.delay_responses(3);
     let mutation = client.create_directory("late", 0o755, &key).await.unwrap();
@@ -311,4 +311,53 @@ async fn client_resolves_deadline_after_publication() {
         mutation.inode_id.unwrap()
     );
     f.invariants().await;
+}
+
+#[tokio::test]
+async fn client_keeps_ambiguity_when_replay_is_gated() {
+    for gated_resolver in [false, true] {
+        let f = Fixture::new().await;
+        let (client, proxy, _server) = native(&f).await;
+        let key = IdempotencyKey::new();
+        let held = proxy.hold_response("POST /v1/workspaces/");
+        proxy.drop_responses(1);
+        let task = tokio::spawn({
+            let client = client.clone();
+            let key = key.clone();
+            async move { client.create_directory("committed", 0o755, &key).await }
+        });
+        tokio::time::timeout(Duration::from_secs(10), held.reached())
+            .await
+            .unwrap();
+        f.client
+            .call(
+                "POST",
+                &format!("{}/workflow-lease", f.workspace_path()),
+                Some(&f.host),
+                Some(&f.host_session),
+                Some("gate-retry"),
+                Some(json!({})),
+            )
+            .await
+            .status(201);
+        if gated_resolver {
+            proxy.fail_requests("/operations?", 1, 401, "unauthenticated");
+        }
+        held.release();
+        let result = task.await.unwrap();
+        if gated_resolver {
+            assert_eq!(result.unwrap_err().code(), Some("outcome_unknown"));
+        } else {
+            let result = result.unwrap();
+            assert_eq!(
+                client.find_operation(&key).await.unwrap().operation_id,
+                result.operation_id
+            );
+        }
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM operations WHERE workspace_id=$1 AND idempotency_key=$2 AND state='committed'")
+            .bind(f.workspace).bind(key.as_str()).fetch_one(&f.pool).await.unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(proxy.dropped.load(Ordering::SeqCst), 1);
+        f.invariants().await;
+    }
 }

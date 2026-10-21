@@ -90,10 +90,12 @@ fn git_smoke_under_lease() {
     drop(index);
     // Independent API reads use the same bound session proof while the lease is live.
     let client = native(&f.endpoint, f.workspace, &f.worker, Some(&session));
-    client.authority.write().unwrap().workflow = Some(anchorfs_client::auth::WorkflowAuthority {
+    let mut authority = client.authority();
+    authority.workflow = Some(anchorfs_client::auth::WorkflowAuthority {
         token: anchorfs_core::Secret::new(lease["token"].as_str().unwrap().into()),
         epoch: lease["mutation_epoch"].as_i64().unwrap(),
     });
+    let client = client.with_authority(authority);
     let committed = git(&["cat-file", "-p", "HEAD:note.txt"]);
     assert_eq!(committed.as_bytes(), b"first commit\n");
     let objects = f

@@ -116,3 +116,32 @@ fn replaced_ancestor_directory_is_estale() {
     drop(b);
     f.invariants();
 }
+
+#[test]
+fn external_unmount_cleans_up_self_minted_session() {
+    let _serial = serial();
+    let f = Fixture::new();
+    let mut m = TempMount::process(&f, &f.host, None, None, 1048576);
+    fs::write(m.path.join("created"), b"committed").unwrap();
+    assert!(
+        Command::new("fusermount3")
+            .arg("-u")
+            .arg(&m.path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    m.wait_exit();
+    assert_eq!(f.count("session_revoke"), 1);
+    let open: i64 = f
+        .run(
+            sqlx::query_scalar(
+                "SELECT count(*) FROM handles WHERE workspace_id=$1 AND closed_at IS NULL",
+            )
+            .bind(f.workspace)
+            .fetch_one(&f.pool),
+        )
+        .unwrap();
+    assert_eq!(open, 0);
+    f.invariants();
+}

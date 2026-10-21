@@ -127,7 +127,7 @@ impl From<anchorfs_persistence::reservations::ReservationError> for ApiError {
             }
             R::Expired => {
                 let mut error = Self::new(ErrorCode::Fenced, "");
-                error.message = "reservation_expired".into();
+                error.message = anchorfs_core::error::RESERVATION_EXPIRED.into();
                 error
             }
             R::NotActive => Self::new(ErrorCode::Fenced, ""),

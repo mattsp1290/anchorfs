@@ -245,6 +245,10 @@ impl TempMount {
         // The watchdog must not retain a numeric pid after we reap the child.
         self.disarm_watchdog();
         self.signal("-TERM");
+        self.wait_exit();
+    }
+    pub fn wait_exit(&mut self) {
+        self.disarm_watchdog();
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             if let Some(status) = self.process.as_mut().unwrap().try_wait().unwrap() {

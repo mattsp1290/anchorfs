@@ -116,6 +116,11 @@ impl Client {
                         || error.code() == Some("dependency_unavailable")
                         || (key.is_some() && error.code() == Some("outcome_unknown"));
                     if !retry {
+                        if key.is_some() && ambiguous {
+                            return Err(ClientError::Transport(
+                                "an earlier attempt had an unresolved response".into(),
+                            ));
+                        }
                         return Err(error);
                     }
                     let delay = match &error {
@@ -133,7 +138,7 @@ impl Client {
                 }
             }
         }
-        if key.is_some() && ambiguous && last.code() == Some("dependency_unavailable") {
+        if key.is_some() && ambiguous {
             Err(ClientError::Transport(
                 "an earlier attempt had an unresolved response".into(),
             ))
@@ -184,7 +189,20 @@ impl Client {
             )
             .await
         {
-            Ok((bytes, _)) => decode(bytes),
+            Ok((bytes, _)) => match decode(bytes) {
+                Ok(value) => Ok(value),
+                Err(_) => {
+                    self.resolve_by_key(
+                        key,
+                        if suffix == "/sessions" {
+                            Resolver::Admin
+                        } else {
+                            Resolver::Workspace
+                        },
+                    )
+                    .await
+                }
+            },
             Err(error)
                 if matches!(error, ClientError::Transport(_) | ClientError::Deadline)
                     || error.code() == Some("outcome_unknown") =>
@@ -216,7 +234,7 @@ impl Client {
             Err(ClientError::Api(e)) if e.status == 404 => {
                 return Err(resolution_error("operation_indeterminate", None));
             }
-            Err(error) => return Err(error),
+            Err(_) => return Err(resolution_error("outcome_unknown", None)),
         };
         match status.state {
             OperationState::Committed => serde_json::from_value(

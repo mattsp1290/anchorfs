@@ -283,3 +283,67 @@ fn unsafe_uid() -> u32 {
 fn unsafe_gid() -> u32 {
     unsafe { libc::getegid() }
 }
+
+#[test]
+fn small_io_reads_stop_at_generation_change_and_append_flags_follow_fcntl() {
+    use std::os::fd::AsRawFd;
+    let _serial = serial();
+    let mut f = Fixture::new();
+    let old = vec![b'a'; 65536];
+    let new = vec![b'b'; 65536];
+    f.put("sliced", &old);
+    let address = f.endpoint.strip_prefix("http://").unwrap().parse().unwrap();
+    let relay = f.run(super::relay::ApiProxy::start(address));
+    f.endpoint = relay.endpoint.clone();
+    let m = TempMount::process(&f, &f.worker, Some(&f.session), None, 4096);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(m.path.join("sliced"))
+        .unwrap();
+    let held = relay.hold_response("/bytes?offset=0&length=4096");
+    std::thread::scope(|scope| {
+        let read = scope.spawn(|| {
+            let mut bytes = vec![0; 65536];
+            let n = file.read_at(&mut bytes, 0).unwrap();
+            (n, bytes)
+        });
+        f.run(async {
+            tokio::time::timeout(std::time::Duration::from_secs(10), held.reached()).await
+        })
+        .unwrap();
+        f.put("sliced", &new);
+        held.release();
+        let (n, bytes) = read.join().unwrap();
+        assert_eq!(n, 4096);
+        assert_eq!(&bytes[..n], &old[..n]);
+    });
+    let mut bytes = vec![0; 65536];
+    file.read_exact_at(&mut bytes, 0).unwrap();
+    assert_eq!(bytes, new);
+    unsafe {
+        let flags = libc::fcntl(file.as_raw_fd(), libc::F_GETFL);
+        assert!(flags >= 0);
+        assert_eq!(
+            libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_APPEND),
+            0
+        );
+    }
+    assert_eq!(file.write_at(b"tail", 0).unwrap(), 4);
+    let mut expected = new;
+    expected.extend_from_slice(b"tail");
+    assert_eq!(f.read("sliced"), expected);
+    unsafe {
+        let flags = libc::fcntl(file.as_raw_fd(), libc::F_GETFL);
+        assert_eq!(
+            libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_APPEND),
+            0
+        );
+    }
+    file.write_all_at(b"head", 0).unwrap();
+    expected[..4].copy_from_slice(b"head");
+    assert_eq!(f.read("sliced"), expected);
+    drop(file);
+    drop(m);
+    f.invariants();
+}

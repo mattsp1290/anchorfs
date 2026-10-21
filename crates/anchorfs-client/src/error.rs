@@ -19,7 +19,7 @@ impl ApiFailure {
             .map(|code| code.errno_hint())
     }
 }
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ClientError {
     #[error("API {0:?}")]
     Api(ApiFailure),
@@ -33,6 +33,14 @@ pub enum ClientError {
     InvalidInput(String),
 }
 impl ClientError {
+    /// Publication cannot be excluded, even if a later replay was rejected.
+    pub fn is_indeterminate(&self) -> bool {
+        matches!(self, Self::Transport(_) | Self::Deadline | Self::Decode(_))
+            || matches!(
+                self.code(),
+                Some("outcome_unknown" | "operation_indeterminate")
+            )
+    }
     pub fn code(&self) -> Option<&str> {
         match self {
             Self::Api(e) => Some(&e.code),

@@ -214,7 +214,7 @@ impl Filesystem for AnchorFs {
                     .client
                     .close_handle(h.handle_id, &IdempotencyKey::new())
                     .await;
-                self.mount.api(close, CallClass::Mutation, None).await?;
+                let _ = self.mount.api(close, CallClass::Mutation, None).await;
                 record(&self.mount, parent.0, n, &h.attributes)
             })
         );
@@ -298,6 +298,10 @@ impl Filesystem for AnchorFs {
                     )
                     .await?;
                 if result.inode_id != Some(before.inode_id) {
+                    let mut inodes = lock(&self.mount.inodes);
+                    inodes.unlink_name(parent.0, &n);
+                    inodes.unlink_name(newparent.0, &newn);
+                    tracing::warn!(operation_id=%result.operation_id, "rename committed with changed identity");
                     return Err(ErrnoName::ESTALE);
                 }
                 lock(&self.mount.inodes).rename(parent.0, &n, newparent.0, newn);
@@ -327,8 +331,11 @@ impl Filesystem for AnchorFs {
                         None,
                     )
                     .await?;
-                self.mount
-                    .identity(ino.0, result.inode_id.ok_or(ErrnoName::EIO)?)?;
+                if let Err(error) = self.mount.identity(ino.0, result.inode_id.ok_or(ErrnoName::EIO)?) {
+                    lock(&self.mount.inodes).unlink_name(parent.0, &n);
+                    tracing::warn!(operation_id=%result.operation_id, "link committed with changed identity");
+                    return Err(error);
+                }
                 stat_child(&self.mount, &to, parent.0, n, result.inode_id).await
             })
         );
@@ -408,6 +415,7 @@ impl Filesystem for AnchorFs {
         let result = self.mount.block(async {
             self.mount.file(fh.0)?;
             let mut bytes = Vec::new();
+            let mut generation = None;
             while bytes.len() < size as usize {
                 let file = match self.mount.file(fh.0) {
                     Ok(file) => file,
@@ -432,7 +440,11 @@ impl Filesystem for AnchorFs {
                     )
                     .await;
                 match result {
-                    Ok((part, _)) => {
+                    Ok((part, observed)) => {
+                        if generation.is_some_and(|first| first != observed) {
+                            break;
+                        }
+                        generation = Some(observed);
                         let short = part.len() < n as usize;
                         bytes.extend_from_slice(&part);
                         if short {
@@ -447,6 +459,7 @@ impl Filesystem for AnchorFs {
                     }
                 }
             }
+            self.mount.file(fh.0)?;
             Ok::<_, ErrnoName>(bytes)
         });
         match result {
@@ -462,7 +475,7 @@ impl Filesystem for AnchorFs {
         offset: u64,
         data: &[u8],
         _: WriteFlags,
-        _: OpenFlags,
+        flags: OpenFlags,
         _: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
@@ -487,7 +500,7 @@ impl Filesystem for AnchorFs {
                                 },
                             )
                         })?;
-                        let result = if file.append {
+                        let result = if flags.0 & libc::O_APPEND != 0 {
                             self.mount.client.append(file.handle_id, bytes, &key).await
                         } else {
                             self.mount
@@ -497,14 +510,7 @@ impl Filesystem for AnchorFs {
                         };
                         if let Err(error) = &result {
                             // latch before another slice or callback can start
-                            let e = match error {
-                                anchorfs_client::error::ClientError::Api(e) => {
-                                    anchorfs_client::error::ClientError::Api(e.clone())
-                                }
-                                _ => anchorfs_client::error::ClientError::Transport(
-                                    "write failed".into(),
-                                ),
-                            };
+                            let e = error.clone();
                             self.mount
                                 .api_error(e, CallClass::Mutation, Some(fh.0))
                                 .await;

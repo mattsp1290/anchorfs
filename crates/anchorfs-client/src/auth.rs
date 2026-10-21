@@ -43,9 +43,15 @@ impl Authority {
                 .header("X-Anchorfs-Session-Epoch", s.session_epoch);
         }
         if let Some(w) = &self.workflow {
-            request = request
-                .header("X-Anchorfs-Workflow-Token", w.token.expose())
-                .header("X-Anchorfs-Workflow-Epoch", w.epoch);
+            let token = reqwest::header::HeaderValue::from_str(w.token.expose()).map(|mut v| {
+                v.set_sensitive(true);
+                v
+            });
+            request = match token {
+                Ok(token) => request.header("X-Anchorfs-Workflow-Token", token),
+                Err(_) => request.header("X-Anchorfs-Workflow-Token", w.token.expose()),
+            }
+            .header("X-Anchorfs-Workflow-Epoch", w.epoch);
         }
         request
     }

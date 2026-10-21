@@ -78,6 +78,19 @@ fn linux(cfg: anchorfs_mount::config::MountConfig) -> ExitCode {
             return ExitCode::from(4);
         }
     };
+    let signals = rt.block_on(async {
+        Ok::<_, std::io::Error>((
+            signal(SignalKind::terminate())?,
+            signal(SignalKind::interrupt())?,
+        ))
+    });
+    let (mut term, mut interrupt) = match signals {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("signals: {e}");
+            return ExitCode::from(5);
+        }
+    };
     let mount = match rt.block_on(Mount::start(cfg, rt.handle().clone())) {
         Ok(m) => m,
         Err(e) => {
@@ -93,25 +106,18 @@ fn linux(cfg: anchorfs_mount::config::MountConfig) -> ExitCode {
             return ExitCode::from(4);
         }
     };
-    let signals = rt.block_on(async {
-        Ok::<_, std::io::Error>((
-            signal(SignalKind::terminate())?,
-            signal(SignalKind::interrupt())?,
-        ))
-    });
-    let (mut term, mut interrupt) = match signals {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("signals: {e}");
-            return ExitCode::from(5);
-        }
-    };
     loop {
         let stop=rt.block_on(async {tokio::select!{_=term.recv()=>true,_=interrupt.recv()=>true,_=tokio::time::sleep(std::time::Duration::from_millis(100))=>false}});
         if session.guard.is_finished() {
             let result = session.join();
-            eprintln!("FUSE session ended: {result:?}");
-            return ExitCode::from(5);
+            rt.block_on(mount.shutdown());
+            return match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("FUSE session ended: {error}");
+                    ExitCode::from(5)
+                }
+            };
         }
         if !stop {
             continue;

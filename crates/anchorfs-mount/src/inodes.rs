@@ -13,11 +13,13 @@ pub struct Node {
 pub struct InodeTable {
     root: i64,
     nodes: BTreeMap<u64, Node>,
+    names: BTreeMap<(u64, String), u64>,
 }
 impl InodeTable {
     pub fn new(root: i64) -> Self {
         Self {
             root,
+            names: BTreeMap::new(),
             nodes: BTreeMap::from([(
                 1,
                 Node {
@@ -58,14 +60,7 @@ impl InodeTable {
     ) -> Result<u64, ErrnoName> {
         let ino = self.child_ino(server_id)?;
         // A fresh lookup can observe a different inode at a known name.
-        for (&other, node) in &mut self.nodes {
-            if other != ino {
-                node.names.retain(|(p, n)| *p != parent || *n != name);
-                if other != 1 && node.names.is_empty() {
-                    node.detached = true;
-                }
-            }
-        }
+        self.unlink_name(parent, &name);
         let node = self.nodes.entry(ino).or_insert(Node {
             names: vec![],
             kind,
@@ -75,9 +70,10 @@ impl InodeTable {
         // A lookup proves this alias is current. Prefer it over an older
         // alias which another mount may have removed without notifying us.
         node.names.retain(|(p, n)| *p != parent || *n != name);
-        node.names.insert(0, (parent, name));
+        node.names.insert(0, (parent, name.clone()));
         node.nlookup = node.nlookup.saturating_add(1);
         node.detached = false;
+        self.names.insert((parent, name.as_str().to_owned()), ino);
         Ok(ino)
     }
     pub fn path(&self, ino: u64) -> Result<Option<WorkspacePath>, ErrnoName> {
@@ -123,29 +119,31 @@ impl InodeTable {
         }
     }
     pub fn unlink_name(&mut self, parent: u64, name: &Name) {
-        for (&ino, node) in &mut self.nodes {
+        if let Some(ino) = self.names.remove(&(parent, name.as_str().to_owned()))
+            && let Some(node) = self.nodes.get_mut(&ino)
+        {
             node.names.retain(|(p, n)| *p != parent || n != name);
             if ino != 1 && node.names.is_empty() {
                 node.detached = true;
             }
         }
     }
+    pub fn child(&self, parent: u64, name: &Name) -> Option<u64> {
+        self.names.get(&(parent, name.as_str().to_owned())).copied()
+    }
     pub fn rename(&mut self, parent: u64, name: &Name, newparent: u64, newname: Name) {
-        let source = self
-            .nodes
-            .iter()
-            .find(|(_, n)| n.names.contains(&(parent, name.clone())))
-            .map(|(id, _)| *id);
-        let target = self
-            .nodes
-            .iter()
-            .find(|(_, n)| n.names.contains(&(newparent, newname.clone())))
-            .map(|(id, _)| *id);
+        let source = self.child(parent, name);
+        let target = self.child(newparent, &newname);
         if source.is_some() && source == target {
             return;
         } // POSIX same-inode rename is a no-op.
         self.unlink_name(newparent, &newname);
-        if let Some(node) = source.and_then(|id| self.nodes.get_mut(&id)) {
+        if let Some(id) = source
+            && let Some(node) = self.nodes.get_mut(&id)
+        {
+            self.names.remove(&(parent, name.as_str().to_owned()));
+            self.names
+                .insert((newparent, newname.as_str().to_owned()), id);
             node.names.retain(|(p, n)| *p != parent || n != name);
             node.names.push((newparent, newname));
             node.detached = false;
@@ -158,7 +156,10 @@ impl InodeTable {
         if let Some(node) = self.nodes.get_mut(&ino) {
             node.nlookup = node.nlookup.saturating_sub(count);
             if node.nlookup == 0 {
-                self.nodes.remove(&ino);
+                let node = self.nodes.remove(&ino).expect("node exists");
+                for alias in node.names {
+                    self.names.remove(&(alias.0, alias.1.as_str().to_owned()));
+                }
             }
         }
     }
@@ -223,6 +224,41 @@ mod tests {
         table.detach(3);
         table.record_name(3, 1, n("live"), InodeKind::File).unwrap();
         assert_eq!(table.path(3).unwrap().unwrap().as_str(), "live");
+    }
+    #[test]
+    fn reverse_index_tracks_replacement_rename_unlink_and_forget() {
+        let mut table = InodeTable::new(2);
+        let mut seed = 7_u64;
+        for _ in 0..2000 {
+            // Deterministic synthetic operation sequences; no fixture source.
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let id = 3 + ((seed >> 32) % 16);
+            let a = n(&format!("n{}", (seed >> 16) % 24));
+            let b = n(&format!("n{}", (seed >> 8) % 24));
+            match seed % 5 {
+                0 | 1 => {
+                    table.record_name(id as i64, 1, a, InodeKind::File).unwrap();
+                }
+                2 => table.rename(1, &a, 1, b),
+                3 => table.unlink_name(1, &a),
+                _ => table.forget(id, 1),
+            }
+            let rebuilt: BTreeMap<_, _> = table
+                .nodes
+                .iter()
+                .flat_map(|(&ino, node)| {
+                    node.names
+                        .iter()
+                        .map(move |alias| ((alias.0, alias.1.as_str().to_owned()), ino))
+                })
+                .collect();
+            assert_eq!(table.names, rebuilt);
+            for (&ino, node) in &table.nodes {
+                if ino != 1 {
+                    assert_eq!(node.detached, node.names.is_empty());
+                }
+            }
+        }
     }
     #[test]
     fn path_bounds_and_invalid_names() {
