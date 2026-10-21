@@ -104,6 +104,18 @@ impl Published {
             response: Answer::value(value, false),
         })
     }
+    pub fn workflow_grant(
+        mut grant: crate::dto::WorkflowGrant,
+    ) -> Result<Self, crate::error::ApiError> {
+        let token = grant.token.take();
+        let stored = json(&grant)?;
+        let secret = token.is_some();
+        grant.token = token;
+        Ok(Self {
+            stored,
+            response: Answer::value(json(grant)?, secret),
+        })
+    }
     pub fn credential(
         mut grant: crate::dto::IssuedCredential,
     ) -> Result<Self, crate::error::ApiError> {
@@ -319,6 +331,21 @@ pub async fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workflow_grant_strips_token_from_stored_value() {
+        let token = "ab".repeat(32);
+        let published = Published::workflow_grant(crate::dto::WorkflowGrant {
+            operation_id: uuid::Uuid::nil(),
+            token: Some(token.clone()),
+            mutation_epoch: 2,
+            expires_at: "synthetic".into(),
+        })
+        .unwrap();
+        assert!(published.stored["token"].is_null());
+        assert!(!published.stored.to_string().contains(&token));
+        assert_eq!(published.response.value["token"], token);
+        assert!(published.response.secret);
+    }
     #[test]
     fn canonical_order_is_recursive() {
         let a = serde_json::from_str(r#"{"z":[{"b":2,"a":1}],"a":0}"#).unwrap();

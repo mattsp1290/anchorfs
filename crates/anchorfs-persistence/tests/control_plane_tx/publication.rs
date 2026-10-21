@@ -9,12 +9,28 @@ async fn actor_session_and_credential_expiry_during_target_wait_roll_back() {
         let actor = authority::load_actor(&mut tx, &host, LockMode::Share)
             .await
             .unwrap();
-        let own = sessions::create(&mut tx, &actor, w, host.id, Duration::from_secs(3600), 64)
-            .await
-            .unwrap();
-        let target = sessions::create(&mut tx, &actor, w, host.id, Duration::from_secs(3600), 64)
-            .await
-            .unwrap();
+        let own = sessions::create(
+            &mut tx,
+            &actor,
+            w,
+            host.id,
+            Duration::from_secs(3600),
+            64,
+            None,
+        )
+        .await
+        .unwrap();
+        let target = sessions::create(
+            &mut tx,
+            &actor,
+            w,
+            host.id,
+            Duration::from_secs(3600),
+            64,
+            None,
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         if credential_expiry {
             sqlx::query("UPDATE credentials SET expires_at=clock_timestamp()+interval '500 milliseconds' WHERE id=$1").bind(host.id.0).execute(&db.pool).await.unwrap();
@@ -87,7 +103,15 @@ async fn mint_rechecks_target_credential_expiry_after_admission_wait() {
         .await
         .unwrap();
     {
-        let create = sessions::create(&mut tx, &actor, w, host.id, Duration::from_secs(3600), 64);
+        let create = sessions::create(
+            &mut tx,
+            &actor,
+            w,
+            host.id,
+            Duration::from_secs(3600),
+            64,
+            None,
+        );
         tokio::pin!(create);
         assert!(
             tokio::time::timeout(Duration::from_millis(700), &mut create)

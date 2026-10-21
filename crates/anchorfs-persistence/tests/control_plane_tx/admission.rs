@@ -20,21 +20,37 @@ async fn expired_rebind_shares_admission_with_create_and_other_rebinds() {
             host.id,
             Duration::from_secs(3600),
             64,
+            None,
         )
         .await
         .unwrap();
         let mut targets = Vec::new();
         for _ in 0..2 {
-            let target =
-                sessions::create(&mut tx, &admin, w, worker.id, Duration::from_secs(3600), 64)
-                    .await
-                    .unwrap();
+            let target = sessions::create(
+                &mut tx,
+                &admin,
+                w,
+                worker.id,
+                Duration::from_secs(3600),
+                64,
+                None,
+            )
+            .await
+            .unwrap();
             sqlx::query("UPDATE client_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1").bind(target.id.0).execute(&mut *tx).await.unwrap();
             targets.push(target.id);
         }
-        sessions::create(&mut tx, &admin, w, worker.id, Duration::from_secs(3600), 2)
-            .await
-            .unwrap();
+        sessions::create(
+            &mut tx,
+            &admin,
+            w,
+            worker.id,
+            Duration::from_secs(3600),
+            2,
+            None,
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
         let mut tasks = Vec::new();
@@ -63,11 +79,20 @@ async fn expired_rebind_shares_admission_with_create_and_other_rebinds() {
                         target,
                         Duration::from_secs(3600),
                         2,
+                        None,
                     )
                     .await
                 } else {
-                    sessions::create(&mut tx, &actor, w, worker_id, Duration::from_secs(3600), 2)
-                        .await
+                    sessions::create(
+                        &mut tx,
+                        &actor,
+                        w,
+                        worker_id,
+                        Duration::from_secs(3600),
+                        2,
+                        None,
+                    )
+                    .await
                 };
                 if result.is_ok() {
                     tx.commit().await.unwrap();
@@ -108,6 +133,7 @@ async fn renewed_session_does_not_release_a_hidden_mvcc_slot() {
         host.id,
         Duration::from_secs(3600),
         64,
+        None,
     )
     .await
     .unwrap();
@@ -118,6 +144,7 @@ async fn renewed_session_does_not_release_a_hidden_mvcc_slot() {
         worker.id,
         Duration::from_secs(3600),
         2,
+        None,
     )
     .await
     .unwrap();
@@ -128,6 +155,7 @@ async fn renewed_session_does_not_release_a_hidden_mvcc_slot() {
         worker.id,
         Duration::from_secs(3600),
         2,
+        None,
     )
     .await
     .unwrap();
@@ -170,8 +198,16 @@ async fn renewed_session_does_not_release_a_hidden_mvcc_slot() {
         let actor = authority::load_actor(&mut tx, &admin, LockMode::Share)
             .await
             .unwrap();
-        let result =
-            sessions::create(&mut tx, &actor, w, worker_id, Duration::from_secs(3600), 2).await;
+        let result = sessions::create(
+            &mut tx,
+            &actor,
+            w,
+            worker_id,
+            Duration::from_secs(3600),
+            2,
+            None,
+        )
+        .await;
         if result.is_ok() {
             tx.commit().await.unwrap();
         } else {

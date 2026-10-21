@@ -79,9 +79,17 @@ async fn own_session_renew_with_update_lock_has_no_deadlock() {
     let actor = authority::load_actor(&mut tx, &host, LockMode::Share)
         .await
         .unwrap();
-    let session = sessions::create(&mut tx, &actor, w, host.id, Duration::from_secs(3600), 64)
-        .await
-        .unwrap();
+    let session = sessions::create(
+        &mut tx,
+        &actor,
+        w,
+        host.id,
+        Duration::from_secs(3600),
+        64,
+        None,
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
     let request = || ReceiptRequest {
         key: "self-renew",
@@ -162,12 +170,28 @@ async fn cross_session_renew_surfaces_40p01() {
         .await
         .unwrap();
     let b = issue(&mut tx, &actor, new_credential(Some(w), Kind::Host)).await;
-    let a_session = sessions::create(&mut tx, &actor, w, a.id, Duration::from_secs(3600), 64)
-        .await
-        .unwrap();
-    let b_session = sessions::create(&mut tx, &actor, w, b.id, Duration::from_secs(3600), 64)
-        .await
-        .unwrap();
+    let a_session = sessions::create(
+        &mut tx,
+        &actor,
+        w,
+        a.id,
+        Duration::from_secs(3600),
+        64,
+        None,
+    )
+    .await
+    .unwrap();
+    let b_session = sessions::create(
+        &mut tx,
+        &actor,
+        w,
+        b.id,
+        Duration::from_secs(3600),
+        64,
+        None,
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
     let mut first = db.pool.begin().await.unwrap();
     let first_actor = authority::load_actor(&mut first, &a, LockMode::Share)

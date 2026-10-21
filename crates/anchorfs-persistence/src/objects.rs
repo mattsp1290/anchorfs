@@ -25,6 +25,14 @@ pub async fn stage(
     length: u32,
     digest: Sha256Digest,
 ) -> Result<ObjectRow, ReservationError> {
+    // INSERT's workspace FK takes KEY SHARE. Take workspace SHARE before the
+    // reservation so a lease waiting on the operation cannot close a cycle
+    // through a concurrent receipt fence waiting on this reservation.
+    // Callers already holding operation/reservation locks must have taken the
+    // workspace lock first (admission's prologue does so).
+    crate::authority::lock_workspace(tx, workspace)
+        .await?
+        .ok_or(ReservationError::NotFound)?;
     reservations::lock_active_share(tx, workspace, reservation, operation).await?;
     Ok(sqlx::query_as("INSERT INTO objects(workspace_id,id,byte_length,sha256,state,reservation_id) VALUES($1,$2,$3,$4,'staged',$5) RETURNING *")
         .bind(workspace.0).bind(id.0).bind(i64::from(length)).bind(digest.0.as_slice())

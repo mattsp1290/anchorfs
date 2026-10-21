@@ -14,6 +14,9 @@ WITH nodes AS (
  FROM inodes i JOIN workspaces w ON w.id=i.workspace_id WHERE i.workspace_id=$1
 ), violations AS (
  SELECT 'nlink:' || id AS violation FROM nodes WHERE nlink <> CASE WHEN kind='directory' THEN CASE WHEN unlinked_at IS NOT NULL THEN 0 ELSE 2+child_dirs END ELSE entries END
+ UNION ALL SELECT 'bound-epoch:' || s.id FROM client_sessions s JOIN workspaces w ON w.id=s.workspace_id
+ WHERE s.workspace_id=$1 AND s.revoked_at IS NULL AND s.bound_mutation_epoch>w.mutation_epoch
+ UNION ALL SELECT 'lease-owner-kind' FROM workspaces w JOIN credentials c ON c.id=w.workflow_owner_credential_id WHERE w.id=$1 AND c.kind<>'host'
  UNION ALL SELECT 'tombstone:' || id FROM nodes WHERE id<>root_inode_id AND ((nlink=0)<>(unlinked_at IS NOT NULL))
  UNION ALL SELECT 'released-linked:' || id FROM nodes WHERE charge_released_at IS NOT NULL AND nlink<>0
  UNION ALL SELECT 'entry-tombstone:' || id FROM nodes WHERE nlink=0 AND entries<>0

@@ -196,6 +196,7 @@ impl From<anchorfs_persistence::sessions::SessionError> for ApiError {
         use anchorfs_persistence::sessions::SessionError;
         match error {
             SessionError::Authority(error) => error.into(),
+            SessionError::Workflow(error) => error.into(),
             SessionError::Limit => ApiError::new(ErrorCode::QuotaExceeded, ""),
             SessionError::Database(error) => error.into(),
         }
@@ -255,5 +256,24 @@ impl From<anchorfs_persistence::manifests::ManifestError> for ApiError {
             ManifestError::ChunkSizeMismatch => Self::new(ErrorCode::Unsupported, ""),
             ManifestError::Database(error) => error.into(),
         }
+    }
+}
+
+impl From<anchorfs_persistence::workflows::WorkflowError> for ApiError {
+    fn from(error: anchorfs_persistence::workflows::WorkflowError) -> Self {
+        use anchorfs_persistence::workflows::WorkflowError::*;
+        let (code, message) = match error {
+            Authority(e) => return e.into(),
+            Database(e) => return e.into(),
+            LeaseActive => (ErrorCode::WorkspaceBusy, "lease_active"),
+            LeaseExpiredBlocksAcquire => (ErrorCode::WorkspaceBusy, "lease_expired"),
+            LeaseExpiredFencesProof => (ErrorCode::Fenced, "lease_expired"),
+            LeaseAbsent => (ErrorCode::WorkspaceBusy, "lease_absent"),
+            SessionBound => (ErrorCode::Fenced, "session_bound"),
+            ProofMismatch => (ErrorCode::Fenced, "workflow_proof_mismatch"),
+        };
+        let mut error = ApiError::new(code, "");
+        error.message = message.into();
+        error
     }
 }

@@ -12,5 +12,7 @@ mod publication;
 mod sessions;
 #[path = "control_plane_tx/support.rs"]
 mod support;
+#[path = "control_plane_tx/workflows.rs"]
+mod workflows;
 #[path = "control_plane_tx/workspaces.rs"]
 mod workspaces;

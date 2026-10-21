@@ -278,6 +278,22 @@ impl Fixture {
             }),
         }
     }
+    /// Dedicated capacity for contention tests; avoids hiding schedules behind
+    /// the ordinary fixture's two control permits and four database connections.
+    pub async fn concurrent_control_client(&self, connections: u32) -> Client {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(connections)
+            .connect_with((*self.pool.connect_options()).clone())
+            .await
+            .unwrap();
+        let mut config = (*self.config).clone();
+        config.db_max_connections = connections;
+        let mut state = AppState::production(config, pool, self.backend.service());
+        state.control_permits = Arc::new(tokio::sync::Semaphore::new(connections as usize));
+        Client {
+            app: build_router(state),
+        }
+    }
     pub fn workspace_path(&self) -> String {
         format!("/v1/workspaces/{}", self.workspace)
     }

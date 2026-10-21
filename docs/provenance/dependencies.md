@@ -106,3 +106,21 @@ is involved. Its typed LengthLimitError distinguishes malformed declared body
 length from transport/disconnect errors without matching error-message prose.
 This is the plan's allowed reviewed dependency exception: neither package
 version nor the resolved package set changes.
+
+## Stage 2a security patch exception — 2026-10-20
+
+Stage 2a adds no package or dependency edge. The owner explicitly approved
+updating two existing transitive packages after the advisory gate failed:
+
+| Package | Old version | New version | Origin | License |
+|---|---|---|---|---|
+| rustls-webpki | 0.103.15 | 0.103.16 | crates.io; official rustls/webpki repository | ISC |
+| webpki-roots | 1.0.9 | 1.0.10 | crates.io; official rustls/webpki-roots repository | CDLA-Permissive-2.0 |
+
+Exact-version `cargo info` source/license checks preceded incorporation. Both
+licenses are already permitted by deny.toml. Cargo.lock changes only these two
+versions and their registry checksums, addressing RUSTSEC-2026-0382 and
+RUSTSEC-2026-0381. The owner-approved exception supersedes the plan's unchanged
+lockfile constraint; imported specifications and the import manifest remain
+unchanged. See [D-WL1 and verification](stage2a-implementation-amendments.md).
+The post-update cargo-deny licenses/bans/advisories/sources gate passes.

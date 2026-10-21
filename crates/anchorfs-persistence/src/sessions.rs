@@ -35,6 +35,8 @@ impl From<SessionRow> for SessionView {
 pub enum SessionError {
     #[error(transparent)]
     Authority(#[from] AuthorityError),
+    #[error(transparent)]
+    Workflow(#[from] crate::workflows::WorkflowError),
     #[error("session limit reached")]
     Limit,
     #[error("database unavailable")]
@@ -54,6 +56,7 @@ pub async fn create(
     target: CredentialId,
     ttl: Duration,
     limit: u32,
+    bind: Option<(&crate::authority::WorkspaceLock, &str)>,
 ) -> Result<SessionView, SessionError> {
     if actor.kind == CredentialKind::Worker {
         return Err(AuthorityError::Forbidden.into());
@@ -77,14 +80,18 @@ pub async fn create(
     if row.revoked_at.is_some() || expired || row.kind == "administrator" {
         return Err(AuthorityError::NotFound.into());
     }
+    let bound = match bind {
+        Some((lock, token)) => Some(crate::workflows::bind_epoch(tx, lock, actor, token).await?),
+        None => None,
+    };
     lock_admission(tx, target).await?;
     if count_active(tx, target).await? >= i64::from(limit) {
         return Err(SessionError::Limit);
     }
     let id = SessionId::new();
     let credential_expiry = row.expires_at;
-    let row=sqlx::query_as::<_, SessionRow>("INSERT INTO client_sessions (id,workspace_id,credential_id,credential_epoch,session_epoch,bound_mutation_epoch,expires_at) VALUES ($1,$2,$3,$4,1,NULL,clock_timestamp()+$5*interval '1 second') RETURNING *")
-        .bind(id.0).bind(workspace.0).bind(target.0).bind(row.epoch).bind(ttl.as_secs_f64()).fetch_one(&mut **tx).await?;
+    let row=sqlx::query_as::<_, SessionRow>("INSERT INTO client_sessions (id,workspace_id,credential_id,credential_epoch,session_epoch,bound_mutation_epoch,expires_at) VALUES ($1,$2,$3,$4,1,$6,clock_timestamp()+$5*interval '1 second') RETURNING *")
+        .bind(id.0).bind(workspace.0).bind(target.0).bind(row.epoch).bind(ttl.as_secs_f64()).bind(bound).fetch_one(&mut **tx).await?;
     crate::authority::check_publication_time(tx, actor, None).await?;
     let target_expired: bool =
         sqlx::query_scalar("SELECT $1::timestamptz IS NOT NULL AND $1<=clock_timestamp()")
@@ -152,6 +159,7 @@ pub async fn renew(
     crate::authority::check_publication_time(tx, actor, Some(actor_session)).await?;
     Ok(row.into())
 }
+#[allow(clippy::too_many_arguments)] // Explicit transaction authority and admission bounds.
 pub async fn rebind(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorCredential,
@@ -160,19 +168,24 @@ pub async fn rebind(
     id: SessionId,
     ttl: Duration,
     limit: u32,
+    bind: Option<(&crate::authority::WorkspaceLock, &str)>,
 ) -> Result<SessionView, SessionError> {
     authorize(actor, actor_session, id, true)?;
     let row = target(tx, workspace, id).await?;
     if row.revoked_at.is_some() {
         return Err(AuthorityError::Fenced.into());
     }
+    let bound = match bind {
+        Some((lock, token)) => Some(crate::workflows::bind_epoch(tx, lock, actor, token).await?),
+        None => None,
+    };
     let credential = CredentialId(row.credential_id);
     lock_admission(tx, credential).await?;
     if expired(tx, &row).await? && count_active(tx, credential).await? >= i64::from(limit) {
         return Err(SessionError::Limit);
     }
-    let row=sqlx::query_as::<_,SessionRow>("UPDATE client_sessions SET session_epoch=session_epoch+1,bound_mutation_epoch=NULL,expires_at=clock_timestamp()+$3*interval '1 second' WHERE workspace_id=$1 AND id=$2 RETURNING *")
-        .bind(workspace.0).bind(id.0).bind(ttl.as_secs_f64()).fetch_one(&mut **tx).await?;
+    let row=sqlx::query_as::<_,SessionRow>("UPDATE client_sessions SET session_epoch=session_epoch+1,bound_mutation_epoch=$4,expires_at=clock_timestamp()+$3*interval '1 second' WHERE workspace_id=$1 AND id=$2 RETURNING *")
+        .bind(workspace.0).bind(id.0).bind(ttl.as_secs_f64()).bind(bound).fetch_one(&mut **tx).await?;
     crate::authority::check_publication_time(tx, actor, Some(actor_session)).await?;
     Ok(row.into())
 }

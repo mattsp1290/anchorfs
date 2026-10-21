@@ -12,3 +12,5 @@ mod manifests;
 mod receipts;
 #[path = "bytes_tx/support.rs"]
 mod support;
+#[path = "bytes_tx/workflows.rs"]
+mod workflows;

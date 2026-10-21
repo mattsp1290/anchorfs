@@ -258,6 +258,7 @@ async fn pins_bound_per_session_and_detect_mismatch() {
         actor.id,
         Duration::from_secs(60),
         64,
+        None,
     )
     .await
     .unwrap();

@@ -1,4 +1,8 @@
 const IMPLEMENTED: &[&str] = &[
+    "acquireWorkflowLease",
+    "renewWorkflowLease",
+    "releaseWorkflowLease",
+    "takeoverWorkflowLease",
     "createWorkspace",
     "getWorkspace",
     "createCredential",
@@ -330,7 +334,7 @@ async fn implemented_routes_demand_bearer_and_others_return_501() {
         }
     }
     assert_eq!(count, 38);
-    assert_eq!(implemented_count, 34);
+    assert_eq!(implemented_count, 38);
 }
 #[tokio::test]
 async fn invalid_body_returns_400_not_501() {

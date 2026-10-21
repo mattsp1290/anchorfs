@@ -197,12 +197,14 @@ impl<S: Send + Sync> FromRequestParts<S> for SessionBinding {
         }
     }
 }
-pub struct RequiredWorkflowGrant;
+pub struct RequiredWorkflowGrant(pub anchorfs_persistence::authority::WorkflowProof);
 impl<S: Send + Sync> FromRequestParts<S> for RequiredWorkflowGrant {
     type Rejection = ApiError;
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
         workflow_proof(parts, true)?;
-        Ok(Self)
+        let OptionalWorkflowGrant(proof) =
+            OptionalWorkflowGrant::from_request_parts(parts, &()).await?;
+        Ok(Self(proof.expect("required proof validated")))
     }
 }
 
@@ -376,6 +378,51 @@ mod bearer_tests {
                 let response = error.into_response();
                 assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
                 assert_eq!(response.headers()["WWW-Authenticate"], challenge);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod lease_extractor_tests {
+    use super::*;
+    #[tokio::test]
+    async fn required_workflow_grant_decodes_and_validates() {
+        for (token, epoch, valid) in [
+            (Some("ab".repeat(32)), Some("2"), true),
+            (None, Some("2"), false),
+            (Some("ab".repeat(32)), None, false),
+            (Some("bad".into()), Some("2"), false),
+            (Some("ab".repeat(32)), Some("0"), false),
+        ] {
+            let mut req = axum::http::Request::builder();
+            if let Some(t) = token {
+                req = req.header("X-Anchorfs-Workflow-Token", t);
+            }
+            if let Some(e) = epoch {
+                req = req.header("X-Anchorfs-Workflow-Epoch", e);
+            }
+            let (mut parts, _) = req.body(()).unwrap().into_parts();
+            parts
+                .extensions
+                .insert(crate::middleware::TraceId("extractor-test".into()));
+            let result = RequiredWorkflowGrant::from_request_parts(&mut parts, &()).await;
+            if valid {
+                let proof = result.unwrap().0;
+                assert_eq!(proof.token, [171; 32]);
+                assert_eq!(proof.epoch, 2);
+                assert!(
+                    OptionalWorkflowGrant::from_request_parts(&mut parts, &())
+                        .await
+                        .unwrap()
+                        .0
+                        .is_some()
+                );
+            } else {
+                assert_eq!(
+                    result.err().unwrap().code,
+                    anchorfs_core::ErrorCode::InvalidInput
+                );
             }
         }
     }

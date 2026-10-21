@@ -149,12 +149,12 @@ pub struct CreateCredential {
     pub expires_at: Option<String>,
     pub max_reservation_bytes: u64,
 }
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct CreateSession {
     pub credential_id: Uuid,
     pub bind_to_workflow_lease: Option<String>,
 }
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct RebindSession {
     pub workflow_lease_token: Option<String>,
 }
@@ -242,6 +242,7 @@ pub struct LookupQuery {
 }
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct WorkspaceInfo {
+    pub workflow: Option<WorkflowStatus>,
     pub workspace_id: Uuid,
     pub root: InodeAttributes,
     pub authorization_epoch: i64,
@@ -292,7 +293,9 @@ pub struct ReadPinGrant {
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct WorkflowGrant {
     pub operation_id: Uuid,
-    pub token: String,
+    /// Present only on initial acquire/takeover; renewals and receipt replays return null.
+    /// A replayed grant is not a usable token.
+    pub token: Option<String>,
     pub mutation_epoch: i64,
     pub expires_at: String,
 }
@@ -352,4 +355,73 @@ pub enum OperationStateDto {
     Committed,
     Failed,
     Indeterminate,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct WorkflowStatus {
+    pub owner_credential_id: Uuid,
+    pub mutation_epoch: i64,
+    pub expires_at: String,
+    pub active: bool,
+}
+
+impl std::fmt::Debug for CreateSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateSession")
+            .field("bind_to_workflow_lease", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for RebindSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RebindSession")
+            .field("workflow_lease_token", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for WorkflowGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkflowGrant")
+            .field("token", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod lease_debug_tests {
+    use super::*;
+    #[test]
+    fn request_debug_redacts_lease_tokens() {
+        let token = "ab".repeat(32);
+        let values = [
+            format!(
+                "{:?}",
+                CreateSession {
+                    credential_id: Uuid::nil(),
+                    bind_to_workflow_lease: Some(token.clone())
+                }
+            ),
+            format!(
+                "{:?}",
+                RebindSession {
+                    workflow_lease_token: Some(token.clone())
+                }
+            ),
+            format!(
+                "{:?}",
+                WorkflowGrant {
+                    operation_id: Uuid::nil(),
+                    token: Some(token.clone()),
+                    mutation_epoch: 2,
+                    expires_at: "synthetic".into()
+                }
+            ),
+        ];
+        for value in values {
+            assert!(value.contains("[redacted]"));
+            assert!(!value.contains(&token));
+        }
+    }
 }

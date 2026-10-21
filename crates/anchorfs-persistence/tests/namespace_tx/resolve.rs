@@ -287,6 +287,7 @@ async fn epoch_writer_blocks_behind_inflight_mutation() {
         host.id,
         Duration::from_secs(60),
         64,
+        None,
     )
     .await
     .unwrap();
