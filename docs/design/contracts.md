@@ -267,7 +267,7 @@ One deployment_id is both schema_meta identity and bucket prefix. Startup compar
 
 ## Open deviations
 
-TLS (U1), Stage 3a: when `ANCHORFS_TLS_CERT_PATH` and
+TLS (U1) resolved in Stage 3a: when `ANCHORFS_TLS_CERT_PATH` and
 `ANCHORFS_TLS_KEY_PATH` are set, the service terminates TLS 1.3 using rustls
 with the explicit aws-lc-rs provider. Durable non-loopback listeners require
 TLS (exit 7). Partial or invalid TLS configuration exits 2 before database

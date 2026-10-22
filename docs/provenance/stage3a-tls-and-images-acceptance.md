@@ -12,7 +12,7 @@ publication, cross-node, performance or legal clearance claim is made.
 | 5 Linux https mount | Linux `tls::https_mount_with_ca_bundle_round_trips`, `tls::https_mount_without_trusted_ca_exits_before_mounting` | pending host + CI |
 | 6 native images | CI `image-amd64`, `image-arm64`: both targets and packaging smoke, including explicit architecture assertions for both images | local arm64 targets and strengthened smoke passed; native amd64/arm64 CI pending |
 | 7 provenance | conformance `dependency_record_matches_workspace`, `base_image_record_matches_dockerfiles`, `builder_image_matches_toolchain`; cargo-deny | cargo-deny and all five provenance tests passed |
-| 8 records/regression | Stage 3a records, contracts, dependency/ops/readme updates; OpenAPI snapshot, design coverage, imported hashes | hashes, OpenAPI, design coverage and 341 workspace tests passed; standard fixes applied, thermonuclear/CI pending |
+| 8 records/regression | Stage 3a records, contracts, dependency/ops/readme updates; OpenAPI snapshot, design coverage, imported hashes | hashes, OpenAPI, design coverage and 341 workspace tests passed; standard fixes applied; fresh thermonuclear APPROVE/zero findings; both local checkpoint gates passed; CI/host pending |
 
 See [review evidence](stage3a-tls-and-images-review.md) for commands, revisions,
 review checkpoints, run identifiers and limits. Kernel tests run the host binary;

@@ -76,6 +76,12 @@ Linux host and hosted gates are in progress; see
 Tests use separate binary TLS modules to keep the existing binary suite readable.
 The native client fixture initially used an absolute root path, rejected by the
 existing API; it was corrected to the root-stat API (`stat(None)`) before rerun.
+A narrow explicit D13 deviation permits the service binary integration test to
+name rustls/rustls-pki-types from the service's existing runtime dependencies
+for verified keep-alive and HTTP/2 socket probes. Conformance and mount fixtures
+still name only AnchorFS-owned TLS/handle types and gain no TLS-library edge.
+The fresh adversarial reviewer checked and accepted this dependency boundary;
+no package, wire or runtime policy changes result.
 The server file loader reads bytes then delegates to the common PEM parser so
 file and in-memory fixtures use exactly the same validation path.
 
@@ -122,8 +128,37 @@ Standard checkpoint gates passed on the corrected worktree:
 `cargo deny check licenses bans advisories sources`; `cargo build --workspace --locked`;
 `cargo test --workspace --no-run --locked`; `cargo test --workspace --locked -- --test-threads=4`
 (341 tests, including doctests); and `git diff --check`.
-The Linux-only kernel test target has zero tests on macOS. First push,
-thermonuclear review, PR and hosted execution are pending.
+The Linux-only kernel test target has zero tests on macOS. The first checkpoint committed the fixes as
+`9aed65171b24222bd94c401e485c0cb3bf927534` and pushed successfully to origin;
+`git ls-remote` confirmed the remote branch equals local HEAD.
+
+Thermonuclear Maintainability independently reviewed that revision using the
+complete live upstream rubric pinned at
+`eb4db2b55b2b7dec3d9282754cddf0a56bf4ff10`:
+https://raw.githubusercontent.com/cursor/plugins/eb4db2b55b2b7dec3d9282754cddf0a56bf4ff10/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md
+The SHA was resolved from refs/heads/main after the first verified push, and
+the fetched frontmatter name was validated. Verdict **APPROVE**, zero Critical,
+Important or Suggestions, provenance **no blocking provenance findings**.
+
+Fresh context was provided through an explicit evidence packet containing the
+full code/diff, requirements, stats and history. The standard-review findings
+and verdict section was withheld from the supplied provenance-record copy and
+its diff under AGENTS.md's independent-context rule. Generic user dotfiles rules
+for git, delegation and efficiency contain no research or reviewer findings;
+no global CLAUDE.md or auto-memory was supplied to the standard reviewer
+processes. The adversarial reviewer inherited no parent conversation. All
+three stages are engineering reviews with stated evidence limits, not legal
+clearance or proof of erased historical exposure.
+
+Adversarial artifacts (local, uncommitted):
+`reviews/feat-stage3a-tls-and-images-2026-10-22-110203-9aed65171b24-thermonuclear/`,
+slug `thermo-nuclear-code-quality-review`. Canonical fixer invoked on that exact
+manifest: `fixed:0 skipped:0 needs-manual:0`. The second checkpoint repeated all six local Rust gates above and
+`git diff --check`: all 341 workspace tests passed again. Both Docker targets
+rebuilt using cached builder layers and `bash ci/image-smoke.sh arm64` passed.
+No implementation change was required by this review; this checkpoint records
+its approval and the D13/documentation clarifications. Second push, PR and
+hosted execution are pending.
 
 ## Limits carried forward
 

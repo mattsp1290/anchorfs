@@ -31,8 +31,8 @@ plaintext exits 7. Development permits plaintext, including binding all
 addresses, for disposable local testing. PostgreSQL and S3 transport policies
 are unchanged. No certificate or key example is shipped.
 
-Mount containers additionally require `/dev/fuse`, appropriate host/pod
-capabilities, a writable mountpoint and mount propagation chosen for the
+Mount containers additionally require `/dev/fuse`, `SYS_ADMIN` or an equivalent host/pod
+policy, a writable mountpoint and mount propagation chosen for the
 consumer. The image runs as uid 10001; device and mountpoint permissions must
 allow that user. These runtime settings and containerized kernel mounting
 are not verified by packaging smoke. No cluster, Helm, Spaces or cross-node
