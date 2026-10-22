@@ -1,7 +1,7 @@
 # anchorfs
 durable state independent of compute
 
-AnchorFS is an independent Rust storage project for persistent workspaces shared by agent harnesses and replaceable tool workers. The service implements authenticated workspace/session control, transactional namespace metadata, file-byte operations and read pins against PostgreSQL and a locally verified S3 backend adapter. The route suite verifies 38 implemented operations with no stubs. Stage 2a adds exclusive workflow leases, host-controlled session binding and lease status; see [Stage 2a evidence](docs/provenance/stage2a-workflow-leases-review.md). Stage 1c local acceptance, independent review and hosted Linux/macOS gates passed. Linux mounts remain later work. See [Stage 1c evidence](docs/provenance/stage1c-byte-path-review.md).
+AnchorFS is an independent Rust storage project for persistent workspaces shared by agent harnesses and replaceable tool workers. The service implements authenticated workspace/session control, transactional namespace metadata, file-byte operations and read pins against PostgreSQL and a locally verified S3 backend adapter. The route suite verifies 38 implemented operations with no stubs. Stage 2a adds exclusive workflow leases, host-controlled session binding and lease status; see [Stage 2a evidence](docs/provenance/stage2a-workflow-leases-review.md). Stage 1c local acceptance, independent review and hosted Linux/macOS gates passed. Stage 2b adds the strict Linux FUSE mount and a partial native Rust client; local kernel acceptance, review checkpoints and all five hosted jobs passed; see [Stage 2b evidence](docs/provenance/stage2b-linux-mount-review.md). See [Linux host verification](docs/ops/linux-host-verification.md). See [Stage 1c evidence](docs/provenance/stage1c-byte-path-review.md).
 
 Start with [the implementation documents](docs/README.md) and [cleanroom policy](docs/cleanroom.md).
 
@@ -21,3 +21,19 @@ Use Rust 1.95.0 (rust-toolchain.toml). Run `cargo build --workspace --locked`,
 Install the gate with `cargo install cargo-deny --locked --version 0.20.2`.
 Integration tests require a running Docker daemon and create disposable PostgreSQL
 and pinned MinIO containers; unavailable Docker fails the tests. No existing infrastructure data is used.
+
+Mount an ordinary pre-minted session on Linux (the credential file contains the
+bearer credential, not a CLI argument value):
+
+```sh
+anchorfs-mount mount /path/to/empty-mountpoint \
+  --endpoint https://anchorfs.example.invalid --workspace <workspace-uuid> \
+  --credential-file /path/to/credential \
+  --session-id <session-uuid> --session-epoch <epoch>
+```
+
+A host credential may omit the session pair to self-mint an ordinary session.
+For a lease-bound mount, provide the bound session plus `--workflow-token-file`
+and `--workflow-epoch`. Use `--allow-plaintext` only when explicitly selecting
+an HTTP endpoint. TLS termination in the service remains deferred. The mount
+is Linux-only; `--print-profile` and portable tests also work on macOS.

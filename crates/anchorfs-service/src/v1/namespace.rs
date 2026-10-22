@@ -297,6 +297,22 @@ pub async fn set_attributes(
     if let Some(path) = &body.path {
         validate_path(path, &trace.0)?;
     }
+    let atime = parse_attribute_time(body.atime.as_deref(), &trace.0)?;
+    let mtime = parse_attribute_time(body.mtime.as_deref(), &trace.0)?;
+    // Retain the original request identity, not a second mutable copy of its
+    // raw timestamps. Normalization must not alter historical receipt digests.
+    let digest = receipt::request_digest(
+        "attributes_set",
+        &[&workspace.to_string()],
+        Some(&serde_json::to_value(&body).expect("request JSON")),
+    );
+    let update = anchorfs_core::AttributeUpdate {
+        mode: body.mode,
+        uid: body.uid,
+        gid: body.gid,
+        atime,
+        mtime,
+    };
     mutate(
         MutationCall {
             state,
@@ -307,7 +323,11 @@ pub async fn set_attributes(
             workflow,
             proof,
         },
-        Mutation::Attributes(body),
+        Mutation::Attributes {
+            path: body.path,
+            update,
+            digest,
+        },
     )
     .await
 }
@@ -328,20 +348,28 @@ enum Mutation {
     Link(CreateLink),
     Symlink(CreateSymlink),
     Rename(Rename),
-    Attributes(SetAttributes),
+    Attributes {
+        path: Option<String>,
+        update: anchorfs_core::AttributeUpdate,
+        digest: [u8; 32],
+    },
 }
 impl Mutation {
-    fn request(&self) -> (&'static str, serde_json::Value) {
+    fn request(&self, workspace: WorkspaceId) -> (&'static str, [u8; 32]) {
         use serde_json::{json, to_value};
-        match self {
+        let (op_type, body) = match self {
             Self::Mkdir(b) => ("directory_create", to_value(b).expect("request JSON")),
             Self::Rmdir(path) => ("directory_remove", json!({"path":path})),
             Self::Unlink(path) => ("unlink", json!({"path":path})),
             Self::Link(b) => ("link_create", to_value(b).expect("request JSON")),
             Self::Symlink(b) => ("symlink_create", to_value(b).expect("request JSON")),
             Self::Rename(b) => ("rename", to_value(b).expect("request JSON")),
-            Self::Attributes(b) => ("attributes_set", to_value(b).expect("request JSON")),
-        }
+            Self::Attributes { digest, .. } => return ("attributes_set", *digest),
+        };
+        (
+            op_type,
+            receipt::request_digest(op_type, &[&workspace.to_string()], Some(&body)),
+        )
     }
     async fn apply(
         self,
@@ -364,15 +392,13 @@ impl Mutation {
                     .rename(caller, &path(&b.from), &path(&b.to))
                     .await?
             }
-            Self::Attributes(b) => {
+            Self::Attributes {
+                path: value,
+                update,
+                ..
+            } => {
                 namespace
-                    .set_attributes(
-                        caller,
-                        b.path.as_deref().map(path).as_ref(),
-                        b.mode,
-                        b.uid,
-                        b.gid,
-                    )
+                    .set_attributes(caller, value.as_deref().map(path).as_ref(), update)
                     .await?
             }
         })
@@ -388,8 +414,7 @@ async fn mutate(call: MutationCall, mutation: Mutation) -> Result<Response, ApiE
         workflow,
         proof,
     } = call;
-    let (op_type, body) = mutation.request();
-    let digest = receipt::request_digest(op_type, &[&workspace.to_string()], Some(&body));
+    let (op_type, digest) = mutation.request(workspace);
     let retention = state.config.receipt_retention;
     let result = control::run(
         &state,
@@ -587,4 +612,18 @@ async fn read(
         },
     )
     .await
+}
+
+fn parse_attribute_time(
+    value: Option<&str>,
+    trace: &str,
+) -> Result<Option<time::OffsetDateTime>, ApiError> {
+    value
+        .map(|value| {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                .ok()
+                .filter(|time| (1..=9999).contains(&time.year()))
+                .ok_or_else(|| ApiError::new(anchorfs_core::ErrorCode::InvalidInput, trace))
+        })
+        .transpose()
 }

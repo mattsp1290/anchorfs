@@ -1,4 +1,7 @@
 //! Shared AnchorFS vocabulary without persistence or wire-framework coupling.
+pub mod attributes;
+pub mod timestamp;
+pub use attributes::AttributeUpdate;
 pub mod chunking;
 pub mod digest;
 pub mod error;

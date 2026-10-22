@@ -35,10 +35,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchorfs-client"
+version = "0.1.0"
+dependencies = [
+ "anchorfs-core",
+ "bytes",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "anchorfs-conformance"
 version = "0.1.0"
 dependencies = [
  "anchorfs-backend",
+ "anchorfs-client",
  "anchorfs-core",
  "anchorfs-persistence",
  "anchorfs-service",
@@ -78,15 +96,31 @@ dependencies = [
 name = "anchorfs-mount"
 version = "0.1.0"
 dependencies = [
+ "anchorfs-backend",
+ "anchorfs-client",
  "anchorfs-core",
+ "anchorfs-persistence",
+ "anchorfs-service",
+ "aws-sdk-s3",
+ "axum",
+ "bytes",
  "clap",
  "fuser",
+ "libc",
+ "nix",
+ "reqwest",
  "serde",
  "serde_json",
+ "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]

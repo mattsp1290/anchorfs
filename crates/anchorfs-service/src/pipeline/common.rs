@@ -367,8 +367,8 @@ async fn reserve_parts(
     })
 }
 pub fn failure_code(error: &ApiError) -> &str {
-    if error.message == "reservation_expired" {
-        "reservation_expired"
+    if error.message == anchorfs_core::error::RESERVATION_EXPIRED {
+        anchorfs_core::error::RESERVATION_EXPIRED
     } else {
         error.code.as_str()
     }

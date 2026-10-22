@@ -10,7 +10,7 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | aws-credential-types | 1.3.0 | Apache-2.0 | https://github.com/smithy-lang/smithy-rs | lazy credential provider future for synchronous network-free construction |
 | aws-smithy-http-client | 1.5.0 | Apache-2.0 | https://github.com/smithy-lang/smithy-rs | explicit CA trust bundle with TLS verification |
 | aws-config | 1.12.0 | Apache-2.0 | https://github.com/smithy-lang/smithy-rs | official AWS configuration |
-| aws-sdk-s3 | 1.152.0 | Apache-2.0 | https://github.com/awslabs/aws-sdk-rust | official S3 client; raw observer in conformance tests |
+| aws-sdk-s3 | 1.152.0 | Apache-2.0 | https://github.com/awslabs/aws-sdk-rust | official S3 client; raw observer in conformance tests; mount fixture bucket setup |
 | axum | 0.8.9 | MIT | https://github.com/tokio-rs/axum | HTTP server |
 | bytes | 1.12.1 | MIT | https://github.com/tokio-rs/bytes | binary buffers |
 | cargo_metadata | 0.23.1 | MIT | https://github.com/oli-obk/cargo_metadata | workspace edge verification |
@@ -18,9 +18,10 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | futures-core | 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | bounded body streaming in anchorfs-service and failing streams in the conformance fault proxy |
 | fuser | 0.18.0 | MIT | https://github.com/cberner/fuser | Linux FUSE boundary |
 | http-body-util | 0.1.5 | MIT | https://github.com/hyperium/http-body | typed length-limit error classification for streamed replacement; reviewed 2026-10-20 |
+| libc | 0.2.191 | MIT OR Apache-2.0 | https://github.com/rust-lang/libc | Linux mount open/mode constants and raw test syscalls |
 | nix | 0.31.3 | MIT | https://github.com/nix-rust/nix | test process signals |
 | rand | 0.9.5 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | random secrets; conformance fixtures |
-| reqwest | 0.12.28 | MIT OR Apache-2.0 | https://github.com/seanmonstar/reqwest | binary HTTP tests and the conformance fault proxy |
+| reqwest | 0.12.28 | MIT OR Apache-2.0 | https://github.com/seanmonstar/reqwest | native-API client (`anchorfs-client`), binary HTTP tests and the conformance fault proxy |
 | serde | 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde | serialization |
 | serde_json | 1.0.154 | MIT OR Apache-2.0 | https://github.com/serde-rs/json | JSON and persistence receipt payloads |
 | proptest | 1.12.0 | MIT OR Apache-2.0 | https://github.com/proptest-rs/proptest | namespace model/property tests (dev-dependency) |
@@ -31,7 +32,7 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | testcontainers | 0.27.3 | MIT OR Apache-2.0 | https://github.com/testcontainers/testcontainers-rs | disposable test infrastructure |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror | typed errors |
 | time | 0.3.55 | MIT OR Apache-2.0 | https://github.com/time-rs/time | timestamps |
-| tokio | 1.53.3 | MIT | https://github.com/tokio-rs/tokio | async runtime |
+| tokio | 1.53.3 | MIT | https://github.com/tokio-rs/tokio | async runtime; process feature for the event-driven non-lazy unmount helper |
 | toml | 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | manifest verification |
 | tower-http | 0.6.11 | MIT | https://github.com/tower-rs/tower-http | HTTP middleware |
 | tower | 0.5.3 | MIT | https://github.com/tower-rs/tower | service composition and testing |
@@ -124,3 +125,35 @@ RUSTSEC-2026-0381. The owner-approved exception supersedes the plan's unchanged
 lockfile constraint; imported specifications and the import manifest remain
 unchanged. See [D-WL1 and verification](stage2a-implementation-amendments.md).
 The post-update cargo-deny licenses/bans/advisories/sources gate passes.
+
+## Stage 2b dependency role review (2026-10-21)
+
+Before incorporating the runtime reqwest edge, `cargo info reqwest@0.12.28`
+confirmed MIT OR Apache-2.0 and https://github.com/seanmonstar/reqwest.
+The existing pinned general-purpose HTTP library is an approved input; no
+competitor client or SDK was consulted. The shipped mount will embed the
+existing `webpki-roots` trust roots through reqwest's rustls feature. The
+`https` transport remains unexercised by this milestone's acceptance tests.
+
+`cargo info libc@0.2.191` confirmed MIT OR Apache-2.0 and
+https://github.com/rust-lang/libc before the planned Linux direct edge.
+No new registry package is authorized by this milestone.
+
+## Runtime tools for Stage 2b
+
+`fusermount3` (fuse3 3.14.0 on the verification host; Ubuntu's fuse3 package
+in CI) is an external helper process, never linked, vendored or distributed by
+AnchorFS. libfuse is LGPL-2.1; the utility is GPL-2.0. `git` is GPL-2.0 and is
+executed only as a synthetic smoke workload. These are permitted platform and
+test tools from the reviewed Stage 2b plan; no competitor dependency is added.
+
+The Linux mount test target reuses the repository's MinIO fixture source and
+API response-loss relay by path. The new fixture, syscall tests and workloads
+are independently authored from the plan and the existing service contract.
+All added dev-dependencies were already pinned and licensed workspace inputs;
+only workspace crate/dependency edges change in Cargo.lock.
+
+Stage 2b structural hardening enables Tokio's existing `process` feature for the
+non-lazy helper. The package version, source and license remain unchanged; no
+registry package is added. RFC3339 serde helpers move from the independently
+authored client wire module into core for the shared metadata-update type.

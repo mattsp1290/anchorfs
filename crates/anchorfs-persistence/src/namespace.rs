@@ -489,13 +489,18 @@ impl NamespaceMutation<'_, '_> {
         &mut self,
         caller: &Caller,
         path: Option<&WorkspacePath>,
-        mode: Option<u32>,
-        uid: Option<u32>,
-        gid: Option<u32>,
+        update: anchorfs_core::AttributeUpdate,
     ) -> Result<Mutated, NamespaceError> {
-        if mode.is_none() && uid.is_none() && gid.is_none() {
+        if update.is_empty() {
             return Err(NamespaceError::InvalidInput);
         }
+        let anchorfs_core::AttributeUpdate {
+            mode,
+            uid,
+            gid,
+            atime,
+            mtime,
+        } = update;
         if let Some(mode) = mode {
             validate_mode(mode)?;
         }
@@ -508,13 +513,14 @@ impl NamespaceMutation<'_, '_> {
             return Err(NamespaceError::InvalidInput);
         }
         if !caller.admin
-            && ((mode.is_some() && row.uid != i64::from(caller.identity.uid))
+            && (((mode.is_some() || atime.is_some() || mtime.is_some())
+                && row.uid != i64::from(caller.identity.uid))
                 || uid.is_some()
                 || gid.is_some())
         {
             return Err(NamespaceError::Forbidden);
         }
-        let row: InodeRow=sqlx::query_as("UPDATE inodes SET mode=coalesce($3,mode),uid=coalesce($4,uid),gid=coalesce($5,gid),ctime=transaction_timestamp(),generation=generation+1 WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(row.id).bind(mode.map(|v|v as i32)).bind(uid.map(i64::from)).bind(gid.map(i64::from)).fetch_one(&mut **tx).await?;
+        let row: InodeRow=sqlx::query_as("UPDATE inodes SET mode=coalesce($3,mode),uid=coalesce($4,uid),gid=coalesce($5,gid),atime=coalesce($6,atime),mtime=coalesce($7,mtime),ctime=transaction_timestamp(),generation=generation+1 WHERE workspace_id=$1 AND id=$2 RETURNING *").bind(w.0).bind(row.id).bind(mode.map(|v|v as i32)).bind(uid.map(i64::from)).bind(gid.map(i64::from)).bind(atime).bind(mtime).fetch_one(&mut **tx).await?;
         Ok(mutated(&row))
     }
     pub async fn rename(

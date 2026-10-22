@@ -3,7 +3,7 @@ mod linux;
 #[cfg(not(target_os = "linux"))]
 mod stub;
 #[cfg(target_os = "linux")]
-pub use linux::{AnchorFs, mount_options, platform_supported};
+pub use linux::{AnchorFs, fuse_config, mount_options, platform_supported, spawn};
 #[cfg(not(target_os = "linux"))]
 pub use stub::{mount_options, platform_supported};
 
@@ -19,7 +19,14 @@ mod tests {
             assert!(platform_supported());
             assert_eq!(
                 options(&MountProfile::strict()).unwrap(),
-                vec!["default_permissions"]
+                vec![
+                    "default_permissions",
+                    "nosuid",
+                    "nodev",
+                    "noatime",
+                    "fsname=anchorfs",
+                    "subtype=anchorfs"
+                ]
             );
         } else {
             assert!(!platform_supported());

@@ -9,5 +9,7 @@ mod permissions;
 mod reads;
 #[path = "namespace/recovery.rs"]
 mod recovery;
+#[path = "namespace/times.rs"]
+mod times;
 #[path = "namespace/workflows/mod.rs"]
 mod workflows;

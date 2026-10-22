@@ -326,3 +326,39 @@ async fn mutation_context_bumps_namespace_once() {
     tx.commit().await.unwrap();
     invariants(&db, w).await;
 }
+
+#[tokio::test]
+async fn explicit_times_update_generation_and_empty_update_is_rejected() {
+    let (db, w) = fixture().await;
+    let mut tx = db.pool.begin().await.unwrap();
+    let before = namespace::root(&mut tx, w).await.unwrap();
+    let instant = time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+    namespace::lock(&mut tx, w)
+        .await
+        .unwrap()
+        .set_attributes(
+            &caller(),
+            None,
+            anchorfs_core::AttributeUpdate {
+                atime: Some(instant),
+                mtime: Some(instant),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let after = namespace::root(&mut tx, w).await.unwrap();
+    assert_eq!(after.atime, instant);
+    assert_eq!(after.mtime, instant);
+    assert_eq!(after.generation, before.generation + 1);
+    assert!(matches!(
+        namespace::lock(&mut tx, w)
+            .await
+            .unwrap()
+            .set_attributes(&caller(), None, anchorfs_core::AttributeUpdate::default())
+            .await,
+        Err(NamespaceError::InvalidInput)
+    ));
+    tx.commit().await.unwrap();
+    invariants(&db, w).await;
+}

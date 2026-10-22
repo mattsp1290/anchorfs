@@ -277,15 +277,15 @@ Official platform references consulted 2026-10-17. This is a target matrix, not 
 
 | Target | Contract | Source | Status |
 |---|---|---|---|
-| Linux kernel | ≥5.10 with CONFIG_FUSE_FS | https://docs.kernel.org/filesystems/fuse/fuse.html | unverified until Stage 2 |
-| FUSE protocol | ≥7.31 | https://github.com/torvalds/linux/blob/v5.10/include/uapi/linux/fuse.h | unverified until Stage 2 |
-| mount helper | fusermount3, fuse 3.x | https://github.com/libfuse/libfuse | unverified until Stage 2 |
-| Strict file profile | direct_io=true, writeback_cache=false, allow_mmap=false | spec 02 Reads and caching | profile serialization verified; kernel behavior unverified until Stage 2 |
-| Metadata cache | attr_ttl=entry_ttl=negative_ttl=0 | spec 02 Reads and caching | profile serialization verified; kernel behavior unverified until Stage 2 |
-| Permissions | default_permissions=true; server checks mandatory | spec 03 Identity and permissions | mount options compile; enforcement unverified until Stage 1/2 |
+| Linux kernel | ≥5.10 with CONFIG_FUSE_FS | https://docs.kernel.org/filesystems/fuse/fuse.html | host 6.8.0-124-generic and hosted 6.17.0-1022-azure gates passed; see Stage 2b evidence |
+| FUSE protocol | ≥7.31 | https://github.com/torvalds/linux/blob/v5.10/include/uapi/linux/fuse.h | host 6.8.0-124-generic and hosted 6.17.0-1022-azure gates passed; see Stage 2b evidence |
+| mount helper | fusermount3, fuse 3.x | https://github.com/libfuse/libfuse | host 6.8.0-124-generic and hosted 6.17.0-1022-azure gates passed; see Stage 2b evidence |
+| Strict file profile | direct_io=true, writeback_cache=false, allow_mmap=false | spec 02 Reads and caching | serialization and full host/hosted kernel gates passed (6.8.0-124-generic / 6.17.0-1022-azure) |
+| Metadata cache | attr_ttl=entry_ttl=negative_ttl=0 | spec 02 Reads and caching | serialization and full host/hosted kernel gates passed (6.8.0-124-generic / 6.17.0-1022-azure) |
+| Permissions | default_permissions=true; server checks mandatory | spec 03 Identity and permissions | server conformance and Linux 6.8.0-124-generic permission tests passed |
 | Other OS | CLI prints profile; mount returns UnsupportedPlatform | independent plan D5 | macOS stub tests verified; other targets unverified |
 
-Only default_permissions is a mount option here. direct_io is an open/reply flag and TTLs are reply fields to apply in Stage 2; no auto-cache/writeback option is enabled. mmap, flock/fcntl, ACLs, xattrs initially, device nodes, sockets/FIFOs and renameat2 flags beyond none are unsupported. No filesystem operation is implemented by the skeleton.
+The Stage 2b options are default_permissions, nosuid, nodev, noatime, fsname=anchorfs and subtype=anchorfs. Direct I/O is an open/reply flag and TTLs are reply fields; auto-cache and writeback remain disabled. Shared writable mmap, flock/fcntl, ACLs, xattrs, device nodes, sockets/FIFOs and renameat2 flags beyond none are unsupported. The Linux mount profile below records the implemented translation and limits.
 
 ## Provider matrix
 
@@ -461,3 +461,123 @@ Logical quota counts each non-root inode once plus its size (symlink target byte
 Limits: no byte routes or manifests, and truncate-on-open of an inode with a manifest is 501 until the byte milestone. Workflow routes remain 501; only the owner/token/epoch and bound-session predicates are implemented and exercised with disposable fixture lease rows. Maintenance state is currently ignored. Expiry sweepers and physical tombstone bounds are deferred; repeated create/unlink can grow inode rows at zero live logical charge. Development signing keys are ephemeral, so restart or differing replica keys invalidate cursors; clients restart listing. Durable deployments require a configured key. These behaviors do not claim full POSIX compliance, competitor compatibility, mount support or provider durability beyond the tested local contracts.
 
 Publication-time clarification — 2026-10-18: namespace and handle receipt jobs carry the admitted workflow context to the common final validation after all business/receipt waits. Mutation-mode authority must still have a live matching owner/bound-session proof immediately before publication. Read-mode renew/close continue during lease expiry; self-fencing control-plane jobs have no workflow context. Handle renewal takes inode → handle → admission, then conditionally extends only if the original persisted expiry is still in the future. Crossing expiry while waiting for admission returns stale_handle, preventing renewal from reactivating a slot already admitted to a different open.
+
+## Explicit inode times (Stage 2b, 2026-10-21)
+
+`setAttributes` accepts optional RFC3339 `atime` and `mtime`. Explicit times
+require the inode owner or a workspace administrator and are permitted on files,
+directories and symlinks. Omitted times are unchanged; stored instants have
+PostgreSQL microsecond precision. Each successful update advances generation
+and sets `ctime` to transaction time, so conditional replacement observes a
+conflict after a timestamp change. Years outside 1 through 9999 are rejected.
+This is an independent extension for the approved mount's `utimens` path.
+A non-owner writer cannot touch a file using this extension. `UTIME_NOW` in
+the mount uses client wall time; `ctime` continues to use the server clock.
+
+## Linux mount profile (Stage 2b)
+
+A shared typed AttributeUpdate carries normalized optional metadata fields across
+client, service and persistence. Request times serialize as RFC3339 at the edge.
+The service captures the original request digest before normalization, so the
+change preserves existing receipt identities. This adds no persistent columns.
+
+The native client and Linux FUSE mount implement the strict profile. Kernel
+acceptance is recorded separately in `docs/provenance/stage2b-linux-mount-review.md`;
+other kernels, cross-node mounts and provider durability remain unverified.
+Server inode ids are FUSE inode numbers except the workspace root, mapped to 1.
+Entry and attribute TTLs are zero; opens select direct I/O without keep-cache,
+writeback-cache or shared-mmap capabilities. Reads do not update atime.
+
+Lookup and parent-plus-name mutation callbacks reconstruct names and check the
+expected parent inode identity before a request; path-addressed inode callbacks
+check that inode's identity. This does not guard a named child against replacement
+between the kernel's lookup and the server's resolution. Replies with inode
+identities are checked again. A time-of-check/time-of-use window remains between
+that check and the server's path resolution. Open file operations use server
+handle ids. When Linux omits fh from getattr, the mount can use another live
+handle for that same inode, which preserves fstat after unlink. Getattr through
+an open handle costs a receipt-free fsync round trip. Path getattr uses one stat response
+for both identity checking and attributes. Directory handles retain a
+paged listing snapshot; readdir does not populate the inode lookup table.
+
+Writes commit synchronously in bounded API slices. O_APPEND selects server EOF
+for each slice. Ambiguous outcomes retain their key and resolve their original
+receipt; only definitive generation conflicts retry under new keys, at most
+three times. A partial write reports only bytes known committed. An unresolved
+slice reports EIO and its operation id is logged when available. An unresolved
+write fences that handle so an application retry cannot append the same bytes
+under a new key; later calls need a fresh handle. Per-request open flags select
+append mode, including changes through fcntl. The kernel normally already bounds
+each write to one API slice; in-process write slicing is defensive. Multi-slice
+reads stop with a short result at a generation change and check the fence again
+before replying.
+
+Each attempt has the configured deadline plus one second, with at most three
+attempts and a bounded aggregate retry budget. Mutation receipt resolution has
+its own metadata budget. Defaults permit about 183 seconds for a data request
+plus 33 seconds for receipt lookup, excluding scheduling overhead. A callback
+that issues multiple requests can take longer; there is no overall callback
+latency guarantee. Four blocked callbacks can occupy all four default FUSE
+threads.
+
+A post-commit identity mismatch can return ESTALE after a namespace mutation
+has committed; affected local names are detached and the operation id is logged.
+Callers must inspect state before retrying. A combined setattr performs truncate
+before the attribute request: a later authorization failure or concurrent change
+can leave the size committed while the attribute update fails. This is not an
+atomic multi-attribute transaction.
+
+Live workflow authority requires a host-minted bound session and the paired
+workflow token/epoch. The mount never renews or releases workflow leases. A
+fenced mount returns ESTALE until its process is replaced; a host rebind alone
+does not clear the latch. Workspace contention returns EBUSY without latching.
+Ordinary mounts probe root after a fenced operation so a publication race does
+not destroy a still-valid session. A bound mount latches a fenced mutation
+except reservation_expired even when the server still permits reads after
+mere lease expiry. A post-startup 401 maps to ESTALE and latches, an explicit
+deviation from spec 03's EACCES row. A stale handle fences that handle.
+
+The session and handles renew using local monotonic intervals derived from
+operator-supplied TTL hints; the hints must match the service. Renewal is best
+effort and a long pause still fences. A failed renewal retries with bounded
+backoff rather than postponing the next attempt by half a TTL. Session renewal
+has an independent task; handle renewals have backoff and at most eight concurrent
+requests. Server retry hints are respected. Session identity and workflow epoch are
+validated at startup. Worker credentials need a pre-minted session; a host
+credential can self-mint. Startup failure after minting attempts bounded revoke.
+Clean shutdown, including an external unmount, revokes only self-minted sessions;
+cleanup is idempotent.
+
+Startup exit codes distinguish invalid configuration/CA bundles (2), invalid
+credential/session/workflow authority (3), and service, transport, decode or FUSE
+establishment failures (4). Runtime failure after mounting uses 5. A dependency
+outage at startup is not reported as invalid authority. Settings retain validated
+values and typed durations, not the original argv or secret-file paths.
+SIGTERM/SIGINT first attempt a non-lazy unmount; if tools keep it busy the mount
+continues serving with its handles intact. Forced process death leaves its
+self-minted session to expire. Flush returns success for synchronous writes,
+including after fencing, so close does not invent a second write error.
+
+Kernel default_permissions and server authorization both apply. The mount
+assumes its euid/egid and the authenticated workspace identity are aligned;
+allow-other is an explicit opt-in and needs host FUSE permission configuration.
+Setuid/setgid/sticky bits and special file nodes are rejected with EPERM.
+Flock and fcntl locks are forwarded and rejected with ENOLCK; initialization
+fails if the kernel cannot forward them. Xattrs and other unsupported callbacks
+return ENOSYS (the kernel may expose EOPNOTSUPP); renameat2 flags return EINVAL.
+Shared writable mmap is unsupported. Private pages mapped before fencing may
+remain readable; Git success is a smoke observation and makes no mmap or
+POSIX-compliance claim. Statfs reports zero capacity, a deliberate limitation.
+
+Credentials and workflow tokens come from files or environment, never argv.
+The client refuses plaintext without allow-plaintext, disables environment
+proxies and redirects, and validates TLS using rustls with optional PEM roots.
+The https/CA-bundle path is unexercised. JSON logs stay at info to avoid dependency
+debug events containing names; local text logging may opt into debug.
+
+Deferred error-contract decision: reservation expiry currently uses the stable
+`reservation_expired` message on `fenced`; the end-to-end byte conformance test
+`by9_reservation_expiry_during_quota_wait_fences_every_upload_publication` pins
+that literal and the failed receipt code. A distinct code or typed reason field
+requires a later wire-contract decision. The mount does not infer that reason
+from other human-readable text.
