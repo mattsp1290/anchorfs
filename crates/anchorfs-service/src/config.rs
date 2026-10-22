@@ -10,6 +10,7 @@ pub struct Config {
     pub database_url: Secret<String>,
     pub deployment_id: DeploymentId,
     pub listen_addr: SocketAddr,
+    pub tls: Option<crate::tls::TlsConfig>,
     pub durability_profile: DurabilityProfile,
     pub db_max_connections: u32,
     pub client_session_ttl: Duration,
@@ -74,6 +75,7 @@ impl Config {
             database_url: Secret::new("postgres://unused:unused@127.0.0.1:1/unused".into()),
             deployment_id: deployment_id.clone(),
             listen_addr: "127.0.0.1:8080".parse().expect("static address"),
+            tls: None,
             durability_profile: DurabilityProfile::Durable,
             db_max_connections: 8,
             client_session_ttl: timers.client_session_ttl,
@@ -124,16 +126,32 @@ impl Config {
             _ => return Err(invalid("DURABILITY_PROFILE")),
         };
         c.listen_addr = parse("LISTEN_ADDR", c.listen_addr)?;
-        if !c.listen_addr.ip().is_loopback() && c.durability_profile == DurabilityProfile::Durable {
+        c.tls = match (value("TLS_CERT_PATH"), value("TLS_KEY_PATH")) {
+            (None, None) => None,
+            (Some(cert), Some(key)) => Some(
+                crate::tls::load(&crate::tls::TlsPaths {
+                    cert: cert.into(),
+                    key: key.into(),
+                })
+                .map_err(|err| ConfigError {
+                    code: 2,
+                    message: format!("invalid TLS certificate or key: {err}"),
+                })?,
+            ),
+            _ => {
+                return Err(ConfigError {
+                    code: 2,
+                    message: "TLS certificate and key paths must be set together".into(),
+                });
+            }
+        };
+        if !c.listen_addr.ip().is_loopback()
+            && c.durability_profile == DurabilityProfile::Durable
+            && c.tls.is_none()
+        {
             return Err(ConfigError {
                 code: 7,
-                message: "durable plaintext listener must use loopback".into(),
-            });
-        }
-        if value("TLS_CERT_PATH").is_some() || value("TLS_KEY_PATH").is_some() {
-            return Err(ConfigError {
-                code: 2,
-                message: "TLS is not implemented in this version".into(),
+                message: "durable non-loopback listener requires TLS".into(),
             });
         }
         c.database_url = Secret::new(value("DATABASE_URL").ok_or_else(|| invalid("DATABASE_URL"))?);

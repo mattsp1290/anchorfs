@@ -80,6 +80,8 @@ pub struct MountBuilder<'a> {
     workflow: Option<(&'a str, i64)>,
     max_io: u32,
     watchdog: Duration,
+    ca_bundle: Option<&'a Path>,
+    expected_exit: Option<i32>,
 }
 impl<'a> MountBuilder<'a> {
     pub fn credential(mut self, credential: &'a Credential) -> Self {
@@ -102,6 +104,14 @@ impl<'a> MountBuilder<'a> {
         self.watchdog = duration;
         self
     }
+    pub fn ca_bundle(mut self, path: &'a Path) -> Self {
+        self.ca_bundle = Some(path);
+        self
+    }
+    pub fn fails_with(mut self, code: i32) -> TempMount {
+        self.expected_exit = Some(code);
+        TempMount::start(self, true)
+    }
     pub fn process(self) -> TempMount {
         TempMount::start(self, true)
     }
@@ -118,6 +128,8 @@ impl TempMount {
             workflow: None,
             max_io: 1048576,
             watchdog: Duration::from_secs(120),
+            ca_bundle: None,
+            expected_exit: None,
         }
     }
     pub fn in_process(f: &Fixture) -> Self {
@@ -131,6 +143,8 @@ impl TempMount {
             workflow,
             max_io,
             watchdog,
+            ca_bundle,
+            expected_exit,
         } = builder;
         require_fuse();
         local(&std::env::temp_dir());
@@ -147,7 +161,6 @@ impl TempMount {
             f.endpoint.clone(),
             "--workspace".into(),
             f.workspace.to_string(),
-            "--allow-plaintext".into(),
             "--max-io-bytes".into(),
             max_io.to_string(),
             "--handle-ttl-hint-ms".into(),
@@ -155,6 +168,13 @@ impl TempMount {
             "--session-ttl-hint-ms".into(),
             f.config.client_session_ttl.as_millis().to_string(),
         ];
+        if f.endpoint.starts_with("https://") {
+            if let Some(ca) = ca_bundle {
+                args.extend(["--ca-bundle".into(), ca.display().to_string()]);
+            }
+        } else {
+            args.push("--allow-plaintext".into());
+        }
         if let Some(s) = session {
             args.extend([
                 "--session-id".into(),
@@ -232,6 +252,17 @@ impl TempMount {
             if let Some(child) = &mut this.process
                 && let Some(status) = child.try_wait().unwrap()
             {
+                if let Some(code) = expected_exit {
+                    assert_eq!(
+                        status.code(),
+                        Some(code),
+                        "{}",
+                        std::fs::read_to_string(this.path.with_extension("log"))
+                            .unwrap_or_default()
+                    );
+                    assert!(!mounted(&this.path));
+                    return this;
+                }
                 panic!(
                     "mount exited {status}: {}",
                     std::fs::read_to_string(this.path.with_extension("log")).unwrap_or_default()
@@ -240,6 +271,10 @@ impl TempMount {
             assert!(Instant::now() < deadline, "mount startup timed out");
             std::thread::sleep(Duration::from_millis(20));
         }
+        assert!(
+            expected_exit.is_none(),
+            "expected mount exit {expected_exit:?}, but it mounted"
+        );
         this
     }
     pub fn signal(&self, signal: nix::sys::signal::Signal) {

@@ -35,5 +35,7 @@ anchorfs-mount mount /path/to/empty-mountpoint \
 A host credential may omit the session pair to self-mint an ordinary session.
 For a lease-bound mount, provide the bound session plus `--workflow-token-file`
 and `--workflow-epoch`. Use `--allow-plaintext` only when explicitly selecting
-an HTTP endpoint. TLS termination in the service remains deferred. The mount
+an HTTP endpoint. The service terminates TLS 1.3 when `ANCHORFS_TLS_CERT_PATH` and
+`ANCHORFS_TLS_KEY_PATH` are set. See [container operations](docs/ops/container-images.md)
+for packaging and listener configuration. The mount
 is Linux-only; `--print-profile` and portable tests also work on macOS.

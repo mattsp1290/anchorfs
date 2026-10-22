@@ -79,3 +79,23 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --no-run --locked
       - run: cargo test -p anchorfs-core -p anchorfs-backend -p anchorfs-mount --locked
+  image-amd64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - run: docker version
+      - run: docker build -f docker/Dockerfile --target service -t anchorfs-service:ci .
+      - run: docker build -f docker/Dockerfile --target mount -t anchorfs-mount:ci .
+      - name: Packaging smoke
+        run: bash ci/image-smoke.sh amd64
+  image-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - run: docker version
+      - run: docker build -f docker/Dockerfile --target service -t anchorfs-service:ci .
+      - run: docker build -f docker/Dockerfile --target mount -t anchorfs-mount:ci .
+      - name: Packaging smoke
+        run: bash ci/image-smoke.sh arm64

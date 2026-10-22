@@ -9,6 +9,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+axum-server.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
 anchorfs-core.workspace = true
 anchorfs-persistence.workspace = true
 sqlx.workspace = true
@@ -39,3 +42,5 @@ testcontainers.workspace = true
 testcontainers-modules.workspace = true
 reqwest.workspace = true
 nix.workspace = true
+
+rcgen.workspace = true

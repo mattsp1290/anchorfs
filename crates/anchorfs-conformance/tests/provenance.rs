@@ -123,19 +123,6 @@ fn crate_edges_match_plan() {
 
 #[test]
 fn test_image_record_matches_fixtures() {
-    fn digests(text: &str) -> BTreeSet<String> {
-        text.match_indices("sha256:")
-            .map(|(at, _)| {
-                let digest: String = text[at..].chars().take(71).collect();
-                assert_eq!(digest.len(), 71, "full image digest");
-                assert!(
-                    digest[7..].bytes().all(|b| b.is_ascii_hexdigit()),
-                    "valid digest {digest}"
-                );
-                digest
-            })
-            .collect()
-    }
     let mut fixtures = BTreeSet::new();
     for file in [
         "crates/anchorfs-conformance/tests/common/minio.rs",
@@ -144,7 +131,9 @@ fn test_image_record_matches_fixtures() {
         "crates/anchorfs-service/tests/binary.rs",
         "crates/anchorfs-mount/tests/linux/fixture.rs",
     ] {
-        fixtures.extend(digests(&fs::read_to_string(root().join(file)).unwrap()));
+        fixtures.extend(image_digests(
+            &fs::read_to_string(root().join(file)).unwrap(),
+        ));
     }
     let record = fs::read_to_string(root().join("docs/provenance/dependencies.md")).unwrap();
     let images = record
@@ -156,7 +145,54 @@ fn test_image_record_matches_fixtures() {
         .unwrap();
     assert_eq!(
         fixtures,
-        digests(images),
+        image_digests(images),
         "fixture/image approval digests must match both ways"
     );
+}
+
+fn image_digests(text: &str) -> BTreeSet<String> {
+    text.match_indices("sha256:")
+        .map(|(at, _)| {
+            let digest: String = text[at..].chars().take(71).collect();
+            assert_eq!(digest.len(), 71, "full image digest");
+            assert!(
+                digest[7..].bytes().all(|b| b.is_ascii_hexdigit()),
+                "valid digest {digest}"
+            );
+            digest
+        })
+        .collect()
+}
+#[test]
+fn base_image_record_matches_dockerfiles() {
+    let dockerfile = fs::read_to_string(root().join("docker/Dockerfile")).unwrap();
+    let record = fs::read_to_string(root().join("docs/provenance/dependencies.md")).unwrap();
+    let section = record
+        .split("## Container base images\n")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    assert_eq!(image_digests(&dockerfile), image_digests(section));
+    assert_eq!(image_digests(&dockerfile).len(), 2);
+}
+#[test]
+fn builder_image_matches_toolchain() {
+    let toolchain: toml::Value =
+        toml::from_str(&fs::read_to_string(root().join("rust-toolchain.toml")).unwrap()).unwrap();
+    let expected = format!(
+        "{}-bookworm",
+        toolchain["toolchain"]["channel"].as_str().unwrap()
+    );
+    let dockerfile = fs::read_to_string(root().join("docker/Dockerfile")).unwrap();
+    let builders: Vec<_> = dockerfile
+        .lines()
+        .filter_map(|line| line.strip_prefix("FROM rust:"))
+        .collect();
+    assert!(!builders.is_empty(), "Rust builder required");
+    for builder in builders {
+        assert_eq!(builder.split('@').next().unwrap(), expected);
+        assert!(builder.contains("@sha256:"));
+    }
 }

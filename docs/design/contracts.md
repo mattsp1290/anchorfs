@@ -267,9 +267,17 @@ One deployment_id is both schema_meta identity and bucket prefix. Startup compar
 
 ## Open deviations
 
-TLS (U1): spec 03 requires TLS. Stage 0 listener is plaintext, restricted to loopback under the durable profile; development may bind all addresses. TLS_CERT_PATH/TLS_KEY_PATH are reserved and rejected. TLS termination is a Stage 1 decision. Verified boundary: serve_refuses_non_loopback_plaintext_durable.
+TLS (U1) resolved in Stage 3a: when `ANCHORFS_TLS_CERT_PATH` and
+`ANCHORFS_TLS_KEY_PATH` are set, the service terminates TLS 1.3 using rustls
+with the explicit aws-lc-rs provider. Durable non-loopback listeners require
+TLS (exit 7). Partial or invalid TLS configuration exits 2 before database
+access. Certificate rotation requires restart; HTTP/1.1 only (`http1_only`
+and ALPN `http/1.1`), no client certificates. Clean shutdown exits 0; drain
+overrun exits 2. Binary tests `tls_tests::serve_tls_*` exercise these boundaries;
+see [Stage 3a acceptance](../provenance/stage3a-tls-and-images-acceptance.md)
+for current verification status.
 
-Readiness lists one key under the deployment prefix through a retry-free client, with a bounded deadline and a one-second single-flight memo. It checks reachability, authentication, bucket existence and list permission; write permission, durability and replication remain unprobed. The service readiness setting `backend_probe_deadline` is deliberately outside the storage Timers table. TLS U1 and the development-only plaintext S3 rule are unchanged, so durable-profile end-to-end successful backend readiness remains unverified until U1. PostgreSQL reset_val plus role/database override checks detect the specified unsafe profiles; a privileged role setting can mask a lower-level server default, so these checks do not certify every deployment configuration or storage hardware.
+Readiness lists one key under the deployment prefix through a retry-free client, with a bounded deadline and a one-second single-flight memo. It checks reachability, authentication, bucket existence and list permission; write permission, durability and replication remain unprobed. The service readiness setting `backend_probe_deadline` is deliberately outside the storage Timers table. The development-only plaintext S3 rule is unchanged. Durable-profile successful backend readiness remains unverified: the TLS binary test observes 503 against the unreachable default https S3 endpoint; only the development TLS test reaches plaintext MinIO with readiness 200. PostgreSQL reset_val plus role/database override checks detect the specified unsafe profiles; a privileged role setting can mask a lower-level server default, so these checks do not certify every deployment configuration or storage hardware.
 
 ## Linux/FUSE matrix
 
@@ -572,7 +580,9 @@ POSIX-compliance claim. Statfs reports zero capacity, a deliberate limitation.
 Credentials and workflow tokens come from files or environment, never argv.
 The client refuses plaintext without allow-plaintext, disables environment
 proxies and redirects, and validates TLS using rustls with optional PEM roots.
-The https/CA-bundle path is unexercised. JSON logs stay at info to avoid dependency
+Stage 3a verifies the HTTPS/CA-bundle path with client conformance and
+Linux `tls::https_mount_*` kernel tests on hosted kernel `7.0.0-1017-azure`.
+The separate owner-host gate remains pending; see the Stage 3a acceptance record. JSON logs stay at info to avoid dependency
 debug events containing names; local text logging may opt into debug.
 
 Deferred error-contract decision: reservation expiry currently uses the stable
@@ -581,3 +591,16 @@ Deferred error-contract decision: reservation expiry currently uses the stable
 that literal and the failed receipt code. A distinct code or typed reason field
 requires a later wire-contract decision. The mount does not infer that reason
 from other human-readable text.
+
+## Container images (Stage 3a)
+
+`docker/Dockerfile` has one shared `builder` and separate `service` and `mount`
+runtime targets. Both run as 10001:10001 and install ca-certificates; mount
+also installs fuse3. Base manifest-list digests are recorded in
+[dependencies](../provenance/dependencies.md). apt versions are unpinned.
+For an externally reachable durable service set `ANCHORFS_LISTEN_ADDR` to a
+non-loopback address and provide both TLS paths. `/dev/fuse`, capabilities
+and mount propagation must be supplied by the host/pod; this packaging stage
+does not prove containerized mounting. Images are built, never published;
+no cluster or multi-arch manifest is supplied. See
+[container operations](../ops/container-images.md).
