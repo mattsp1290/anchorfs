@@ -277,11 +277,11 @@ Official platform references consulted 2026-10-17. This is a target matrix, not 
 
 | Target | Contract | Source | Status |
 |---|---|---|---|
-| Linux kernel | ≥5.10 with CONFIG_FUSE_FS | https://docs.kernel.org/filesystems/fuse/fuse.html | observed on Linux 6.8.0-124-generic; full Stage 2b gate in progress |
-| FUSE protocol | ≥7.31 | https://github.com/torvalds/linux/blob/v5.10/include/uapi/linux/fuse.h | observed on Linux 6.8.0-124-generic; full Stage 2b gate in progress |
-| mount helper | fusermount3, fuse 3.x | https://github.com/libfuse/libfuse | observed on Linux 6.8.0-124-generic; full Stage 2b gate in progress |
-| Strict file profile | direct_io=true, writeback_cache=false, allow_mmap=false | spec 02 Reads and caching | serialization and Linux 6.8.0-124-generic kernel tests passed; final gates in progress |
-| Metadata cache | attr_ttl=entry_ttl=negative_ttl=0 | spec 02 Reads and caching | serialization and Linux 6.8.0-124-generic kernel tests passed; final gates in progress |
+| Linux kernel | ≥5.10 with CONFIG_FUSE_FS | https://docs.kernel.org/filesystems/fuse/fuse.html | host 6.8.0-124-generic and hosted 6.17.0-1022-azure gates passed; see Stage 2b evidence |
+| FUSE protocol | ≥7.31 | https://github.com/torvalds/linux/blob/v5.10/include/uapi/linux/fuse.h | host 6.8.0-124-generic and hosted 6.17.0-1022-azure gates passed; see Stage 2b evidence |
+| mount helper | fusermount3, fuse 3.x | https://github.com/libfuse/libfuse | host 6.8.0-124-generic and hosted 6.17.0-1022-azure gates passed; see Stage 2b evidence |
+| Strict file profile | direct_io=true, writeback_cache=false, allow_mmap=false | spec 02 Reads and caching | serialization and full host/hosted kernel gates passed (6.8.0-124-generic / 6.17.0-1022-azure) |
+| Metadata cache | attr_ttl=entry_ttl=negative_ttl=0 | spec 02 Reads and caching | serialization and full host/hosted kernel gates passed (6.8.0-124-generic / 6.17.0-1022-azure) |
 | Permissions | default_permissions=true; server checks mandatory | spec 03 Identity and permissions | server conformance and Linux 6.8.0-124-generic permission tests passed |
 | Other OS | CLI prints profile; mount returns UnsupportedPlatform | independent plan D5 | macOS stub tests verified; other targets unverified |
 

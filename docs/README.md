@@ -29,7 +29,8 @@ Backend object operations are implemented and verified against a pinned local Mi
 Stage 2a implements the four workflow lease routes, lease-bound session mint/rebind and workspace lease inspection (38 implemented / 0 stubs). See [Stage 2a evidence](provenance/stage2a-workflow-leases-review.md) and the [executable acceptance map](provenance/stage2a-workflow-leases-acceptance.md). Linux mounts were deferred to Stage 2b.
 
 Stage 2b adds `anchorfs-client`, explicit inode timestamps and the strict Linux
-FUSE mount. Kernel acceptance and final review gates are in progress; see
+FUSE mount. Local kernel acceptance, both review checkpoints and all five hosted
+CI jobs passed; see
 [Stage 2b evidence](provenance/stage2b-linux-mount-review.md),
 [the executable acceptance map](provenance/stage2b-linux-mount-acceptance.md)
 and [the Linux host workflow](ops/linux-host-verification.md). Single-node

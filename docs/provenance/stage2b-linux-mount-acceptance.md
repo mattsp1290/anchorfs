@@ -1,7 +1,8 @@
-# Stage 2b executable acceptance map (verification in progress)
+# Stage 2b executable acceptance map
 
-The test names below identify the intended evidence. A named test is not proof
-of a pass; actual execution and remaining gates are recorded in
+The test names below identify the executable evidence. All 28 kernel scenarios
+and the helper passed in both final Linux host runs. A named test alone is not
+proof of a pass; revision-specific execution and hosted gates are recorded in
 [the evidence record](stage2b-linux-mount-review.md).
 
 | Criterion | Executable evidence |

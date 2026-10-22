@@ -2,7 +2,9 @@
 
 The client, timestamp amendment, Linux mount and kernel suite are implemented on
 `feat/stage2b-linux-mount`. Verification below names the actual source revisions;
-the independent review gauntlet, final pushes, PR and hosted CI are still pending.
+the independent review gauntlet and both push checkpoints have passed. Draft
+[PR #7](https://github.com/mattsp1290/anchorfs/pull/7) is open; all five hosted jobs
+passed on the source checkpoint below.
 
 ## Approved inputs and independent design
 
@@ -116,10 +118,81 @@ credentials and NFS paths are not recorded here. The workflow is documented in
 
 ## Independent reviews and delivery
 
-The two fresh-context Opus reviews, canonical fixer summaries, separate standard
-and thermonuclear push checkpoints, pinned upstream rubric, PR and hosted CI
-will be recorded after execution. No review verdict or hosted pass is inferred
-from planning approval or a local passing test.
+Three fresh-context Opus code reviews ran against an explicit approved-input
+packet and full branch diff/files. Kernel Correctness and Boundary
+Maintainability independently returned `REQUEST_CHANGES` and **no blocking
+provenance findings** for `015b84e04ec70d542edd23f90875bbb28557f98e`.
+The standard pass dispositioned 22 deduplicated items: 19 fixes (one automatic,
+18 manually approved) and three skipped/already-satisfied items with recorded
+rationale. TTL clock comparison and lease polling conflicted with the approved
+D14/D8 decisions; their limits remain explicit. Both reviewers received the
+approved requirements packet and full code, but did not read the normative
+plan text. This context limitation is preserved; it is not retroactively
+claimed to be a complete plan review.
+
+The standard checkpoint is
+`47b1bf6c926c662cfabaf3d5ccae5b547b467bf3`; its local and Linux gates passed,
+and the first push's remote SHA matched exactly. The initial canonical auto
+summary was fixed:1/skipped:1/needs-manual:20. After the owner's explicit manual
+approval, auto revalidation was fixed:0/skipped:22/needs-manual:0. No protected
+file was silently auto-edited.
+
+Structural Quality independently reviewed `47b1bf6` using the complete rubric
+pinned from cursor/plugins at
+`699e1e7488c53c05ca13409f40da83cd37682091`:
+https://raw.githubusercontent.com/cursor/plugins/699e1e7488c53c05ca13409f40da83cd37682091/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md.
+It returned `REQUEST_CHANGES` and **no blocking provenance findings**: eight
+Important findings and twelve Suggestions. It received the normative plan,
+approved packet and full current source, without the other reviewers' findings.
+All twenty items were dispositioned under the existing manual approval. The
+reservation-expiry message already had an end-to-end contract assertion;
+a typed reason/distinct wire code is explicitly deferred. The original auto
+summary fixed:0/skipped:0/needs-manual:20 remains preserved; final auto
+revalidation was fixed:0/skipped:20/needs-manual:0.
+
+A labeled recheck of that review's own findings returned **APPROVE** for code
+structure and **no blocking provenance findings**. Its two remaining Suggestions
+(formatting and typed Accept selection) were then fixed and the client suite
+rerun. This is a recheck, not a fourth independent review or certification of
+test results. The thermonuclear checkpoint is
+`21ab15b54b39af5f9e6a34cf74eb5982b5344b7a`; the separate regular push's remote SHA
+matched exactly after all final gates passed.
+
+Final local gates on the checkpoint candidate passed: fmt, all-target workspace
+clippy, cargo-deny licenses/bans/advisories/sources, workspace build and no-run,
+client six units and the macOS core/backend/mount subset. Final Linux gates
+passed fmt, all-target clippy, build, serial mount tests **29 passed / 0 failed /
+0 ignored in 397.46 s**, and full workspace tests with test-threads=4. The latter
+included the same **29 passed / 0 failed / 0 ignored in 399.82 s**. These are
+28 acceptance scenarios plus the helper target, not 29 independent scenarios.
+The final source manifest SHA-256 was
+`b03b979b2f288abb9fcbfe735abc5fe7fc3d0fdeaeedd9e96c4a380d9da8b65e`;
+it was checked on the host before execution and matched the committed candidate.
+Client conformance 5, namespace 28 (including both time cases), design coverage 3,
+provenance 3, service 17, binary 12 and OpenAPI snapshot 5 passed. This verifies
+38 implemented routes / 0 stubs, API version `1.0.0-stage2b`, 156 persistent
+columns and the amended dependency/fixture gates. No AnchorFS mount or disposable
+MinIO fixture remained after the test reaper completed.
+
+Ignored local artifacts are retained under:
+
+- `reviews/feat-stage2b-linux-mount-2026-10-21-134637-015b84e04ec7`
+- `reviews/feat-stage2b-linux-mount-2026-10-21-195019-47b1bf6c926c`
+
+They contain the immutable original review files, manifests, summaries, manual
+authorization/dispositions, recheck and separate checkpoint receipts. They are
+not bundled into the repository, consistent with its review-artifact convention.
+No review verdict implies legal clearance or erased historical exposure.
+
+Hosted workflow [39704959806](https://github.com/mattsp1290/anchorfs/actions/runs/39704959806)
+for source revision `21ab15b54b39af5f9e6a34cf74eb5982b5344b7a` passed all five jobs:
+`lint`, `deny`, `test`, `build-linux-arm64` and `build-macos`. The test job
+119582733047 recorded Linux **6.17.0-1022-azure**, fusermount3 **3.14.0**,
+non-root uid **1001**, and **29 passed / 0 failed / 0 ignored in 224.12 s**
+for the real FUSE target. No fallback skip was introduced. This covers the
+hosted branch source at the named revision; the PR's current check suite and
+local delivery receipt identify the final evidence-only revision's result.
+Hosted logs are dated 2026-10-22 UTC (2026-10-21 in the session's timezone).
 
 ## Limits carried from the approved plan
 
@@ -147,3 +220,9 @@ already captured directory snapshot do not require an API request. This is
 not a latency or object-request-count guarantee for arbitrary workloads.
 Self-minted sessions left by forced termination can consume the credential's
 64-session bound until expiry; production hosts should pre-mint sessions.
+
+Additional reviewed limits: a combined setattr may truncate before a later
+attribute update fails; a path identity mismatch can return ESTALE after a
+namespace mutation has committed. Default data-call retry budgets are 183 s,
+with up to 33 s of receipt resolution; callbacks issuing multiple API requests
+can take longer. These are bounded retry defaults, not syscall latency promises.
