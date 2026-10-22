@@ -532,3 +532,26 @@ async fn bootstrap_admin_once() {
 
 #[path = "binary/tls.rs"]
 mod tls_tests;
+
+#[test]
+fn probe_argument_validation() {
+    for args in [
+        &["--url", "http://127.0.0.1:1"][..],
+        &["--url", "https://127.0.0.1:1/readyz"],
+        &["--url", "https://127.0.0.1:1", "--timeout-ms", "0"],
+        &[
+            "--url",
+            "https://127.0.0.1:1",
+            "--ca-bundle",
+            "/nonexistent/ca.pem",
+        ],
+    ] {
+        let output = command().arg("probe").args(args).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

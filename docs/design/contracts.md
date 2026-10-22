@@ -604,3 +604,29 @@ and mount propagation must be supplied by the host/pod; this packaging stage
 does not prove containerized mounting. Images are built, never published;
 no cluster or multi-arch manifest is supplied. See
 [container operations](../ops/container-images.md).
+
+## Stage 3b packaging and probe (2026-10-22)
+
+`anchorfs-service probe --url <origin> [--ca-bundle <pem>] [--require-tls]
+[--require-durable] [--timeout-ms 5000] [--allow-plaintext]` issues exactly one
+unauthenticated `GET /readyz` through `anchorfs_client::readiness` (hardened
+client: no proxy, no redirects, HTTPS-only for https origins, CA from the given
+PEM) and never retries. `--url` is an origin; a path, query or fragment is
+invalid. Exit 0: HTTP 200 and every requested requirement met (`tls: true`,
+`durability_profile == "durable"`); one JSON line
+`{"status","tls","durability_profile","database","backend"}` is printed.
+Exit 1: not ready (status other than 200, printing the error `code` when
+present) or a requirement failed. Exit 2: invalid arguments (including a URL
+with a path, plaintext without `--allow-plaintext`, or `--timeout-ms 0`), an
+unreadable or invalid CA bundle, or a transport/TLS/timeout failure before any
+HTTP response. `Readiness` reports `status`, the parsed `ReadyzBody` on 200 and
+the parsed error document otherwise.
+
+The mount emits two lifecycle events and no others for these transitions:
+`warn` "mount fenced" with `reason` one of `unauthenticated` (HTTP 401),
+`fenced_mutation` (workflow-bound mutation rejected as fenced) or `probe` (a
+`fenced` answer confirmed by a follow-up stat that was fenced or unauthenticated),
+emitted where the fence latches; and `info` "mount shut down" after a clean
+unmount. Neither carries a path, credential or token. Tests: `probe_*` in the
+service binary tests; Linux `fencing::revocation_fences_mount` and
+`lifecycle::sigterm_with_open_files_keeps_serving` (JSON log lines).

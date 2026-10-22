@@ -13,6 +13,7 @@ axum-server.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 anchorfs-core.workspace = true
+anchorfs-client.workspace = true
 anchorfs-persistence.workspace = true
 sqlx.workspace = true
 anchorfs-backend.workspace = true

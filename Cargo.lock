@@ -146,6 +146,7 @@ name = "anchorfs-service"
 version = "0.1.0"
 dependencies = [
  "anchorfs-backend",
+ "anchorfs-client",
  "anchorfs-core",
  "anchorfs-persistence",
  "aws-sdk-s3",

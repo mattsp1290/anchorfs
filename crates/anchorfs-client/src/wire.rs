@@ -137,3 +137,27 @@ pub struct SetAttributes {
     #[serde(flatten)]
     pub update: anchorfs_core::AttributeUpdate,
 }
+
+/// Body of a successful `GET /readyz`; mirrors the service's readiness document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadyzBody {
+    pub tls: bool,
+    pub durability_profile: String,
+    pub database: String,
+    pub backend: String,
+    pub schema_version: i64,
+    pub object_format_version: i64,
+    pub api_version: String,
+    pub checksum_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durability_warnings: Option<Vec<String>>,
+}
+
+/// Error document of an unready or failed response. Carries no credential material.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiErrorBody {
+    pub code: String,
+    pub message: String,
+    #[serde(default)]
+    pub trace_id: Option<String>,
+}

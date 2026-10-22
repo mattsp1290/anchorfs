@@ -191,6 +191,7 @@ impl Mount {
         if let ClientError::Api(e) = &error {
             if e.status == 401 {
                 self.fence.store(true, Ordering::SeqCst);
+                tracing::warn!(reason = "unauthenticated", "mount fenced");
                 return ErrnoName::ESTALE;
             }
             let handle_fenced = e.code.kind() == Some(ErrorCode::StaleHandle)
@@ -208,6 +209,7 @@ impl Mount {
                     // Mere lease expiry still permits server reads. Latch before
                     // any await so another callback cannot start a new read.
                     self.fence.store(true, Ordering::SeqCst);
+                    tracing::warn!(reason = "fenced_mutation", "mount fenced");
                 } else {
                     let probe = self.client.stat(None).await;
                     let dead = matches!(
@@ -216,6 +218,7 @@ impl Mount {
                     );
                     if dead {
                         self.fence.store(true, Ordering::SeqCst);
+                        tracing::warn!(reason = "probe", "mount fenced");
                     }
                 }
             }
