@@ -6,3 +6,8 @@ docs/
 .github/
 **/*.md
 ci/
+charts/
+scripts/
+deploy/
+dist/
+.forgejo/

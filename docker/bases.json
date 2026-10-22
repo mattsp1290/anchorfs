@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "registry": "10.0.0.106:30001",
+  "bases": {
+    "service": {"repository": "anchorfs/service-base", "dockerfile_target": "service-base",
+                "index_digest": null, "platforms": {"linux/amd64": null, "linux/arm64": null},
+                "published_at": null, "source_sha": null},
+    "mount":   {"repository": "anchorfs/mount-base", "dockerfile_target": "mount-base",
+                "index_digest": null, "platforms": {"linux/amd64": null, "linux/arm64": null},
+                "published_at": null, "source_sha": null}
+  }
+}
