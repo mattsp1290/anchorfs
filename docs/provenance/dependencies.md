@@ -43,6 +43,11 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | utoipa | 6.0.0 | MIT OR Apache-2.0 | https://github.com/juhaku/utoipa | OpenAPI annotations |
 | uuid | 1.28.0 | Apache-2.0 OR MIT | https://github.com/uuid-rs/uuid | random identifiers; conformance fixtures |
 
+| axum-server | 0.8.0 | MIT | https://github.com/programatik29/axum-server | TLS listener and graceful shutdown |
+| rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls | explicit aws-lc-rs TLS 1.3 server policy |
+| rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | https://github.com/rustls/pki-types | PEM certificate/key loading |
+| rcgen | 0.14.10 | MIT OR Apache-2.0 | https://github.com/rustls/rcgen | per-test CA generation (dev only) |
+
 ## Tools
 
 | Tool | Version | License | Repository | Role |
@@ -157,3 +162,60 @@ Stage 2b structural hardening enables Tokio's existing `process` feature for the
 non-lazy helper. The package version, source and license remain unchanged; no
 registry package is added. RFC3339 serde helpers move from the independently
 authored client wire module into core for the shared metadata-update type.
+
+## Stage 3a dependency review (2026-10-22)
+
+Exact-version cargo info verified the four rows above before incorporation.
+New lock packages: axum-server 0.8.0 (MIT), fs-err 3.3.2
+(MIT OR Apache-2.0, https://github.com/andrewhickman/fs-err), rcgen 0.14.10
+(MIT OR Apache-2.0), pem 4.0.0 (MIT, https://github.com/jcreekmore/pem-rs.git),
+yasna 0.6.0 (MIT OR Apache-2.0, https://github.com/qnighy/yasna.rs).
+Their cargo info metadata was checked on 2026-10-22. fs-err is an
+unconditional axum-server dependency using fs-err's tokio feature.
+rustls, rustls-pki-types, tokio-rustls, arc-swap and aws-lc-rs were already
+locked. axum-server uses tls-rustls; rcgen uses aws_lc_rs + pem without ring.
+Reqwest still embeds webpki-roots; tests add generated roots and never disable
+verification. Library API sources are approved general-purpose dependency
+inputs; tests and TLS integration are independently authored from Stage 3a.
+
+Cargo resolution also retains optional rcgen x509-parser dependencies even
+though `cargo tree -i x509-parser` reports no active edge. The actual new
+registry package set was inspected with exact-version `cargo info` before
+further incorporation (2026-10-22); this records the plan's allowed
+stop-and-record exception. All licenses remain within deny.toml.
+
+| Package | Version | License | Repository |
+|---|---|---|---|
+| asn1-rs | 0.7.2 | MIT OR Apache-2.0 | https://github.com/rusticata/asn1-rs.git |
+| asn1-rs-derive | 0.6.0 | MIT OR Apache-2.0 | https://github.com/rusticata/asn1-rs.git |
+| asn1-rs-impl | 0.2.0 | MIT/Apache-2.0 | https://github.com/rusticata/asn1-rs.git |
+| axum-server | 0.8.0 | MIT | https://github.com/programatik29/axum-server |
+| bit-vec | 0.9.1 | Apache-2.0 OR MIT | https://github.com/contain-rs/bit-vec |
+| data-encoding | 2.11.1 | MIT | https://github.com/ia0/data-encoding |
+| der-parser | 10.0.0 | MIT OR Apache-2.0 | https://github.com/rusticata/der-parser.git |
+| fs-err | 3.3.2 | MIT OR Apache-2.0 | https://github.com/andrewhickman/fs-err |
+| minimal-lexical | 0.2.1 | MIT/Apache-2.0 | https://github.com/Alexhuszagh/minimal-lexical |
+| nom | 7.1.3 | MIT | https://github.com/Geal/nom |
+| oid-registry | 0.8.1 | MIT OR Apache-2.0 | https://github.com/rusticata/oid-registry.git |
+| pem | 4.0.0 | MIT | https://github.com/jcreekmore/pem-rs.git |
+| rcgen | 0.14.10 | MIT OR Apache-2.0 | https://github.com/rustls/rcgen |
+| rusticata-macros | 4.1.0 | MIT/Apache-2.0 | https://github.com/rusticata/rusticata-macros.git |
+| synstructure | 0.13.2 | MIT | https://github.com/mystor/synstructure |
+| untrusted | 0.7.1 | ISC | https://github.com/briansmith/untrusted |
+| x509-parser | 0.18.1 | MIT OR Apache-2.0 | https://github.com/rusticata/x509-parser.git |
+| yasna | 0.6.0 | MIT OR Apache-2.0 | https://github.com/qnighy/yasna.rs |
+
+## Container base images
+
+Manifest-list digests resolved with `docker buildx imagetools inspect` on
+2026-10-22; both indexes contain linux/amd64 and linux/arm64/v8. Official
+Docker library inputs, approved by Stage 3a D10 and owner decision 2026-10-22.
+
+| Image | Tag | Digest | Platforms verified | License note | Role | Approval |
+|---|---|---|---|---|---|---|
+| rust | 1.95.0-bookworm | sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 | linux/amd64, linux/arm64/v8 in index | Rust MIT OR Apache-2.0; Debian packages under respective licenses | builder | Stage 3a D10 |
+| debian | bookworm-slim | sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 | linux/amd64, linux/arm64/v8 in index | Debian packages under respective licenses | runtime | Stage 3a D10 |
+
+Base images are not mirrored or published by this repository. apt versions
+are unpinned. The mount runtime installs fuse3 (helper GPL-2.0; libfuse
+LGPL-2.1); Debian distributes these separately from the AnchorFS binary.

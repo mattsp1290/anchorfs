@@ -68,24 +68,35 @@ async fn serve() -> Result<(), (i32, String)> {
     let backend =
         anchorfs_backend::s3::S3Backend::from_config(&config.s3).map_err(|e| (2, e.to_string()))?;
     let pool = initialize_metadata(&config).await?;
-    let listener = tokio::net::TcpListener::bind(config.listen_addr)
-        .await
+    let listener = std::net::TcpListener::bind(config.listen_addr)
+        .map_err(|_| (2, "listener bind failed".into()))?;
+    listener
+        .set_nonblocking(true)
         .map_err(|_| (2, "listener bind failed".into()))?;
     eprintln!(
-        "listening on {}",
+        "listening on {}://{}",
+        if config.tls.is_some() {
+            "https"
+        } else {
+            "http"
+        },
         listener
             .local_addr()
             .map_err(|_| (2, "listener address unavailable".into()))?
     );
     let drain = config.shutdown_drain;
+    let tls = config.tls.clone();
     let state = AppState::production(config, pool.clone(), std::sync::Arc::new(backend));
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-    let server = axum::serve(listener, build_router(state)).with_graceful_shutdown(async {
-        let _ = stop_rx.await;
-    });
-    let handle = tokio::spawn(async move { server.await });
+    let (server_handle, server) = anchorfs_service::tls::serve(
+        listener,
+        build_router(state),
+        tls,
+        std::time::Duration::from_secs(5).min(drain / 2),
+    )
+    .map_err(|_| (2, "listener bind failed".into()))?;
+    let handle = tokio::spawn(server);
     shutdown_signal().await;
-    let _ = stop_tx.send(());
+    server_handle.graceful_shutdown(None);
     let mut handle = handle;
     match tokio::time::timeout(drain, &mut handle).await {
         Ok(Ok(Ok(()))) => {}

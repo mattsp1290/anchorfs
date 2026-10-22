@@ -26,3 +26,8 @@ mod relay;
 mod unsupported;
 #[path = "linux/visibility.rs"]
 mod visibility;
+
+#[path = "../../anchorfs-conformance/tests/common/tls.rs"]
+mod pki;
+#[path = "linux/tls.rs"]
+mod tls;

@@ -1,0 +1,7 @@
+target/
+.git/
+.agents/
+reviews/
+docs/
+.github/
+**/*.md

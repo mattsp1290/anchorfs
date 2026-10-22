@@ -39,3 +39,5 @@ axum.workspace = true
 reqwest.workspace = true
 nix.workspace = true
 libc.workspace = true
+
+rcgen.workspace = true

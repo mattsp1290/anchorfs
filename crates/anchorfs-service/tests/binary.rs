@@ -202,7 +202,7 @@ async fn serve_refuses_non_loopback_plaintext_durable() {
     );
     let (code, error) = exit(&mut child).await;
     assert_eq!(code, 7);
-    assert!(error.contains("loopback"));
+    assert!(error.contains("requires TLS"));
     let (_c, url) = database(&[]).await;
     starts_and_stops(&url, "development", true).await;
 }
@@ -529,3 +529,6 @@ async fn bootstrap_admin_once() {
         "1"
     );
 }
+
+#[path = "binary/tls.rs"]
+mod tls_tests;

@@ -35,3 +35,11 @@ CI jobs passed; see
 [the executable acceptance map](provenance/stage2b-linux-mount-acceptance.md)
 and [the Linux host workflow](ops/linux-host-verification.md). Single-node
 process visibility is the scope; cross-node deployment remains later work.
+
+Stage 3a adds an in-process TLS 1.3 listener, native client and Linux mount
+HTTPS acceptance, and native amd64/arm64 container build jobs. See
+[container operations](ops/container-images.md),
+[Stage 3a review evidence](provenance/stage3a-tls-and-images-review.md), and
+[Stage 3a acceptance](provenance/stage3a-tls-and-images-acceptance.md) for actual
+executed status and limitations. Images are not published and no cluster or
+cross-node deployment is claimed.

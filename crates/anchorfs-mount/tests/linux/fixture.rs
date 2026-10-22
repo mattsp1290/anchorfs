@@ -57,6 +57,8 @@ impl std::ops::DerefMut for Fixture {
 }
 pub struct Ready {
     pub endpoint: String,
+    pub ca_bundle: Option<std::path::PathBuf>,
+    pub pki: Option<super::pki::TempPki>,
     pub pool: sqlx::PgPool,
     pub workspace: Uuid,
     pub host: Credential,
@@ -78,6 +80,17 @@ impl Fixture {
         quota: u64,
         faults: Arc<dyn FaultInjector>,
     ) -> Self {
+        Self::with_transport(configure, quota, faults, false)
+    }
+    pub fn new_tls() -> Self {
+        Self::with_transport(|_| {}, 1 << 30, Arc::new(NoFaults), true)
+    }
+    fn with_transport(
+        configure: impl FnOnce(&mut Config) + Send + 'static,
+        quota: u64,
+        faults: Arc<dyn FaultInjector>,
+        tls: bool,
+    ) -> Self {
         super::mountpoint::require_fuse();
         let uid = unsafe { libc::geteuid() };
         let gid = unsafe { libc::getegid() };
@@ -93,6 +106,7 @@ impl Fixture {
             runtime.block_on(async {
                 let service = start_service(
                     configure,
+                    tls,
                     quota,
                     faults,
                     anchorfs_core::Identity { uid, gid },
@@ -103,6 +117,7 @@ impl Fixture {
                 send.send(service.ready)
                     .unwrap_or_else(|_| panic!("fixture receiver disappeared"));
                 let _ = stopped.await;
+                service.handle.shutdown();
                 service.task.abort();
                 pool.close().await;
                 drop(service.container);
@@ -118,7 +133,12 @@ impl Fixture {
         }
     }
     pub fn native_bound(&self, session: &Value, proof: (&str, i64)) -> Client {
-        let client = native(&self.endpoint, self.workspace, &self.worker, Some(session));
+        let client = native_trusted(
+            (&self.endpoint, self.ca_pem()),
+            self.workspace,
+            &self.worker,
+            Some(session),
+        );
         let mut authority = client.authority();
         authority.workflow = Some(anchorfs_client::auth::WorkflowAuthority {
             token: Secret::new(proof.0.into()),
@@ -137,13 +157,14 @@ impl Fixture {
         suffix: &str,
         body: Option<Value>,
     ) -> Value {
-        self.run(raw(
-            &self.endpoint,
+        self.run(raw_with_proof(
+            (&self.endpoint, self.ca_pem()),
             actor,
             session,
             method,
             &format!("/v1/workspaces/{}{suffix}", self.workspace),
             body,
+            None,
         ))
     }
     pub fn open(&self, path: &str, create: bool) -> HandleGrant {
@@ -213,6 +234,13 @@ impl Fixture {
         self.run(sqlx::query(sql).bind(self.workspace).execute(&self.pool))
             .unwrap();
     }
+    pub fn ca_pem(&self) -> Option<&[u8]> {
+        self.pki.as_ref().map(|p| p.pki.ca_pem.as_slice())
+    }
+    pub fn session_count(&self) -> i64 {
+        self.run(sqlx::query_scalar("SELECT count(*) FROM client_sessions").fetch_one(&self.pool))
+            .unwrap()
+    }
     pub fn receipt_count(&self) -> i64 {
         self.run(
             sqlx::query_scalar("SELECT count(*) FROM operations WHERE workspace_id=$1")
@@ -261,8 +289,17 @@ pub fn native(
     credential: &Credential,
     session: Option<&Value>,
 ) -> Client {
+    native_trusted((endpoint, None), workspace, credential, session)
+}
+fn native_trusted(
+    transport: (&str, Option<&[u8]>),
+    workspace: Uuid,
+    credential: &Credential,
+    session: Option<&Value>,
+) -> Client {
+    let (endpoint, ca) = transport;
     Client::new(
-        Endpoint::parse(endpoint, true).unwrap(),
+        Endpoint::parse(endpoint, !endpoint.starts_with("https://")).unwrap(),
         workspace,
         Authority {
             bearer: Bearer::parse(&credential.bearer).unwrap(),
@@ -272,12 +309,12 @@ pub fn native(
             }),
             workflow: None,
         },
-        None,
+        ca,
     )
     .unwrap()
 }
 async fn issue(
-    endpoint: &str,
+    transport: (&str, Option<&[u8]>),
     issuer: &Credential,
     workspace: Uuid,
     kind: &str,
@@ -285,7 +322,7 @@ async fn issue(
     uid: u32,
     gid: u32,
 ) -> Credential {
-    Credential::from(&raw(endpoint,issuer,None,"POST","/v1/credentials",Some(json!({"workspace_id":workspace,"kind":kind,"role":role,"uid":uid,"gid":gid,"max_reservation_bytes":1u64<<30}))).await)
+    Credential::from(&raw_with_proof(transport,issuer,None,"POST","/v1/credentials",Some(json!({"workspace_id":workspace,"kind":kind,"role":role,"uid":uid,"gid":gid,"max_reservation_bytes":1u64<<30})), None).await)
 }
 pub async fn raw(
     endpoint: &str,
@@ -295,10 +332,19 @@ pub async fn raw(
     path: &str,
     body: Option<Value>,
 ) -> Value {
-    raw_with_proof(endpoint, credential, session, method, path, body, None).await
+    raw_with_proof(
+        (endpoint, None),
+        credential,
+        session,
+        method,
+        path,
+        body,
+        None,
+    )
+    .await
 }
 async fn raw_with_proof(
-    endpoint: &str,
+    transport: (&str, Option<&[u8]>),
     credential: &Credential,
     session: Option<&Value>,
     method: &str,
@@ -306,7 +352,14 @@ async fn raw_with_proof(
     body: Option<Value>,
     workflow: Option<(&str, i64)>,
 ) -> Value {
-    let mut request = reqwest::Client::new()
+    let (endpoint, ca) = transport;
+    let mut client = reqwest::Client::builder();
+    if let Some(ca) = ca {
+        client = client.add_root_certificate(reqwest::Certificate::from_pem(ca).unwrap());
+    }
+    let mut request = client
+        .build()
+        .unwrap()
         .request(method.parse().unwrap(), format!("{endpoint}{path}"))
         .bearer_auth(&credential.bearer)
         .header("Idempotency-Key", Uuid::new_v4().to_string())
@@ -336,7 +389,7 @@ async fn raw_with_proof(
 
 pub fn lease_call(f: &Fixture, method: &str, suffix: &str, token: &str, epoch: i64) -> Value {
     f.run(raw_with_proof(
-        &f.endpoint,
+        (&f.endpoint, f.ca_pem()),
         &f.host,
         Some(&f.host_session),
         method,
@@ -350,9 +403,11 @@ struct RunningService {
     ready: Ready,
     container: testcontainers::ContainerAsync<Postgres>,
     task: tokio::task::JoinHandle<()>,
+    handle: anchorfs_service::tls::ServerHandle,
 }
 async fn start_service(
     configure: impl FnOnce(&mut Config),
+    tls: bool,
     quota: u64,
     faults: Arc<dyn FaultInjector>,
     identity: anchorfs_core::Identity,
@@ -392,6 +447,12 @@ async fn start_service(
         Duration::from_secs(10),
         0,
     );
+    let pki = tls.then(super::pki::TempPki::new);
+    if let Some(pki) = &pki {
+        config.tls = Some(
+            anchorfs_service::tls::server_config(&pki.pki.cert_pem, &pki.pki.key_pem).unwrap(),
+        );
+    }
     configure(&mut config);
     meta::initialize(
         &pool,
@@ -420,13 +481,27 @@ async fn start_service(
     let backend = Arc::new(anchorfs_backend::s3::S3Backend::from_config(&config.s3).unwrap());
     let mut state = AppState::production(config.clone(), pool.clone(), backend);
     state.faults = faults;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!(
+        "{}://{}",
+        if tls { "https" } else { "http" },
+        listener.local_addr().unwrap()
+    );
+    let (handle, future) = anchorfs_service::tls::serve(
+        listener,
+        build_router(state),
+        config.tls.clone(),
+        Duration::from_secs(5),
+    )
+    .unwrap();
     let task = tokio::spawn(async move {
-        axum::serve(listener, build_router(state)).await.unwrap();
+        future.await.unwrap();
     });
-    let created = raw(
-        &endpoint,
+    handle.listening().await.unwrap();
+    let ca = pki.as_ref().map(|p| p.pki.ca_pem.as_slice());
+    let created = raw_with_proof(
+        (&endpoint, ca),
         &admin,
         None,
         "POST",
@@ -436,12 +511,13 @@ async fn start_service(
             "logical_bytes_limit": quota, "logical_inodes_limit": 100000,
             "physical_bytes_limit": 1u64 << 40, "staging_bytes_limit": 1u64 << 30,
         })),
+        None,
     )
     .await;
     let workspace =
         Uuid::parse_str(created["workspace"]["workspace_id"].as_str().unwrap()).unwrap();
     let host = issue(
-        &endpoint,
+        (&endpoint, ca),
         &admin,
         workspace,
         "host",
@@ -451,7 +527,7 @@ async fn start_service(
     )
     .await;
     let worker = issue(
-        &endpoint,
+        (&endpoint, ca),
         &host,
         workspace,
         "worker",
@@ -461,27 +537,31 @@ async fn start_service(
     )
     .await;
     let sessions = format!("/v1/workspaces/{workspace}/sessions");
-    let host_session = raw(
-        &endpoint,
+    let host_session = raw_with_proof(
+        (&endpoint, ca),
         &host,
         None,
         "POST",
         &sessions,
         Some(json!({"credential_id": host.id})),
+        None,
     )
     .await;
-    let session = raw(
-        &endpoint,
+    let session = raw_with_proof(
+        (&endpoint, ca),
         &host,
         None,
         "POST",
         &sessions,
         Some(json!({"credential_id": worker.id})),
+        None,
     )
     .await;
-    let api = native(&endpoint, workspace, &host, Some(&host_session));
+    let api = native_trusted((&endpoint, ca), workspace, &host, Some(&host_session));
     RunningService {
         ready: Ready {
+            ca_bundle: pki.as_ref().map(|p| p.files.ca.clone()),
+            pki,
             endpoint,
             pool,
             workspace,
@@ -496,5 +576,6 @@ async fn start_service(
         },
         container,
         task,
+        handle,
     }
 }

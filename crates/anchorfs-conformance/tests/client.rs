@@ -361,3 +361,115 @@ async fn client_keeps_ambiguity_when_replay_is_gated() {
         f.invariants().await;
     }
 }
+
+#[tokio::test]
+async fn https_endpoint_verifies_server_certificate() {
+    let pki = common::tls::generate();
+    let tls = anchorfs_service::tls::server_config(&pki.cert_pem, &pki.key_pem).unwrap();
+    let fixture_tls = tls.clone();
+    let f = Fixture::with_bytes(
+        workspace_body(),
+        move |c| {
+            c.chunk_size = 4096;
+            c.tls = Some(fixture_tls);
+        },
+        Arc::new(anchorfs_service::pipeline::faults::NoFaults),
+        false,
+    )
+    .await;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = Endpoint::parse(
+        &format!("https://{}", listener.local_addr().unwrap()),
+        false,
+    )
+    .unwrap();
+    let (handle, future) = anchorfs_service::tls::serve(
+        listener,
+        f.client.app.clone(),
+        Some(tls),
+        std::time::Duration::from_secs(5),
+    )
+    .unwrap();
+    struct TlsServer(
+        anchorfs_service::tls::ServerHandle,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    );
+    impl Drop for TlsServer {
+        fn drop(&mut self) {
+            self.0.shutdown();
+            self.1.abort();
+        }
+    }
+    let server = TlsServer(handle, tokio::spawn(future));
+    server.0.listening().await.unwrap();
+    let authority = Authority {
+        bearer: Bearer::parse(&format!("{}.{}", f.host.id, f.host.secret)).unwrap(),
+        session: Some(SessionAuthority {
+            session_id: SessionId(
+                f.host_session["session_id"]
+                    .as_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            ),
+            session_epoch: f.host_session["session_epoch"].as_i64().unwrap(),
+        }),
+        workflow: None,
+    };
+    let client = NativeClient::new(
+        endpoint.clone(),
+        f.workspace,
+        authority.clone(),
+        Some(&pki.ca_pem),
+    )
+    .unwrap();
+    client.stat(None).await.unwrap();
+    let before: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM operations), (SELECT count(*) FROM client_sessions)",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    let wrong =
+        NativeClient::new(endpoint, f.workspace, authority, Some(&pki.other_ca_pem)).unwrap();
+    assert!(matches!(
+        wrong.stat(None).await.unwrap_err(),
+        anchorfs_client::error::ClientError::Transport(_)
+    ));
+    let after: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM operations), (SELECT count(*) FROM client_sessions)",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert_eq!(before, after);
+    client.stat(None).await.unwrap();
+    client
+        .create_directory("tls", 0o755, &IdempotencyKey::new())
+        .await
+        .unwrap();
+    let h = client
+        .open_handle(&open("tls/file"), &IdempotencyKey::new())
+        .await
+        .unwrap();
+    client
+        .write_at(
+            h.handle_id,
+            0,
+            bytes::Bytes::from_static(b"verified https"),
+            &IdempotencyKey::new(),
+        )
+        .await
+        .unwrap();
+    client.fsync(h.handle_id).await.unwrap();
+    assert_eq!(
+        &client.read_range(h.handle_id, 0, 14).await.unwrap().0[..],
+        b"verified https"
+    );
+    client
+        .close_handle(h.handle_id, &IdempotencyKey::new())
+        .await
+        .unwrap();
+    f.invariants().await;
+}

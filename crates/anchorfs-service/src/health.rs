@@ -73,7 +73,7 @@ pub async fn readyz(
             .iter()
             .map(ToString::to_string)
             .collect();
-        let mut body = serde_json::json!({"schema_version":versions.schema_version,"object_format_version":versions.object_format_version,"api_version":API_PATH_VERSION,"durability_profile":if state.config.durability_profile==DurabilityProfile::Durable {"durable"}else{"development"},"database":"ok","backend":"ok","checksum_mode":match state.config.s3.checksum_mode { anchorfs_backend::config::ChecksumMode::Sha256 => "sha256", anchorfs_backend::config::ChecksumMode::None => "none" }});
+        let mut body = serde_json::json!({"tls":state.config.tls.is_some(),"schema_version":versions.schema_version,"object_format_version":versions.object_format_version,"api_version":API_PATH_VERSION,"durability_profile":if state.config.durability_profile==DurabilityProfile::Durable {"durable"}else{"development"},"database":"ok","backend":"ok","checksum_mode":match state.config.s3.checksum_mode { anchorfs_backend::config::ChecksumMode::Sha256 => "sha256", anchorfs_backend::config::ChecksumMode::None => "none" }});
         if !warnings.is_empty() {
             body["durability_warnings"] = serde_json::json!(warnings);
         }
