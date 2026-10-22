@@ -30,3 +30,4 @@ rustc-ice-*.txt
 # build outputs of scripts/build-release-binaries.sh and scripts/oci_export.py
 dist/
 export/
+__pycache__/
