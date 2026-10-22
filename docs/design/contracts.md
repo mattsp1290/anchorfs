@@ -580,8 +580,9 @@ POSIX-compliance claim. Statfs reports zero capacity, a deliberate limitation.
 Credentials and workflow tokens come from files or environment, never argv.
 The client refuses plaintext without allow-plaintext, disables environment
 proxies and redirects, and validates TLS using rustls with optional PEM roots.
-Stage 3a adds verified-CA client conformance and Linux `tls::https_mount_*`
-kernel tests; their executed status is in the Stage 3a acceptance record. JSON logs stay at info to avoid dependency
+Stage 3a verifies the HTTPS/CA-bundle path with client conformance and
+Linux `tls::https_mount_*` kernel tests on hosted kernel `7.0.0-1017-azure`.
+The separate owner-host gate remains pending; see the Stage 3a acceptance record. JSON logs stay at info to avoid dependency
 debug events containing names; local text logging may opt into debug.
 
 Deferred error-contract decision: reservation expiry currently uses the stable

@@ -157,8 +157,11 @@ manifest: `fixed:0 skipped:0 needs-manual:0`. The second checkpoint repeated all
 `git diff --check`: all 341 workspace tests passed again. Both Docker targets
 rebuilt using cached builder layers and `bash ci/image-smoke.sh arm64` passed.
 No implementation change was required by this review; this checkpoint records
-its approval and the D13/documentation clarifications. Second push, PR and
-hosted execution are pending.
+its approval and the D13/documentation clarifications. The second push was verified at
+`e609b0211bece4eb9bf56b75b28c48525a7c1795` (local HEAD equalled the origin
+branch). [Draft PR #8](https://github.com/mattsp1290/anchorfs/pull/8) is open.
+Both requested gauntlet checkpoints are complete; the sole remaining owner
+input is the separate Linux-host target.
 
 ## Limits carried forward
 
@@ -195,3 +198,42 @@ The final Linux mount test target compile check also passed (55.27 s).
 --release --locked` passed on Linux arm64 (36.42 s); this is compilation evidence,
 not Docker-on-Mac kernel acceptance. The separate Linux host target is awaiting
 owner input; no pre-existing infrastructure data has been used.
+
+## Hosted acceptance and remaining host gate
+
+[CI run 39803347993](https://github.com/mattsp1290/anchorfs/actions/runs/39803347993)
+passed all seven jobs on PR head
+`e609b0211bece4eb9bf56b75b28c48525a7c1795`: `lint`, `deny`, `test`,
+`build-linux-arm64`, `build-macos`, `image-amd64`, `image-arm64`.
+The last implementation-bearing commit is
+`9aed65171b24222bd94c401e485c0cb3bf927534`; subsequent changes record evidence
+and clarify documentation. Any later documentation-only revision has its own
+run linked from the PR checks; this named run is evidence for its named head.
+
+The `test` job (119909902356) ran as uid 1001 with fusermount3 3.14.0 on kernel
+`7.0.0-1017-azure`. `cargo test --workspace --locked -- --test-threads=4`
+passed 374 tests including doctests. The Linux kernel target passed all 31
+tests in 234.27 s, including both
+`tls::https_mount_with_ca_bundle_round_trips` and
+`tls::https_mount_without_trusted_ca_exits_before_mounting`. Compilation took
+3m48s before the suite. The actual route gate remains 38 implemented / 0 stubs;
+the database-column gate still asserts 156; OpenAPI/version, errno behavior,
+limits and timers pass their existing regressions.
+
+| Image job | Job ID | Shared release builder | Observed smoke |
+|---|---|---|---|
+| image-amd64 | 119909902749 | 284.2 s (4m44s) | both images amd64; all smoke checks passed |
+| image-arm64 | 119909902124 | 196.7 s (3m16s) | both images arm64; all smoke checks passed |
+
+Both native image runners report Docker 28.0.4 and fusermount3 3.14.0. The mount
+target reuses cached builder layers from the service build in both jobs.
+No component download was observed after the explicit toolchain override.
+Both builder times are below the plan's 40-minute escalation threshold.
+No image was pushed, saved or uploaded.
+
+The separately required owner-host serial mount suite and full workspace suite
+are **pending an SSH target**, requested during implementation. Hosted Linux
+kernel execution is distinct evidence and does not substitute for that host
+run. The PR stays draft and Stage 3a's full acceptance is not claimed complete
+until the host run and its mount/container cleanup observations are recorded.
+No existing infrastructure data was tested or removed.
