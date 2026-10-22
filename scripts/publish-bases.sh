@@ -61,7 +61,7 @@ PY
 )
   ref="$registry/$repository"
   echo "building $target for linux/amd64,linux/arm64" >&2
-  docker buildx build --platform linux/amd64,linux/arm64 --target "$target" \
+  docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 --target "$target" \
     --provenance=false --sbom=false \
     --output "type=oci,dest=$work/$base.tar" .
   mkdir "$work/$base"
