@@ -42,7 +42,6 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | utoipa-axum | 0.3.0 | MIT OR Apache-2.0 | https://github.com/juhaku/utoipa | route/document registration |
 | utoipa | 6.0.0 | MIT OR Apache-2.0 | https://github.com/juhaku/utoipa | OpenAPI annotations |
 | uuid | 1.28.0 | Apache-2.0 OR MIT | https://github.com/uuid-rs/uuid | random identifiers; conformance fixtures |
-
 | axum-server | 0.8.0 | MIT | https://github.com/programatik29/axum-server | TLS listener and graceful shutdown |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls | explicit aws-lc-rs TLS 1.3 server policy |
 | rustls-pki-types | 1.15.1 | MIT OR Apache-2.0 | https://github.com/rustls/pki-types | PEM certificate/key loading |
@@ -219,3 +218,12 @@ Docker library inputs, approved by Stage 3a D10 and owner decision 2026-10-22.
 Base images are not mirrored or published by this repository. apt versions
 are unpinned. The mount runtime installs fuse3 (helper GPL-2.0; libfuse
 LGPL-2.1); Debian distributes these separately from the AnchorFS binary.
+
+Stage 3a standard review feature check: `cargo tree --locked -e features -i
+aws-lc-rs -p anchorfs-service --target x86_64-unknown-linux-gnu` includes rcgen
+in the development graph; `-e normal,build,features` excludes it. Both show
+aws-lc-sys and prebuilt-nasm, without ring-io/ring-sig-verify. Those two optional
+aws-lc-rs features reference untrusted 0.7.1 in the registry manifest; neither
+is active here. `cargo tree --locked -i untrusted@0.7.1` (with and without dev
+edges on that target) reports nothing to print. The added lockfile edge is
+optional-resolution metadata, not an active release or test crypto feature.

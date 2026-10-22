@@ -1,4 +1,5 @@
 FROM rust:1.95.0-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
+ENV RUSTUP_TOOLCHAIN=1.95.0
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked -p anchorfs-service -p anchorfs-mount
@@ -7,7 +8,7 @@ FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2
 LABEL org.opencontainers.image.source="https://github.com/mattsp1290/anchorfs" \
       org.opencontainers.image.licenses="MIT"
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN useradd --uid 10001 --user-group --no-create-home anchorfs
+RUN groupadd --gid 10001 anchorfs && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin anchorfs
 COPY --from=builder /src/target/release/anchorfs-service /usr/local/bin/
 USER 10001:10001
 ENTRYPOINT ["anchorfs-service"]
@@ -17,7 +18,7 @@ FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2
 LABEL org.opencontainers.image.source="https://github.com/mattsp1290/anchorfs" \
       org.opencontainers.image.licenses="MIT"
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates fuse3 && rm -rf /var/lib/apt/lists/*
-RUN useradd --uid 10001 --user-group --no-create-home anchorfs
+RUN groupadd --gid 10001 anchorfs && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin anchorfs
 COPY --from=builder /src/target/release/anchorfs-mount /usr/local/bin/
 USER 10001:10001
 ENTRYPOINT ["anchorfs-mount"]

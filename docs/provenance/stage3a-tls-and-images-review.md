@@ -81,11 +81,49 @@ file and in-memory fixtures use exactly the same validation path.
 
 ## Independent reviews and delivery
 
-Pending the ordered gauntlet: two fresh independent code reviewers followed by
-a fresh adversarial thermonuclear rubric review. Every reviewer will receive
-an explicit approved-input packet and report a provenance verdict separately
-from technical correctness. Prior plan-review conclusions will not be supplied.
-No review, push or PR is claimed complete yet.
+Standard review of `04ce5da0b2d39f553dc4bb48a00d43e419bfe565` completed via
+fresh independent Opus processes using the installed Claude CLI (no conversation
+inheritance, auto-memory disabled, settings/plugins disabled, only Write tools
+into assigned output directories). Each received the full diff, full changed
+files, approved specifications, cleanroom policy and normative work packages;
+no research archive or prior reviewer conclusions. Transport Correctness:
+REQUEST_CHANGES, 2 Important + 7 Suggestions. Packaging and Acceptance:
+REQUEST_CHANGES, 2 Important + 12 Suggestions. Both reported **no blocking
+provenance findings**, with explicit limits on read-only packet evidence.
+
+Artifacts (local, uncommitted):
+`reviews/feat-stage3a-tls-and-images-2026-10-22-104303-04ce5da0b2d3/`,
+reviewer slugs `transport-correctness` and `packaging-and-acceptance`.
+The canonical dotfiles fix-review workflow selected all findings, merged five
+duplicates and preferred Important severity. Its initial automatic pass held
+configuration/TLS-related changes for manual inspection. The authorized
+implementer applied these through the canonical fixer workflow; a subsequent
+auto validation has no unresolved manual items.
+
+Disposition: 17 distinct findings addressed (3 Important, 14 Suggestions),
+including same-fixture trusted mount control, pre-minted positive session,
+bidirectional visibility, secret-free refusal logs, exact TLS receipt counts,
+HTTP/2 prior-knowledge refusal, explicit keep-alive TLS stream during shutdown,
+reset/abort handling, I/O error kinds, fixed GID/smoke checks, common smoke
+script retaining both required job IDs, architecture assertions for both
+images and native CPU checks, one digest scanner, rendered dependency table,
+CA-aware helper boundaries, feature/component evidence and license-label scope.
+A requirements audit also added the planned createSession call over TLS.
+
+One suggestion is deferred: adding a production X.509 parser and certificate
+expiry warnings is outside the approved startup policy; certificate validity
+continues to be enforced by verifying clients. No new runtime dependency or
+startup semantics are introduced for this suggestion. The matrix suggestion
+is addressed by a shared script while retaining the two job IDs mandated by
+the plan. No Critical/Important finding remains unresolved.
+
+Standard checkpoint gates passed on the corrected worktree:
+`cargo fmt --all --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`;
+`cargo deny check licenses bans advisories sources`; `cargo build --workspace --locked`;
+`cargo test --workspace --no-run --locked`; `cargo test --workspace --locked -- --test-threads=4`
+(341 tests, including doctests); and `git diff --check`.
+The Linux-only kernel test target has zero tests on macOS. First push,
+thermonuclear review, PR and hosted execution are pending.
 
 ## Limits carried forward
 
@@ -102,3 +140,23 @@ No review, push or PR is claimed complete yet.
 - Container `/dev/fuse`, capabilities and propagation documented, not proven.
 - No cluster, Helm, Spaces, cross-node or performance claims.
 - Image build durations will be recorded as observations, not optimized.
+
+## Additional local packaging observations
+
+Both service and mount targets built on local linux/arm64 and the original
+nine-item smoke script passed (fusermount3 3.14.0; image arm64). fuse3 installs
+successfully; useradd exists in the slim base. The shared aws-lc-sys build output
+reports `Building with: CC` for aarch64-unknown-linux-gnu; no builder package
+addition was necessary. The initial build downloaded clippy due to the
+rust-toolchain component list. The fixer sets `RUSTUP_TOOLCHAIN=1.95.0` in the
+builder so release builds use the digest-pinned toolchain without that extra
+component download. Rebuilt service and mount targets passed; release builder steps took 189.9 s
+and 199.1 s respectively while tests were still being corrected between local
+builds. Once source was stable the builder target was cached. Neither rebuild
+log downloaded/installed toolchain components. `bash ci/image-smoke.sh arm64`
+passed all checks, logging both images as arm64 and fusermount3 3.14.0.
+The final Linux mount test target compile check also passed (55.27 s).
+`docker run --rm anchorfs-builder:verify cargo check --tests -p anchorfs-mount
+--release --locked` passed on Linux arm64 (36.42 s); this is compilation evidence,
+not Docker-on-Mac kernel acceptance. The separate Linux host target is awaiting
+owner input; no pre-existing infrastructure data has been used.

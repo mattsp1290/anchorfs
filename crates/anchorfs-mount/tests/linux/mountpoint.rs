@@ -273,7 +273,7 @@ impl TempMount {
         }
         assert!(
             expected_exit.is_none(),
-            "unexpectedly mounted with untrusted CA"
+            "expected mount exit {expected_exit:?}, but it mounted"
         );
         this
     }

@@ -97,8 +97,65 @@ impl TlsProcess {
             200
         );
     }
+    fn tls_stream(&self) -> rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream> {
+        use rustls_pki_types::{CertificateDer, pem::PemObject};
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(CertificateDer::from_pem_slice(&self._files.pki.ca_pem).unwrap())
+            .unwrap();
+        let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+        let conn = rustls::ClientConnection::new(
+            std::sync::Arc::new(config),
+            "localhost".try_into().unwrap(),
+        )
+        .unwrap();
+        let socket =
+            std::net::TcpStream::connect(self.endpoint.strip_prefix("https://").unwrap()).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        rustls::StreamOwned::new(conn, socket)
+    }
     async fn stop(mut self) {
-        // Keep the reqwest connection pool alive throughout graceful shutdown.
+        // Hold an explicitly verified, fully consumed keep-alive request open
+        // throughout SIGTERM, independently of reqwest pool policy.
+        use std::io::{BufRead, Write};
+        let mut idle = std::io::BufReader::new(self.tls_stream());
+        idle.get_mut()
+            .write_all(
+                b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n",
+            )
+            .unwrap();
+        idle.get_mut().flush().unwrap();
+        let mut line = String::new();
+        idle.read_line(&mut line).unwrap();
+        assert!(line.starts_with("HTTP/1.1 200"), "{line}");
+        let mut length = None;
+        loop {
+            line.clear();
+            assert!(idle.read_line(&mut line).unwrap() > 0);
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = Some(value.trim().parse::<usize>().unwrap());
+            }
+        }
+        let mut body = vec![0; length.expect("health response length")];
+        std::io::Read::read_exact(&mut idle, &mut body).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["status"],
+            "alive"
+        );
         nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(self.child.0.id() as i32),
             nix::sys::signal::Signal::SIGTERM,
@@ -109,6 +166,7 @@ impl TlsProcess {
         assert_eq!(code, 0, "{stderr}");
         assert!(stderr.contains("listening on https://"), "{stderr}");
         assert!(start.elapsed() < Duration::from_secs(10));
+        drop(idle);
     }
 }
 fn client(ca: &[u8]) -> reqwest::ClientBuilder {
@@ -135,10 +193,21 @@ async fn serve_tls_rejects_plaintext_and_tls12() {
         .await
         .unwrap();
     let mut buffer = [0; 512];
-    let n = tokio::time::timeout(Duration::from_secs(5), tcp.read(&mut buffer))
+    let n = match tokio::time::timeout(Duration::from_secs(5), tcp.read(&mut buffer))
         .await
         .unwrap()
-        .unwrap();
+    {
+        Ok(n) => n,
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ) =>
+        {
+            0
+        }
+        Err(e) => panic!("unexpected plaintext probe error: {e}"),
+    };
     assert!(!buffer[..n].starts_with(b"HTTP/"));
     assert!(
         n == 0 || buffer[0] == 0x15,
@@ -220,4 +289,35 @@ fn serve_tls_config_errors() {
             assert!(!stderr.contains("database connection"), "{stderr}");
         }
     }
+}
+
+#[tokio::test]
+async fn serve_tls_rejects_http2_prior_knowledge() {
+    use std::io::Write;
+    let server = TlsProcess::start(false).await;
+    server.health().await;
+    let mut stream = server.tls_stream();
+    stream
+        .write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+        .unwrap();
+    stream.flush().unwrap();
+    let mut bytes = [0; 512];
+    match std::io::Read::read(&mut stream, &mut bytes) {
+        Ok(n) => assert!(
+            n == 0 || bytes[..n].starts_with(b"HTTP/1.1"),
+            "expected HTTP/1 rejection or EOF, got {:?}",
+            &bytes[..n]
+        ),
+        Err(e) => assert!(
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::UnexpectedEof
+            ),
+            "{e}"
+        ),
+    }
+    server.health().await;
+    server.stop().await;
 }

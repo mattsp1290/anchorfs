@@ -5,3 +5,4 @@ reviews/
 docs/
 .github/
 **/*.md
+ci/

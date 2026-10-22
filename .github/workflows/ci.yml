@@ -88,29 +88,7 @@ jobs:
       - run: docker build -f docker/Dockerfile --target service -t anchorfs-service:ci .
       - run: docker build -f docker/Dockerfile --target mount -t anchorfs-mount:ci .
       - name: Packaging smoke
-        run: |
-          set -euo pipefail
-          # 1 shipped contract equals the committed snapshot (trailing whitespace normalized; the Rust snapshot test uses trim_end)
-          tmp="${RUNNER_TEMP:-$(mktemp -d)}"
-          docker run --rm anchorfs-service:ci openapi --format yaml > "$tmp/openapi.yaml"
-          diff -u <(sed -e 's/[[:space:]]*$//' docs/api/openapi-v1.yaml) <(sed -e 's/[[:space:]]*$//' "$tmp/openapi.yaml")
-          # 2,3 non-root
-          test "$(docker run --rm --entrypoint id anchorfs-service:ci -u)" = 10001
-          test "$(docker run --rm --entrypoint id anchorfs-mount:ci -u)" = 10001
-          # 4 bare serve fails closed on configuration (exit 2, names the missing variable)
-          rc=0; err=$(docker run --rm anchorfs-service:ci serve 2>&1 >/dev/null) || rc=$?
-          test "$rc" -eq 2; grep -q 'ANCHORFS_DATABASE_URL' <<<"$err"
-          # 5 a lone TLS variable is rejected before the database URL is required (exit 2, names the rule)
-          rc=0; err=$(docker run --rm -e ANCHORFS_TLS_CERT_PATH=/nonexistent anchorfs-service:ci serve 2>&1 >/dev/null) || rc=$?
-          test "$rc" -eq 2; grep -q 'set together' <<<"$err"
-          # 6 mount binary runs and prints the strict profile
-          out=$(docker run --rm anchorfs-mount:ci --print-profile); grep -q direct_io <<<"$out"
-          # 7 mount helper present
-          docker run --rm --entrypoint fusermount3 anchorfs-mount:ci --version
-          # 8 CA store present in the service image
-          docker run --rm --entrypoint sh anchorfs-service:ci -c 'test -r /etc/ssl/certs/ca-certificates.crt'
-          # 9 architecture recorded in the job log
-          docker image inspect anchorfs-service:ci --format '{{.Architecture}}'
+        run: bash ci/image-smoke.sh amd64
   image-arm64:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
@@ -120,26 +98,4 @@ jobs:
       - run: docker build -f docker/Dockerfile --target service -t anchorfs-service:ci .
       - run: docker build -f docker/Dockerfile --target mount -t anchorfs-mount:ci .
       - name: Packaging smoke
-        run: |
-          set -euo pipefail
-          # 1 shipped contract equals the committed snapshot (trailing whitespace normalized; the Rust snapshot test uses trim_end)
-          tmp="${RUNNER_TEMP:-$(mktemp -d)}"
-          docker run --rm anchorfs-service:ci openapi --format yaml > "$tmp/openapi.yaml"
-          diff -u <(sed -e 's/[[:space:]]*$//' docs/api/openapi-v1.yaml) <(sed -e 's/[[:space:]]*$//' "$tmp/openapi.yaml")
-          # 2,3 non-root
-          test "$(docker run --rm --entrypoint id anchorfs-service:ci -u)" = 10001
-          test "$(docker run --rm --entrypoint id anchorfs-mount:ci -u)" = 10001
-          # 4 bare serve fails closed on configuration (exit 2, names the missing variable)
-          rc=0; err=$(docker run --rm anchorfs-service:ci serve 2>&1 >/dev/null) || rc=$?
-          test "$rc" -eq 2; grep -q 'ANCHORFS_DATABASE_URL' <<<"$err"
-          # 5 a lone TLS variable is rejected before the database URL is required (exit 2, names the rule)
-          rc=0; err=$(docker run --rm -e ANCHORFS_TLS_CERT_PATH=/nonexistent anchorfs-service:ci serve 2>&1 >/dev/null) || rc=$?
-          test "$rc" -eq 2; grep -q 'set together' <<<"$err"
-          # 6 mount binary runs and prints the strict profile
-          out=$(docker run --rm anchorfs-mount:ci --print-profile); grep -q direct_io <<<"$out"
-          # 7 mount helper present
-          docker run --rm --entrypoint fusermount3 anchorfs-mount:ci --version
-          # 8 CA store present in the service image
-          docker run --rm --entrypoint sh anchorfs-service:ci -c 'test -r /etc/ssl/certs/ca-certificates.crt'
-          # 9 architecture recorded in the job log
-          docker image inspect anchorfs-service:ci --format '{{.Architecture}}'
+        run: bash ci/image-smoke.sh arm64

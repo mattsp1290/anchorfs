@@ -41,3 +41,8 @@ require a later deployment decision.
 
 [Acceptance evidence](../provenance/stage3a-tls-and-images-acceptance.md)
 separates kernel tests of the host binary from packaging smoke tests.
+
+The OCI licenses label describes AnchorFS code. Debian base/runtime packages
+carry their own licenses, recorded in dependencies.md. A later image publication
+review must consider those packages, including the fuse3 source-availability
+requirements; this milestone does not publish images.

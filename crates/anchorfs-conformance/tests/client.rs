@@ -426,7 +426,7 @@ async fn https_endpoint_verifies_server_certificate() {
     .unwrap();
     client.stat(None).await.unwrap();
     let before: (i64, i64) = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM operations), (SELECT count(*) FROM client_sessions)",
+        "SELECT (SELECT count(*) FROM operations) + (SELECT count(*) FROM admin_operations), (SELECT count(*) FROM client_sessions)",
     )
     .fetch_one(&f.pool)
     .await
@@ -438,13 +438,18 @@ async fn https_endpoint_verifies_server_certificate() {
         anchorfs_client::error::ClientError::Transport(_)
     ));
     let after: (i64, i64) = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM operations), (SELECT count(*) FROM client_sessions)",
+        "SELECT (SELECT count(*) FROM operations) + (SELECT count(*) FROM admin_operations), (SELECT count(*) FROM client_sessions)",
     )
     .fetch_one(&f.pool)
     .await
     .unwrap();
     assert_eq!(before, after);
     client.stat(None).await.unwrap();
+    let session = client
+        .create_session(f.worker.id, &IdempotencyKey::new())
+        .await
+        .unwrap();
+    assert_ne!(session.session_id, uuid::Uuid::nil());
     client
         .create_directory("tls", 0o755, &IdempotencyKey::new())
         .await
@@ -471,5 +476,16 @@ async fn https_endpoint_verifies_server_certificate() {
         .close_handle(h.handle_id, &IdempotencyKey::new())
         .await
         .unwrap();
+    let mutations: i64 = sqlx::query_scalar("SELECT count(*) FROM operations WHERE workspace_id=$1 AND op_type IN ('directory_create','handle_open','write_at','handle_close')")
+        .bind(f.workspace).fetch_one(&f.pool).await.unwrap();
+    assert_eq!(mutations, 4);
+    let totals: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM operations) + (SELECT count(*) FROM admin_operations), (SELECT count(*) FROM client_sessions)",
+    )
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    // TLS adds one session receipt and four byte/namespace mutation receipts.
+    assert_eq!(totals, (before.0 + 5, before.1 + 1));
     f.invariants().await;
 }

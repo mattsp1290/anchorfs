@@ -16,16 +16,17 @@ pub struct TlsPaths {
 }
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {
-    #[error("cannot read {0}")]
-    Read(PathBuf),
+    #[error("cannot read {0}: {1:?}")]
+    Read(PathBuf, std::io::ErrorKind),
     #[error("cannot parse {0}")]
     Parse(&'static str),
     #[error("cannot build TLS configuration")]
     Build,
 }
 pub fn load(paths: &TlsPaths) -> Result<TlsConfig, TlsError> {
-    let cert = std::fs::read(&paths.cert).map_err(|_| TlsError::Read(paths.cert.clone()))?;
-    let key = std::fs::read(&paths.key).map_err(|_| TlsError::Read(paths.key.clone()))?;
+    let cert =
+        std::fs::read(&paths.cert).map_err(|e| TlsError::Read(paths.cert.clone(), e.kind()))?;
+    let key = std::fs::read(&paths.key).map_err(|e| TlsError::Read(paths.key.clone(), e.kind()))?;
     server_config(&cert, &key)
 }
 pub fn server_config(cert_pem: &[u8], key_pem: &[u8]) -> Result<TlsConfig, TlsError> {

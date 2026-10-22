@@ -289,6 +289,10 @@ pub fn native(
     credential: &Credential,
     session: Option<&Value>,
 ) -> Client {
+    assert!(
+        !endpoint.starts_with("https://"),
+        "TLS fixtures must use their CA-aware API client"
+    );
     native_trusted((endpoint, None), workspace, credential, session)
 }
 fn native_trusted(
@@ -332,6 +336,10 @@ pub async fn raw(
     path: &str,
     body: Option<Value>,
 ) -> Value {
+    assert!(
+        !endpoint.starts_with("https://"),
+        "use Fixture::raw for TLS fixtures"
+    );
     raw_with_proof(
         (endpoint, None),
         credential,
