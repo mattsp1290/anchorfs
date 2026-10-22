@@ -43,3 +43,13 @@ HTTPS acceptance, and native amd64/arm64 container build jobs. See
 [Stage 3a acceptance](provenance/stage3a-tls-and-images-acceptance.md) for actual
 executed status and limitations. Images are not published and no cluster or
 cross-node deployment is claimed.
+
+Stage 3b prepares the delivery path and cluster proof: a Forgejo workflow that
+publishes digest-addressed images and an OCI Helm chart to the internal Zot
+registry, and an owner-run two-node proof. See
+[Forgejo delivery](ops/forgejo-delivery.md), [cluster proof](ops/cluster-proof.md),
+[container operations](ops/container-images.md),
+[Stage 3b review evidence](provenance/stage3b-delivery-and-cluster-review.md) and
+[Stage 3b acceptance](provenance/stage3b-delivery-and-cluster-acceptance.md).
+Non-claims: no Flux promotion, no HA, no Spaces, no sandbox, and nothing has
+been published or deployed yet; the Forgejo and cluster rows are pending.

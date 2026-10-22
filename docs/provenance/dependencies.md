@@ -227,3 +227,31 @@ aws-lc-rs features reference untrusted 0.7.1 in the registry manifest; neither
 is active here. `cargo tree --locked -i untrusted@0.7.1` (with and without dev
 edges on that target) reports nothing to print. The added lockfile edge is
 optional-resolution metadata, not an active release or test crypto feature.
+
+## Stage 3b delivery tools, actions and images (2026-10-22)
+
+Versions below were observed or read on 2026-10-22 unless a row says otherwise.
+Nothing here is vendored or copied into the repository; every item is consumed
+at a pin or installed by the owner. "CI image" is the owner-built job image
+listed below. Registry package changes: none (`Cargo.lock` gained one line,
+the workspace edge below).
+
+| Item | Pin | License / note |
+|---|---|---|
+| Rust crate edge | `anchorfs-service` -> `anchorfs-client` (new workspace edge used by the `probe` subcommand; no new registry package) | workspace crate |
+| cargo-zigbuild | 0.23.4 (CI image and workstation); `cargo info cargo-zigbuild@0.23.4` on 2026-10-22 | MIT |
+| zig | 0.16.0 (CI image), 0.17.0 (workstation) | MIT |
+| crane (go-containerregistry) | 0.22.1 (CI image and workstation); absent on the control host, where readback uses `curl` against the Distribution API | Apache-2.0 |
+| zot (platform-owned registry) | v2.1.3 as observed; retention behavior verified by readback, not configured here; not shipped | Apache-2.0 |
+| Helm | 3.13.0 official archives (`ci/install-helm.sh`): linux-amd64 SHA-256 `138676351483e61d12dfade70da6c03d471bbdcac84eaadeb5e1d06fa114a24f`, linux-arm64 SHA-256 `d12a0e73a7dbff7d89d13e0c6eb73f5095f72d70faea30531941d320678904d2`, read from get.helm.sh on 2026-10-22; control host also has 3.13.0; 4.3.0 in the CI image and on the workstation | Apache-2.0 |
+| kubectl | `k3s kubectl` (server v1.35.9) used by every script; the standalone v1.33.1 client on the control host is outside the supported skew and not used | Apache-2.0 |
+| cert-manager | v1.20.4 (cluster runs a mixed v1.19.2/v1.20.4 pod set) installed by the owner, not by this repository | Apache-2.0 |
+| Python | 3.12.15 in the CI image; `scripts/*.py` use the standard library only; PyYAML 6.0.3 ships in the image but is unused | PSF-2.0; MIT (PyYAML, unused) |
+| Forgejo action | `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2) | MIT |
+| Forgejo action | `code.forgejo.org/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5` (v3.2.1) | MIT |
+| Forgejo action | `code.forgejo.org/actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59` (v3.1.0) | MIT |
+| CI job image | `10.0.0.106:30001/birbhomes/ci-rust-oci@sha256:4ac11af555a6be2b8ff7b74ae78b9c1a5060c841634d855111b0f6cc892fdbac`, owner-built; in-image versions verified 2026-10-22: rustc 1.95.0, cargo-zigbuild 0.23.4, zig 0.16.0, Python 3.12.15 | owner-built; contents per the owner's repository lock |
+| Runtime bases | `anchorfs/service-base`, `anchorfs/mount-base`: digests live in `docker/bases.json` (all null until the owner publishes; the provenance test requires any published digest to be recorded in this file); built from this repository's Dockerfile on the `debian:bookworm-slim` digest above | Debian packages under their licenses; fuse3 note as above |
+| Cluster image | `postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3` (already a recorded test image; also the chart's dev dependency) | PostgreSQL License |
+| Cluster image | `bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20` (already a recorded test image; also the chart's dev dependency) | AGPL-3.0 server used unmodified as a disposable service, not linked |
+| Shared publisher | owner repository `birbhomes` commit `40ff258cc56aa67ba22d8661dd0d11babe2d4065` (`scripts/oci-publish.py`, `scripts/gitops/*`), consumed at this pin in the workflow, never copied | owner's private repository |
