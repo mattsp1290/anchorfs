@@ -1,6 +1,4 @@
 use super::{fixture::*, mountpoint::*};
-use anchorfs_client::auth::WorkflowAuthority;
-use anchorfs_core::Secret;
 use serde_json::{Value, json};
 use std::{
     fs::{self, OpenOptions},
@@ -46,7 +44,10 @@ fn paused_mount_past_expiry_is_fenced() {
     let _serial = serial();
     let f = Fixture::new();
     f.put("f", b"old");
-    let m = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -76,8 +77,15 @@ fn lease_bound_mount_publishes_and_ordinary_mount_is_busy() {
     let l = lease(&f);
     let s = bound(&f, &l);
     let (token, epoch) = proof(&l);
-    let a = TempMount::process(&f, &f.worker, Some(&s), Some((token, epoch)), 1048576);
-    let b = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let a = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&s)
+        .workflow((token, epoch))
+        .process();
+    let b = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
     fs::write(a.path.join("bound"), b"lease bytes").unwrap();
     let file = OpenOptions::new()
         .read(true)
@@ -105,7 +113,10 @@ fn lease_bound_mount_publishes_and_ordinary_mount_is_busy() {
         &format!("/sessions/{}/rebind", s["session_id"].as_str().unwrap()),
         Some(json!({"workflow_lease_token":null})),
     );
-    let successor = TempMount::process(&f, &f.worker, Some(&rebound), None, 1048576);
+    let successor = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&rebound)
+        .process();
     fs::write(successor.path.join("successor"), b"yes").unwrap();
     fs::write(b.path.join("ordinary"), b"yes").unwrap();
     drop(successor);
@@ -119,7 +130,11 @@ fn takeover_fences_bound_mount() {
     let f = Fixture::new();
     let l = lease(&f);
     let s = bound(&f, &l);
-    let a = TempMount::process(&f, &f.worker, Some(&s), Some(proof(&l)), 1048576);
+    let a = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&s)
+        .workflow(proof(&l))
+        .process();
     fs::write(a.path.join("before"), b"old").unwrap();
     f.sql("UPDATE workspaces SET workflow_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1");
     let successor_host=Credential::from(&f.run(raw(&f.endpoint,&f.admin,None,"POST","/v1/credentials",Some(json!({"workspace_id":f.workspace,"kind":"host","role":"write","uid":unsafe{libc::geteuid()},"gid":unsafe{libc::getegid()},"max_reservation_bytes":1u64<<30})))));
@@ -145,7 +160,11 @@ fn takeover_fences_bound_mount() {
         "/sessions",
         Some(json!({"credential_id":f.worker.id,"bind_to_workflow_lease":next["token"]})),
     );
-    let b = TempMount::process(&f, &f.worker, Some(&session), Some(proof(&next)), 1048576);
+    let b = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&session)
+        .workflow(proof(&next))
+        .process();
     stale(fs::write(a.path.join("stale"), b"bad").unwrap_err());
     fs::write(b.path.join("after"), b"new").unwrap();
     assert_eq!(f.read("before"), b"old");
@@ -162,7 +181,11 @@ fn expired_lease_latches_bound_mount_without_takeover() {
     let l = lease(&f);
     let s = bound(&f, &l);
     let relay = proxy(&mut f);
-    let a = TempMount::process(&f, &f.worker, Some(&s), Some(proof(&l)), 1048576);
+    let a = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&s)
+        .workflow(proof(&l))
+        .process();
     fs::write(a.path.join("f"), b"old").unwrap();
     let file = OpenOptions::new()
         .read(true)
@@ -200,13 +223,7 @@ fn expired_lease_latches_bound_mount_without_takeover() {
     stale(file.read_at(&mut bytes, 0).unwrap_err());
     stale(fs::metadata(&a.path).unwrap_err());
     assert_eq!(relay.count(), before);
-    let direct = native(&f.endpoint, f.workspace, &f.worker, Some(&s));
-    let mut authority = direct.authority();
-    authority.workflow = Some(WorkflowAuthority {
-        token: Secret::new(proof(&l).0.into()),
-        epoch: proof(&l).1,
-    });
-    let direct = direct.with_authority(authority);
+    let direct = f.native_bound(&s, proof(&l));
     f.run(direct.stat(None)).unwrap();
     assert_eq!(f.count("write_at"), 1);
     drop(file);
@@ -220,7 +237,10 @@ fn revocation_fences_mount() {
         let mut f = Fixture::new();
         f.put("f", b"old");
         let relay = proxy(&mut f);
-        let a = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+        let a = TempMount::builder(&f)
+            .credential(&f.worker)
+            .session(&f.session)
+            .process();
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -252,7 +272,7 @@ fn revocation_fences_mount() {
         assert_eq!(f.count("write_at"), before);
         close_ok(file);
         f.put("host", b"continues");
-        let successor = TempMount::process(&f, &f.host, None, None, 1048576);
+        let successor = TempMount::builder(&f).process();
         assert_eq!(fs::read(successor.path.join("host")).unwrap(), b"continues");
         drop(successor);
         drop(a);
@@ -272,7 +292,9 @@ fn renewal_keeps_handles_and_session_alive() {
     );
     f.put("f", b"old");
     let relay = proxy(&mut f);
-    let m = TempMount::in_process(&f);
+    let m = TempMount::builder(&f)
+        .watchdog(std::time::Duration::from_secs(180))
+        .in_process();
     relay.fail_requests(
         &format!("POST /v1/workspaces/{}/sessions/", f.workspace),
         1,
@@ -337,16 +359,20 @@ fn sigstop_paused_mount_is_fenced_on_resume() {
         Arc::new(anchorfs_service::pipeline::faults::NoFaults),
     );
     f.put("f", b"old");
-    let mut m = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let mut m = TempMount::builder(&f)
+        .watchdog(std::time::Duration::from_secs(180))
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(m.path.join("f"))
         .unwrap();
     let before = f.count("write_at");
-    m.signal("-STOP");
+    m.signal(nix::sys::signal::Signal::SIGSTOP);
     std::thread::sleep(Duration::from_secs(45));
-    m.signal("-CONT");
+    m.signal(nix::sys::signal::Signal::SIGCONT);
     let mut bytes = [0; 3];
     stale(file.read_at(&mut bytes, 0).unwrap_err());
     stale(file.write_at(b"bad", 0).unwrap_err());
@@ -391,7 +417,10 @@ fn ordinary_mount_survives_lease_race() {
     });
     let f = Fixture::with(|_| {}, 1 << 30, gate.clone());
     f.put("f", b"old");
-    let m = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -441,7 +470,11 @@ fn bound_fence_rejects_inflight_read_result() {
     f.put("trigger", b"x");
     let l = lease(&f);
     let session = bound(&f, &l);
-    let m = TempMount::process(&f, &f.worker, Some(&session), Some(proof(&l)), 1048576);
+    let m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&session)
+        .workflow(proof(&l))
+        .process();
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -486,7 +519,11 @@ fn unresolved_append_fences_handle_before_application_retry() {
     let mut f = Fixture::new();
     f.put("append", b"prefix");
     let relay = proxy(&mut f);
-    let m = TempMount::process(&f, &f.worker, Some(&f.session), None, 4096);
+    let m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .max_io(4096)
+        .process();
     let mut file = OpenOptions::new()
         .append(true)
         .open(m.path.join("append"))
@@ -500,6 +537,45 @@ fn unresolved_append_fences_handle_before_application_retry() {
     stale(file.write(b"once").unwrap_err());
     assert_eq!(f.read("append"), b"prefixonce");
     assert_eq!(f.count("append"), 1);
+    drop(file);
+    drop(m);
+    f.invariants();
+}
+
+#[test]
+fn inflight_busy_write_cannot_override_a_latched_mount_fence() {
+    let _serial = serial();
+    let mut f = Fixture::new();
+    f.put("f", b"old");
+    let relay = proxy(&mut f);
+    let m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
+    let file = OpenOptions::new()
+        .write(true)
+        .open(m.path.join("f"))
+        .unwrap();
+    let _lease = lease(&f);
+    let before = f.count("write_at");
+    let held = relay.hold_response(&format!("PUT /v1/workspaces/{}/handles/", f.workspace));
+    std::thread::scope(|scope| {
+        let write = scope.spawn(|| file.write_at(b"bad", 0));
+        f.run(async { tokio::time::timeout(Duration::from_secs(10), held.reached()).await })
+            .unwrap();
+        f.raw(
+            &f.host,
+            Some(&f.host_session),
+            "DELETE",
+            &format!("/sessions/{}", f.session["session_id"].as_str().unwrap()),
+            None,
+        );
+        stale(fs::metadata(&m.path).unwrap_err());
+        held.release();
+        stale(write.join().unwrap().unwrap_err());
+    });
+    assert_eq!(f.count("write_at"), before);
+    assert_eq!(f.read("f"), b"old");
     drop(file);
     drop(m);
     f.invariants();

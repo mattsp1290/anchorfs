@@ -1,23 +1,26 @@
-use crate::errno::{CallClass, ErrnoName, errno_for};
-use anchorfs_client::{error::ClientError, retry::IdempotencyKey, wire::WriteResult};
+use crate::errno::ErrnoName;
+use anchorfs_client::{retry::IdempotencyKey, wire::WriteResult};
 use bytes::Bytes;
-use std::{collections::BTreeMap, future::Future, time::Instant};
+use std::future::Future;
+#[cfg(target_os = "linux")]
+use std::{collections::BTreeMap, time::Instant};
+#[cfg(any(target_os = "linux", test))]
 use uuid::Uuid;
+#[cfg(target_os = "linux")]
 #[derive(Debug, Clone)]
-pub struct OpenFile {
+pub(crate) struct OpenFile {
     pub handle_id: Uuid,
     pub server_ino: i64,
-    pub read: bool,
-    pub write: bool,
-    pub append: bool,
     pub fenced: bool,
     pub renewed: Instant,
 }
+#[cfg(target_os = "linux")]
 #[derive(Default)]
-pub struct OpenFiles {
+pub(crate) struct OpenFiles {
     next: u64,
-    pub entries: BTreeMap<u64, OpenFile>,
+    pub(crate) entries: BTreeMap<u64, OpenFile>,
 }
+#[cfg(target_os = "linux")]
 impl OpenFiles {
     pub fn insert(&mut self, file: OpenFile) -> u64 {
         self.next += 1;
@@ -25,17 +28,20 @@ impl OpenFiles {
         self.next
     }
 }
+#[cfg(target_os = "linux")]
 #[derive(Debug, Clone)]
-pub struct DirEntrySnapshot {
+pub(crate) struct DirEntrySnapshot {
     pub ino: u64,
     pub name: String,
     pub kind: anchorfs_client::wire::InodeKind,
 }
+#[cfg(target_os = "linux")]
 #[derive(Default)]
-pub struct OpenDirs {
+pub(crate) struct OpenDirs {
     next: u64,
-    pub entries: BTreeMap<u64, Vec<DirEntrySnapshot>>,
+    pub(crate) entries: BTreeMap<u64, Vec<DirEntrySnapshot>>,
 }
+#[cfg(target_os = "linux")]
 impl OpenDirs {
     pub fn insert(&mut self, entries: Vec<DirEntrySnapshot>) -> u64 {
         self.next += 1;
@@ -43,8 +49,14 @@ impl OpenDirs {
         self.next
     }
 }
-/// Only known committed slices count. Ambiguous outcomes stop the loop.
-/// The kernel normally bounds each request to one slice; splitting is defensive.
+/// The adapter owns fence/error policy. This portable algorithm only counts
+/// committed slices and retries definitive generation conflicts under fresh keys.
+pub enum Slice {
+    Committed(WriteResult),
+    Conflict,
+    Failed(ErrnoName),
+}
+/// Kernel requests normally fit one slice; splitting is defensive.
 pub async fn write_slices<F, Fut>(
     data: &[u8],
     offset: u64,
@@ -53,35 +65,28 @@ pub async fn write_slices<F, Fut>(
 ) -> (usize, Option<ErrnoName>)
 where
     F: FnMut(u64, Bytes, IdempotencyKey) -> Fut,
-    Fut: Future<Output = Result<WriteResult, ClientError>>,
+    Fut: Future<Output = Slice>,
 {
     let mut committed = 0;
     for slice in data.chunks(max_io) {
         let Some(at) = offset.checked_add(committed as u64) else {
             return (committed, Some(ErrnoName::EFBIG));
         };
-        let mut result = None;
-        for _ in 0..3 {
-            let attempt = write(at, Bytes::copy_from_slice(slice), IdempotencyKey::new()).await;
-            let conflict =
-                attempt.as_ref().err().and_then(ClientError::code) == Some("generation_conflict");
-            result = Some(attempt);
-            if !conflict {
-                break;
-            }
-        }
-        match result.expect("one or more attempts") {
-            Ok(result) if result.bytes_written == slice.len() as u64 => committed += slice.len(),
-            Ok(_) => return (committed, Some(ErrnoName::EIO)),
-            Err(error) => {
-                tracing::warn!(
-                    code = error.code(),
-                    "write slice did not establish publication"
-                );
-                if let ClientError::Api(e) = &error {
-                    tracing::warn!(operation_id=?e.operation_id,trace_id=%e.trace_id,"write failure receipt");
+        let mut conflicts = 0;
+        loop {
+            match write(at, Bytes::copy_from_slice(slice), IdempotencyKey::new()).await {
+                Slice::Committed(result) if result.bytes_written == slice.len() as u64 => {
+                    committed += slice.len();
+                    break;
                 }
-                return (committed, Some(errno_for(&error, CallClass::Mutation)));
+                Slice::Committed(_) => return (committed, Some(ErrnoName::EIO)),
+                Slice::Failed(error) => return (committed, Some(error)),
+                Slice::Conflict => {
+                    conflicts += 1;
+                    if conflicts == 3 {
+                        return (committed, Some(ErrnoName::EIO));
+                    }
+                }
             }
         }
     }
@@ -91,18 +96,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anchorfs_client::error::ApiFailure;
     use std::sync::{Arc, Mutex};
-    fn error(code: &str) -> ClientError {
-        ClientError::Api(ApiFailure {
-            status: 409,
-            code: code.into(),
-            message: String::new(),
-            trace_id: String::new(),
-            operation_id: None,
-            retry_after_ms: None,
-        })
-    }
     #[tokio::test]
     async fn split_partial_and_ambiguous_writes() {
         for code in ["quota_exceeded", "outcome_unknown"] {
@@ -116,9 +110,13 @@ mod tests {
                 };
                 async move {
                     if index == 2 {
-                        Err(error(code))
+                        Slice::Failed(if code == "quota_exceeded" {
+                            ErrnoName::EDQUOT
+                        } else {
+                            ErrnoName::EIO
+                        })
                     } else {
-                        Ok(WriteResult {
+                        Slice::Committed(WriteResult {
                             operation_id: Uuid::new_v4(),
                             generation: 1,
                             bytes_written: bytes.len() as u64,
@@ -150,7 +148,7 @@ mod tests {
         let capture = keys.clone();
         let result = write_slices(b"abc", 0, 4, move |_, _, key| {
             capture.lock().unwrap().push(key.as_str().to_owned());
-            async { Err(error("generation_conflict")) }
+            async { Slice::Conflict }
         })
         .await;
         assert_eq!(result, (0, Some(ErrnoName::EIO)));
@@ -165,7 +163,7 @@ mod tests {
         let result = write_slices(b"abcdefghij", 5, 4, move |at, bytes, _| {
             capture.lock().unwrap().push((at, bytes.len()));
             async move {
-                Ok(WriteResult {
+                Slice::Committed(WriteResult {
                     operation_id: Uuid::new_v4(),
                     generation: 1,
                     bytes_written: bytes.len() as u64,

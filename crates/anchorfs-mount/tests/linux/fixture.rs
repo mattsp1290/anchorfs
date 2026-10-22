@@ -40,7 +40,22 @@ impl Credential {
     }
 }
 pub struct Fixture {
-    pub rt: tokio::runtime::Handle,
+    ready: Ready,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+impl std::ops::Deref for Fixture {
+    type Target = Ready;
+    fn deref(&self) -> &Ready {
+        &self.ready
+    }
+}
+impl std::ops::DerefMut for Fixture {
+    fn deref_mut(&mut self) -> &mut Ready {
+        &mut self.ready
+    }
+}
+pub struct Ready {
     pub endpoint: String,
     pub pool: sqlx::PgPool,
     pub workspace: Uuid,
@@ -52,22 +67,7 @@ pub struct Fixture {
     pub host_session: Value,
     pub api: Client,
     pub config: Config,
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
-    join: Option<std::thread::JoinHandle<()>>,
-}
-struct Ready {
-    endpoint: String,
-    pool: sqlx::PgPool,
-    workspace: Uuid,
-    host: Credential,
-    worker: Credential,
-    admin: Credential,
-
-    session: Value,
-    host_session: Value,
-    api: Client,
-    config: Config,
-    rt: tokio::runtime::Handle,
+    pub rt: tokio::runtime::Handle,
 }
 impl Fixture {
     pub fn new() -> Self {
@@ -112,21 +112,19 @@ impl Fixture {
             .recv_timeout(Duration::from_secs(120))
             .expect("service fixture startup");
         Self {
-            rt: ready.rt,
-            endpoint: ready.endpoint,
-            pool: ready.pool,
-            workspace: ready.workspace,
-            host: ready.host,
-            worker: ready.worker,
-            admin: ready.admin,
-
-            session: ready.session,
-            host_session: ready.host_session,
-            api: ready.api,
-            config: ready.config,
+            ready,
             stop: Some(stop),
             join: Some(join),
         }
+    }
+    pub fn native_bound(&self, session: &Value, proof: (&str, i64)) -> Client {
+        let client = native(&self.endpoint, self.workspace, &self.worker, Some(session));
+        let mut authority = client.authority();
+        authority.workflow = Some(anchorfs_client::auth::WorkflowAuthority {
+            token: Secret::new(proof.0.into()),
+            epoch: proof.1,
+        });
+        client.with_authority(authority)
     }
     pub fn run<T>(&self, future: impl Future<Output = T>) -> T {
         self.rt.block_on(future)
@@ -297,6 +295,17 @@ pub async fn raw(
     path: &str,
     body: Option<Value>,
 ) -> Value {
+    raw_with_proof(endpoint, credential, session, method, path, body, None).await
+}
+async fn raw_with_proof(
+    endpoint: &str,
+    credential: &Credential,
+    session: Option<&Value>,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+    workflow: Option<(&str, i64)>,
+) -> Value {
     let mut request = reqwest::Client::new()
         .request(method.parse().unwrap(), format!("{endpoint}{path}"))
         .bearer_auth(&credential.bearer)
@@ -310,6 +319,11 @@ pub async fn raw(
                 s["session_epoch"].as_i64().unwrap(),
             );
     }
+    if let Some((token, epoch)) = workflow {
+        request = request
+            .header("X-Anchorfs-Workflow-Token", token)
+            .header("X-Anchorfs-Workflow-Epoch", epoch);
+    }
     if let Some(body) = body {
         request = request.json(&body);
     }
@@ -321,32 +335,15 @@ pub async fn raw(
 }
 
 pub fn lease_call(f: &Fixture, method: &str, suffix: &str, token: &str, epoch: i64) -> Value {
-    f.run(async {
-        let response = reqwest::Client::new()
-            .request(
-                method.parse().unwrap(),
-                format!("{}/v1/workspaces/{}{suffix}", f.endpoint, f.workspace),
-            )
-            .bearer_auth(&f.host.bearer)
-            .header(
-                "X-Anchorfs-Session-Id",
-                f.host_session["session_id"].as_str().unwrap(),
-            )
-            .header(
-                "X-Anchorfs-Session-Epoch",
-                f.host_session["session_epoch"].as_i64().unwrap(),
-            )
-            .header("X-Anchorfs-Workflow-Token", token)
-            .header("X-Anchorfs-Workflow-Epoch", epoch)
-            .header("Idempotency-Key", Uuid::new_v4().to_string())
-            .send()
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = response.json::<Value>().await.unwrap();
-        assert!(status.is_success(), "{status}: {body}");
-        body
-    })
+    f.run(raw_with_proof(
+        &f.endpoint,
+        &f.host,
+        Some(&f.host_session),
+        method,
+        &format!("/v1/workspaces/{}{suffix}", f.workspace),
+        None,
+        Some((token, epoch)),
+    ))
 }
 
 struct RunningService {

@@ -71,6 +71,50 @@ fn errno_hint_matches_core() {
             operation_id: None,
             retry_after_ms: None,
         };
+        assert_eq!(error.code.kind(), Some(*code));
         assert_eq!(error.errno_hint(), Some(code.errno_hint()));
     }
+}
+
+#[test]
+fn unknown_error_codes_remain_forward_tolerant() {
+    let error: error::ApiFailure = serde_json::from_value(serde_json::json!({
+        "code":"future_code", "message":"future error", "trace_id":"t", "operation_id":null, "retry_after_ms":null
+    })).unwrap();
+    assert_eq!(error.code.as_str(), "future_code");
+    assert_eq!(error.code.kind(), None);
+    assert_eq!(error.errno_hint(), None);
+}
+
+#[tokio::test]
+async fn invalid_wire_time_is_an_input_error_before_any_request() {
+    let authority = Authority {
+        bearer: Bearer::parse(&format!("{}.{}", uuid::Uuid::new_v4(), "ab".repeat(32))).unwrap(),
+        session: None,
+        workflow: None,
+    };
+    let client = Client::new(
+        Endpoint::parse("http://127.0.0.1:1", true).unwrap(),
+        uuid::Uuid::new_v4(),
+        authority,
+        None,
+    )
+    .unwrap();
+    let time = time::Date::from_calendar_date(-1, time::Month::January, 1)
+        .unwrap()
+        .midnight()
+        .assume_utc();
+    let result = client
+        .set_attributes(
+            &wire::SetAttributes {
+                path: None,
+                update: anchorfs_core::AttributeUpdate {
+                    mtime: Some(time),
+                    ..Default::default()
+                },
+            },
+            &retry::IdempotencyKey::new(),
+        )
+        .await;
+    assert!(matches!(result, Err(error::ClientError::InvalidInput(_))));
 }

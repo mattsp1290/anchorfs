@@ -50,7 +50,10 @@ fn rename_over_open_and_unlink_open_keep_handle() {
     drop(m);
     f.put("g", b"old");
     f.put("h", b"new");
-    let a = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let a = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
     let session = f.raw(
         &f.host,
         None,
@@ -58,7 +61,10 @@ fn rename_over_open_and_unlink_open_keep_handle() {
         "/sessions",
         Some(serde_json::json!({"credential_id":f.worker.id})),
     );
-    let b = TempMount::process(&f, &f.worker, Some(&session), None, 1048576);
+    let b = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&session)
+        .process();
     let old = fs::File::open(b.path.join("g")).unwrap();
     let ino = old.metadata().unwrap().ino();
     fs::rename(a.path.join("h"), a.path.join("g")).unwrap();
@@ -99,7 +105,10 @@ fn hard_link_names_survive_unlink_of_one() {
             .create_link("remote-a", "remote-b", &IdempotencyKey::new()),
     )
     .unwrap();
-    let a = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let a = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
     let b = TempMount::in_process(&f);
     fs::metadata(b.path.join("remote-a")).unwrap();
     fs::metadata(b.path.join("remote-b")).unwrap();
@@ -123,8 +132,14 @@ fn append_handles_use_server_eof() {
         "/sessions",
         Some(serde_json::json!({"credential_id":f.worker.id})),
     );
-    let a = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
-    let b = TempMount::process(&f, &f.worker, Some(&second), None, 1048576);
+    let a = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
+    let b = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&second)
+        .process();
     let before = f.count("append");
     on_mount(|| {
         let mut fa = OpenOptions::new()
@@ -164,7 +179,11 @@ fn partial_write_reports_committed_bytes() {
         100 * 1024,
         std::sync::Arc::new(anchorfs_service::pipeline::faults::NoFaults),
     );
-    let m = TempMount::process(&f, &f.worker, Some(&f.session), None, 65536);
+    let m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .max_io(65536)
+        .process();
     on_mount(|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -264,11 +283,10 @@ fn setattr_times_mode_truncate() {
         .run(worker.set_attributes(
             &anchorfs_client::wire::SetAttributes {
                 path: Some("f".into()),
-                uid: Some(unsafe_uid() + 1),
-                gid: None,
-                mode: None,
-                atime: None,
-                mtime: None,
+                update: anchorfs_core::AttributeUpdate {
+                    uid: Some(unsafe_uid() + 1),
+                    ..Default::default()
+                },
             },
             &IdempotencyKey::new(),
         ))
@@ -295,7 +313,11 @@ fn small_io_reads_stop_at_generation_change_and_append_flags_follow_fcntl() {
     let address = f.endpoint.strip_prefix("http://").unwrap().parse().unwrap();
     let relay = f.run(super::relay::ApiProxy::start(address));
     f.endpoint = relay.endpoint.clone();
-    let m = TempMount::process(&f, &f.worker, Some(&f.session), None, 4096);
+    let m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .max_io(4096)
+        .process();
     let file = OpenOptions::new()
         .read(true)
         .write(true)

@@ -48,7 +48,7 @@ testcontainers-modules = { version = "=0.15.0", features = ["postgres"] }
 testcontainers = { version = "=0.27.3" }
 thiserror = { version = "=2.0.21" }
 time = { version = "=0.3.55", features = ["serde", "formatting", "parsing"] }
-tokio = { version = "=1.53.3", features = ["macros", "rt-multi-thread", "signal", "net", "time", "sync"] }
+tokio = { version = "=1.53.3", features = ["macros", "rt-multi-thread", "signal", "net", "time", "sync", "process"] }
 toml = { version = "=1.1.8" }
 tower-http = { version = "=0.6.11", features = ["limit", "timeout", "trace"] }
 tower = { version = "=0.5.3", features = ["util"] }

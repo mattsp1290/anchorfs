@@ -11,7 +11,7 @@ use std::{
 #[test]
 fn mount_lookup_stat_readdir_match_api() {
     let _serial = serial();
-    let f = Fixture::with(
+    let mut f = Fixture::with(
         |c| c.max_list_page = 2,
         1 << 30,
         std::sync::Arc::new(anchorfs_service::pipeline::faults::NoFaults),
@@ -24,6 +24,9 @@ fn mount_lookup_stat_readdir_match_api() {
     for n in ["c", "d", "e"] {
         f.put(&format!("a/{n}"), b"x");
     }
+    let address = f.endpoint.strip_prefix("http://").unwrap().parse().unwrap();
+    let relay = f.run(super::relay::ApiProxy::start(address));
+    f.endpoint = relay.endpoint.clone();
     let m = TempMount::in_process(&f);
     on_mount(|| {
         let expected = f.run(f.api.stat(Some("a/b.txt"))).unwrap();
@@ -35,7 +38,24 @@ fn mount_lookup_stat_readdir_match_api() {
         assert_eq!(observed.gid(), expected.gid);
         assert_eq!(observed.nlink(), expected.nlink as u64);
         assert_eq!(observed.mtime(), expected.mtime.unix_timestamp());
+        let stats = || {
+            relay
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|request| {
+                    request.starts_with(&format!("GET /v1/workspaces/{}/stat", f.workspace))
+                })
+                .count()
+        };
+        let before = stats();
         assert_eq!(fs::metadata(&m.path).unwrap().ino(), 1);
+        assert_eq!(
+            stats() - before,
+            1,
+            "root getattr needs exactly one identity-checked stat"
+        );
         assert_eq!(
             fs::read_link(m.path.join("a/l"))
                 .unwrap()
@@ -84,7 +104,11 @@ fn mount_lookup_stat_readdir_match_api() {
 fn mount_write_fsync_release_visible_to_api_and_back() {
     let _serial = serial();
     let f = Fixture::new();
-    let m = TempMount::process(&f, &f.worker, Some(&f.session), None, 262144);
+    let m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .max_io(262144)
+        .process();
     on_mount(|| {
         let data = vec![71; 1048577];
         let mut file = OpenOptions::new()
@@ -125,8 +149,14 @@ fn two_mount_processes_share_committed_files() {
         "/sessions",
         Some(serde_json::json!({"credential_id":f.worker.id})),
     );
-    let mut a = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
-    let b = TempMount::process(&f, &f.worker, Some(&second), None, 1048576);
+    let mut a = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
+    let b = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&second)
+        .process();
     on_mount(|| {
         fs::create_dir(a.path.join("d")).unwrap();
         fs::write(a.path.join("d/f"), b"durable").unwrap();

@@ -19,16 +19,15 @@ fn git_smoke_under_lease() {
         "/sessions",
         Some(json!({"credential_id":f.worker.id,"bind_to_workflow_lease":lease["token"]})),
     );
-    let m = TempMount::process(
-        &f,
-        &f.worker,
-        Some(&session),
-        Some((
+    let m = TempMount::builder(&f)
+        .watchdog(std::time::Duration::from_secs(600))
+        .credential(&f.worker)
+        .session(&session)
+        .workflow((
             lease["token"].as_str().unwrap(),
             lease["mutation_epoch"].as_i64().unwrap(),
-        )),
-        1048576,
-    );
+        ))
+        .process();
     let git = |args: &[&str]| {
         let start = Instant::now();
         let output = Command::new("git")
@@ -89,13 +88,13 @@ fn git_smoke_under_lease() {
     }
     drop(index);
     // Independent API reads use the same bound session proof while the lease is live.
-    let client = native(&f.endpoint, f.workspace, &f.worker, Some(&session));
-    let mut authority = client.authority();
-    authority.workflow = Some(anchorfs_client::auth::WorkflowAuthority {
-        token: anchorfs_core::Secret::new(lease["token"].as_str().unwrap().into()),
-        epoch: lease["mutation_epoch"].as_i64().unwrap(),
-    });
-    let client = client.with_authority(authority);
+    let client = f.native_bound(
+        &session,
+        (
+            lease["token"].as_str().unwrap(),
+            lease["mutation_epoch"].as_i64().unwrap(),
+        ),
+    );
     let committed = git(&["cat-file", "-p", "HEAD:note.txt"]);
     assert_eq!(committed.as_bytes(), b"first commit\n");
     let objects = f

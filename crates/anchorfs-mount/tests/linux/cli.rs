@@ -33,7 +33,28 @@ fn cli_exit_codes_and_secret_sources() {
             .unwrap()
             .contains("host-minted session")
     );
-    let mut m = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let bad_ca = path.join("invalid-ca.pem");
+    fs::write(&bad_ca, b"not a PEM certificate").unwrap();
+    let invalid_ca = Command::new(env!("CARGO_BIN_EXE_anchorfs-mount"))
+        .arg("mount")
+        .arg(&path)
+        .arg("--endpoint")
+        .arg(&f.endpoint)
+        .arg("--workspace")
+        .arg(f.workspace.to_string())
+        .arg("--allow-plaintext")
+        .arg("--ca-bundle")
+        .arg(&bad_ca)
+        .env("ANCHORFS_MOUNT_CREDENTIAL", &f.host.bearer)
+        .env_remove("ANCHORFS_MOUNT_WORKFLOW_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(invalid_ca.status.code(), Some(2));
+    fs::remove_file(bad_ca).unwrap();
+    let mut m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
     let cmdline = fs::read(format!(
         "/proc/{}/cmdline",
         m.process.as_ref().unwrap().id()
@@ -77,7 +98,7 @@ fn startup_failure_revokes_self_minted_session() {
         .env_remove("ANCHORFS_MOUNT_WORKFLOW_TOKEN")
         .output()
         .unwrap();
-    assert_eq!(result.status.code(), Some(3));
+    assert_eq!(result.status.code(), Some(4));
     assert_eq!(f.count("session_revoke"), 1);
     fs::remove_dir(path).unwrap();
     f.invariants();

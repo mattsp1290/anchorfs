@@ -27,30 +27,44 @@ pub enum CallClass {
     Read,
     Mutation,
 }
+impl ErrnoName {
+    pub fn from_hint(hint: &str) -> Option<Self> {
+        match hint {
+            "EINVAL" => Some(Self::EINVAL),
+            "ENAMETOOLONG" => Some(Self::ENAMETOOLONG),
+            "EACCES" => Some(Self::EACCES),
+            "EPERM" => Some(Self::EPERM),
+            "ENOENT" => Some(Self::ENOENT),
+            "EEXIST" => Some(Self::EEXIST),
+            "EIO" => Some(Self::EIO),
+            "EBUSY" => Some(Self::EBUSY),
+            "ESTALE" => Some(Self::ESTALE),
+            "ENOTDIR" => Some(Self::ENOTDIR),
+            "EISDIR" => Some(Self::EISDIR),
+            "ENOTEMPTY" => Some(Self::ENOTEMPTY),
+            "EFBIG" => Some(Self::EFBIG),
+            "EAGAIN" => Some(Self::EAGAIN),
+            "EDQUOT" => Some(Self::EDQUOT),
+            "ENOSPC" => Some(Self::ENOSPC),
+            "EOPNOTSUPP" => Some(Self::EOPNOTSUPP),
+            "ETIMEDOUT" => Some(Self::ETIMEDOUT),
+            "ENOLCK" => Some(Self::ENOLCK),
+            "ENOSYS" => Some(Self::ENOSYS),
+            _ => None,
+        }
+    }
+}
 pub fn errno_for(error: &ClientError, class: CallClass) -> ErrnoName {
-    use ErrnoName::*;
+    use anchorfs_core::ErrorCode;
     match error {
-        ClientError::InvalidInput(_) => EINVAL,
-        ClientError::Deadline if matches!(class, CallClass::Read) => ETIMEDOUT,
-        ClientError::Api(e) => match e.code.as_str() {
-            "invalid_input" | "payload_too_large" | "unsupported_media_type" => EINVAL,
-            "name_too_long" => ENAMETOOLONG,
-            "unauthenticated" | "fenced" | "stale_handle" => ESTALE,
-            "forbidden" => EACCES,
-            "not_found" => ENOENT,
-            "exists" => EEXIST,
-            "workspace_busy" => EBUSY,
-            "not_directory" => ENOTDIR,
-            "is_directory" => EISDIR,
-            "directory_not_empty" => ENOTEMPTY,
-            "file_too_large" => EFBIG,
-            "rate_limited" => EAGAIN,
-            "quota_exceeded" => EDQUOT,
-            "capacity_exhausted" => ENOSPC,
-            "unsupported" | "not_implemented" | "method_not_allowed" => EOPNOTSUPP,
-            _ => EIO,
-        },
-        _ => EIO,
+        ClientError::InvalidInput(_) => ErrnoName::EINVAL,
+        ClientError::Deadline if matches!(class, CallClass::Read) => ErrnoName::ETIMEDOUT,
+        _ if error.kind() == Some(ErrorCode::Unauthenticated) => ErrnoName::ESTALE,
+        ClientError::Api(e) => e
+            .errno_hint()
+            .and_then(ErrnoName::from_hint)
+            .unwrap_or(ErrnoName::EIO),
+        _ => ErrnoName::EIO,
     }
 }
 
@@ -100,7 +114,7 @@ mod tests {
             if *code == anchorfs_core::ErrorCode::Unauthenticated {
                 assert_eq!(got, ErrnoName::ESTALE);
             } else if code.errno_hint().starts_with('E') && !code.errno_hint().contains(' ') {
-                assert_eq!(format!("{got:?}"), code.errno_hint());
+                assert_eq!(Some(got), ErrnoName::from_hint(code.errno_hint()));
             } else {
                 assert_eq!(got, ErrnoName::EIO);
             }

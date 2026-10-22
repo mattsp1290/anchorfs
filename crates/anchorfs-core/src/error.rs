@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
+
 /// Stable wire message distinguishing an expired publication reservation from authority fencing.
 pub const RESERVATION_EXPIRED: &str = "reservation_expired";
-
-use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {

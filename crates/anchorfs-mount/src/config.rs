@@ -4,9 +4,18 @@ use anchorfs_client::{
     endpoint::Endpoint,
 };
 use anchorfs_core::{Secret, SessionId};
-use clap::Args;
-use std::path::PathBuf;
+use clap::{Args, ValueEnum};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormat {
+    Text,
+    Json,
+}
 
 /// Secret values are accepted through files or environment, never argv.
 #[derive(Args, Debug, Clone)]
@@ -44,15 +53,38 @@ pub struct MountArgs {
     pub metadata_deadline_ms: u64,
     #[arg(long, default_value_t = 60000)]
     pub data_deadline_ms: u64,
-    #[arg(long,default_value="text",value_parser=["text","json"])]
-    pub log_format: String,
+    #[arg(long, value_enum, default_value_t = LogFormat::Text)]
+    pub log_format: LogFormat,
 }
+/// Validated runtime settings; no raw argv or secret-file paths cross this boundary.
+// Other platforms validate settings and print the strict profile but do not consume Linux runtime fields.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct MountConfig {
-    pub args: MountArgs,
-    pub endpoint: Endpoint,
-    pub authority: Authority,
-    pub ca_bundle: Option<Vec<u8>>,
+    pub(crate) mountpoint: PathBuf,
+    pub(crate) workspace: Uuid,
+    pub(crate) allow_other: bool,
+    pub(crate) fuse_threads: usize,
+    pub(crate) max_io: u32,
+    pub(crate) handle_ttl: Duration,
+    pub(crate) session_ttl: Duration,
+    pub(crate) metadata_deadline: Duration,
+    pub(crate) data_deadline: Duration,
+    log_format: LogFormat,
+    pub(crate) endpoint: Endpoint,
+    pub(crate) authority: Authority,
+    pub(crate) ca_bundle: Option<Vec<u8>>,
+}
+impl MountConfig {
+    pub fn mountpoint(&self) -> &Path {
+        &self.mountpoint
+    }
+    pub fn fuse_threads(&self) -> usize {
+        self.fuse_threads
+    }
+    pub fn log_format(&self) -> LogFormat {
+        self.log_format
+    }
 }
 impl MountArgs {
     pub fn config(self) -> Result<MountConfig, MountError> {
@@ -132,7 +164,16 @@ impl MountArgs {
             .transpose()
             .map_err(|_| invalid("cannot read CA bundle"))?;
         Ok(MountConfig {
-            args: self,
+            mountpoint: self.mountpoint,
+            workspace: self.workspace,
+            allow_other: self.allow_other,
+            fuse_threads: self.fuse_threads,
+            max_io: self.max_io_bytes,
+            handle_ttl: Duration::from_millis(self.handle_ttl_hint_ms),
+            session_ttl: Duration::from_millis(self.session_ttl_hint_ms),
+            metadata_deadline: Duration::from_millis(self.metadata_deadline_ms),
+            data_deadline: Duration::from_millis(self.data_deadline_ms),
+            log_format: self.log_format,
             endpoint,
             authority,
             ca_bundle,

@@ -476,6 +476,11 @@ the mount uses client wall time; `ctime` continues to use the server clock.
 
 ## Linux mount profile (Stage 2b)
 
+A shared typed AttributeUpdate carries normalized optional metadata fields across
+client, service and persistence. Request times serialize as RFC3339 at the edge.
+The service captures the original request digest before normalization, so the
+change preserves existing receipt identities. This adds no persistent columns.
+
 The native client and Linux FUSE mount implement the strict profile. Kernel
 acceptance is recorded separately in `docs/provenance/stage2b-linux-mount-review.md`;
 other kernels, cross-node mounts and provider durability remain unverified.
@@ -491,7 +496,8 @@ identities are checked again. A time-of-check/time-of-use window remains between
 that check and the server's path resolution. Open file operations use server
 handle ids. When Linux omits fh from getattr, the mount can use another live
 handle for that same inode, which preserves fstat after unlink. Getattr through
-an open handle costs a receipt-free fsync round trip. Directory handles retain a
+an open handle costs a receipt-free fsync round trip. Path getattr uses one stat response
+for both identity checking and attributes. Directory handles retain a
 paged listing snapshot; readdir does not populate the inode lookup table.
 
 Writes commit synchronously in bounded API slices. O_APPEND selects server EOF
@@ -541,6 +547,12 @@ validated at startup. Worker credentials need a pre-minted session; a host
 credential can self-mint. Startup failure after minting attempts bounded revoke.
 Clean shutdown, including an external unmount, revokes only self-minted sessions;
 cleanup is idempotent.
+
+Startup exit codes distinguish invalid configuration/CA bundles (2), invalid
+credential/session/workflow authority (3), and service, transport, decode or FUSE
+establishment failures (4). Runtime failure after mounting uses 5. A dependency
+outage at startup is not reported as invalid authority. Settings retain validated
+values and typed durations, not the original argv or secret-file paths.
 SIGTERM/SIGINT first attempt a non-lazy unmount; if tools keep it busy the mount
 continues serving with its handles intact. Forced process death leaves its
 self-minted session to expire. Flush returns success for synchronous writes,
@@ -562,3 +574,10 @@ The client refuses plaintext without allow-plaintext, disables environment
 proxies and redirects, and validates TLS using rustls with optional PEM roots.
 The https/CA-bundle path is unexercised. JSON logs stay at info to avoid dependency
 debug events containing names; local text logging may opt into debug.
+
+Deferred error-contract decision: reservation expiry currently uses the stable
+`reservation_expired` message on `fenced`; the end-to-end byte conformance test
+`by9_reservation_expiry_during_quota_wait_fences_every_upload_publication` pins
+that literal and the failed receipt code. A distinct code or typed reason field
+requires a later wire-contract decision. The mount does not infer that reason
+from other human-readable text.

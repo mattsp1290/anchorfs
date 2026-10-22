@@ -1,47 +1,110 @@
 use crate::{
     Client,
     error::{ApiFailure, ClientError},
-    retry::{Budget, IdempotencyKey, Resolver},
+    retry::{IdempotencyKey, Resolver, execute},
     wire::*,
 };
+use anchorfs_core::ErrorCode;
 use bytes::Bytes;
 use reqwest::{Method, header::HeaderMap};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
 use uuid::Uuid;
 
-type Response = (Bytes, HeaderMap);
+pub(crate) type Response = (Bytes, HeaderMap);
 #[derive(Clone)]
-enum Body {
+pub(crate) enum Body {
     Empty,
     Json(Value),
     Bytes(Bytes),
+}
+#[derive(Clone, Copy)]
+pub(crate) enum Deadline {
+    Metadata,
+    Data,
+}
+#[derive(Clone, Copy)]
+enum Accept {
+    Json,
+    Octets,
+}
+impl Accept {
+    fn header(self) -> &'static str {
+        match self {
+            Self::Json => "application/json",
+            Self::Octets => "application/octet-stream",
+        }
+    }
+}
+pub(crate) struct Route {
+    pub method: Method,
+    pub path: String,
+    pub query: Vec<(String, String)>,
+    pub body: Body,
+    pub deadline: Deadline,
+    pub resolver: Resolver,
+    accept: Accept,
+}
+impl Route {
+    fn new(method: Method, path: String, body: Body) -> Self {
+        Self {
+            method,
+            path,
+            body,
+            query: vec![],
+            deadline: Deadline::Metadata,
+            resolver: Resolver::Workspace,
+            accept: Accept::Json,
+        }
+    }
+    fn query(mut self, query: Vec<(String, String)>) -> Self {
+        self.query = query;
+        self
+    }
+    fn data(mut self) -> Self {
+        self.deadline = Deadline::Data;
+        self
+    }
+    fn octets(mut self) -> Self {
+        self.accept = Accept::Octets;
+        self
+    }
+    fn resolver(mut self, resolver: Resolver) -> Self {
+        self.resolver = resolver;
+        self
+    }
+    pub fn timeout(&self, client: &Client) -> Duration {
+        match self.deadline {
+            Deadline::Metadata => client.metadata_deadline,
+            Deadline::Data => client.data_deadline,
+        }
+    }
 }
 impl Client {
     fn workspace_route(&self, suffix: &str) -> String {
         format!("/v1/workspaces/{}{suffix}", self.workspace)
     }
     #[tracing::instrument(skip_all, fields(trace_id = tracing::field::Empty))]
-    async fn once(
+    pub(crate) async fn once(
         &self,
-        method: Method,
-        path: &str,
-        query: &[(String, String)],
-        body: &Body,
+        route: &Route,
         key: Option<&IdempotencyKey>,
         timeout: Duration,
     ) -> Result<Response, ClientError> {
-        let accept = if method == Method::GET && path.ends_with("/bytes") {
-            "application/octet-stream"
-        } else {
-            "application/json"
-        };
+        let Route {
+            method,
+            path,
+            query,
+            body,
+            ..
+        } = route;
         let mut request = self
-            .authority()
-            .apply(self.http.request(method, self.endpoint.route(path)))
+            .authority
+            .apply(self.http.request(method.clone(), self.endpoint.route(path)))
             .query(query)
-            .header("Accept", accept)
+            .header("Accept", route.accept.header())
             .timeout(timeout);
         if let Some(key) = key {
             request = request.header("Idempotency-Key", key.as_str());
@@ -79,144 +142,28 @@ impl Client {
         error.trace_id = trace_id;
         Err(ClientError::Api(error))
     }
-    async fn request(
-        &self,
-        method: Method,
-        path: &str,
-        query: Vec<(String, String)>,
-        body: Body,
-        key: Option<&IdempotencyKey>,
-        deadline: Duration,
-    ) -> Result<Response, ClientError> {
-        let timeout = deadline.saturating_add(Duration::from_secs(1));
-        let budget = Budget::new(timeout.saturating_mul(3));
-        let mut last = ClientError::Deadline;
-        let mut ambiguous = false;
-        for attempt in 0..budget.attempts {
-            let remaining = budget.deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            match self
-                .once(
-                    method.clone(),
-                    path,
-                    &query,
-                    &body,
-                    key,
-                    timeout.min(remaining),
-                )
-                .await
-            {
-                Ok(response) => return Ok(response),
-                Err(error) => {
-                    ambiguous |= matches!(error, ClientError::Transport(_) | ClientError::Deadline)
-                        || error.code() == Some("outcome_unknown");
-                    let retry = matches!(error, ClientError::Transport(_) | ClientError::Deadline)
-                        || error.code() == Some("dependency_unavailable")
-                        || (key.is_some() && error.code() == Some("outcome_unknown"));
-                    if !retry {
-                        if key.is_some() && ambiguous {
-                            return Err(ClientError::Transport(
-                                "an earlier attempt had an unresolved response".into(),
-                            ));
-                        }
-                        return Err(error);
-                    }
-                    let delay = match &error {
-                        ClientError::Api(e) => e.retry_after_ms.unwrap_or(100),
-                        _ => 100,
-                    };
-                    last = error;
-                    if attempt + 1 < budget.attempts {
-                        tokio::time::sleep(
-                            Duration::from_millis(delay)
-                                .min(budget.deadline.saturating_duration_since(Instant::now())),
-                        )
-                        .await;
-                    }
-                }
-            }
-        }
-        if key.is_some() && ambiguous {
-            Err(ClientError::Transport(
-                "an earlier attempt had an unresolved response".into(),
-            ))
-        } else {
-            Err(last)
-        }
+    async fn decoded<T: DeserializeOwned>(&self, route: Route) -> Result<T, ClientError> {
+        decode(execute(self, &route, None).await?.0)
     }
     async fn get<T: DeserializeOwned>(
         &self,
-        suffix: &str,
+        path: String,
         query: Vec<(String, String)>,
     ) -> Result<T, ClientError> {
-        decode(
-            self.request(
-                Method::GET,
-                &self.workspace_route(suffix),
-                query,
-                Body::Empty,
-                None,
-                self.metadata_deadline,
-            )
-            .await?
-            .0,
-        )
+        self.decoded(Route::new(Method::GET, path, Body::Empty).query(query))
+            .await
     }
     async fn mutation<T: DeserializeOwned>(
         &self,
-        method: Method,
-        suffix: &str,
-        body: Body,
-        query: Vec<(String, String)>,
+        route: Route,
         key: &IdempotencyKey,
-        data: bool,
     ) -> Result<T, ClientError> {
-        let deadline = if data {
-            self.data_deadline
-        } else {
-            self.metadata_deadline
-        };
-        match self
-            .request(
-                method,
-                &self.workspace_route(suffix),
-                query,
-                body,
-                Some(key),
-                deadline,
-            )
-            .await
-        {
+        match execute(self, &route, Some(key)).await {
             Ok((bytes, _)) => match decode(bytes) {
                 Ok(value) => Ok(value),
-                Err(_) => {
-                    self.resolve_by_key(
-                        key,
-                        if suffix == "/sessions" {
-                            Resolver::Admin
-                        } else {
-                            Resolver::Workspace
-                        },
-                    )
-                    .await
-                }
+                Err(_) => self.resolve_by_key(key, route.resolver).await,
             },
-            Err(error)
-                if matches!(error, ClientError::Transport(_) | ClientError::Deadline)
-                    || error.code() == Some("outcome_unknown") =>
-            {
-                self.resolve_by_key(
-                    key,
-                    if suffix == "/sessions" {
-                        Resolver::Admin
-                    } else {
-                        Resolver::Workspace
-                    },
-                )
-                .await
-            }
+            Err(ClientError::Ambiguous(_)) => self.resolve_by_key(key, route.resolver).await,
             Err(error) => Err(error),
         }
     }
@@ -232,9 +179,9 @@ impl Client {
         let status = match status {
             Ok(status) => status,
             Err(ClientError::Api(e)) if e.status == 404 => {
-                return Err(resolution_error("operation_indeterminate", None));
+                return Err(resolution_error(ErrorCode::OperationIndeterminate, None));
             }
-            Err(_) => return Err(resolution_error("outcome_unknown", None)),
+            Err(_) => return Err(resolution_error(ErrorCode::OutcomeUnknown, None)),
         };
         match status.state {
             OperationState::Committed => serde_json::from_value(
@@ -244,24 +191,25 @@ impl Client {
             )
             .map_err(|e| ClientError::Decode(e.to_string())),
             OperationState::Failed => Err(resolution_error(
-                "operation_failed",
+                ErrorCode::OperationFailed,
                 Some(status.operation_id),
             )),
             OperationState::Pending => Err(resolution_error(
-                "outcome_unknown",
+                ErrorCode::OutcomeUnknown,
                 Some(status.operation_id),
             )),
             OperationState::Indeterminate => Err(resolution_error(
-                "operation_indeterminate",
+                ErrorCode::OperationIndeterminate,
                 Some(status.operation_id),
             )),
         }
     }
     pub async fn get_workspace(&self) -> Result<WorkspaceInfo, ClientError> {
-        self.get("", vec![]).await
+        self.get(self.workspace_route(""), vec![]).await
     }
     pub async fn stat(&self, path: Option<&str>) -> Result<InodeAttributes, ClientError> {
-        self.get("/stat", path_query(path)).await
+        self.get(self.workspace_route("/stat"), path_query(path))
+            .await
     }
     pub async fn list_directory(
         &self,
@@ -274,54 +222,38 @@ impl Client {
             q.push(("cursor".into(), c.into()));
         }
         q.push(("limit".into(), limit.to_string()));
-        self.get("/directory", q).await
+        self.get(self.workspace_route("/directory"), q).await
     }
     pub async fn read_symlink(&self, path: &str) -> Result<SymlinkContents, ClientError> {
-        self.get("/symlinks", path_query(Some(path))).await
+        self.get(self.workspace_route("/symlinks"), path_query(Some(path)))
+            .await
     }
     pub async fn find_operation(
         &self,
         key: &IdempotencyKey,
     ) -> Result<OperationStatus, ClientError> {
         self.get(
-            "/operations",
+            self.workspace_route("/operations"),
             vec![("idempotency_key".into(), key.as_str().into())],
         )
         .await
     }
     pub async fn get_operation(&self, id: Uuid) -> Result<OperationStatus, ClientError> {
-        self.get(&format!("/operations/{id}"), vec![]).await
+        self.get(self.workspace_route(&format!("/operations/{id}")), vec![])
+            .await
     }
     pub async fn find_admin_operation(
         &self,
         key: &IdempotencyKey,
     ) -> Result<OperationStatus, ClientError> {
-        decode(
-            self.request(
-                Method::GET,
-                "/v1/admin-operations",
-                vec![("idempotency_key".into(), key.as_str().into())],
-                Body::Empty,
-                None,
-                self.metadata_deadline,
-            )
-            .await?
-            .0,
+        self.get(
+            "/v1/admin-operations".into(),
+            vec![("idempotency_key".into(), key.as_str().into())],
         )
+        .await
     }
     pub async fn get_admin_operation(&self, id: Uuid) -> Result<OperationStatus, ClientError> {
-        decode(
-            self.request(
-                Method::GET,
-                &format!("/v1/admin-operations/{id}"),
-                vec![],
-                Body::Empty,
-                None,
-                self.metadata_deadline,
-            )
-            .await?
-            .0,
-        )
+        self.get(format!("/v1/admin-operations/{id}"), vec![]).await
     }
     pub async fn create_session(
         &self,
@@ -329,12 +261,13 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<SessionGrant, ClientError> {
         self.mutation(
-            Method::POST,
-            "/sessions",
-            Body::Json(json!({"credential_id": credential_id, "bind_to_workflow_lease": null})),
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route("/sessions"),
+                Body::Json(json!({"credential_id": credential_id, "bind_to_workflow_lease": null})),
+            )
+            .resolver(Resolver::Admin),
             key,
-            false,
         )
         .await
     }
@@ -344,12 +277,12 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<SessionGrant, ClientError> {
         self.mutation(
-            Method::POST,
-            &format!("/sessions/{id}/renew"),
-            Body::Empty,
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route(&format!("/sessions/{id}/renew")),
+                Body::Empty,
+            ),
             key,
-            false,
         )
         .await
     }
@@ -359,12 +292,12 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::DELETE,
-            &format!("/sessions/{id}"),
-            Body::Empty,
-            vec![],
+            Route::new(
+                Method::DELETE,
+                self.workspace_route(&format!("/sessions/{id}")),
+                Body::Empty,
+            ),
             key,
-            false,
         )
         .await
     }
@@ -374,12 +307,12 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<HandleGrant, ClientError> {
         self.mutation(
-            Method::POST,
-            "/handles",
-            Body::Json(json!(body)),
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route("/handles"),
+                Body::Json(json!(body)),
+            ),
             key,
-            false,
         )
         .await
     }
@@ -389,12 +322,12 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<HandleGrant, ClientError> {
         self.mutation(
-            Method::POST,
-            &format!("/handles/{id}/renew"),
-            Body::Empty,
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route(&format!("/handles/{id}/renew")),
+                Body::Empty,
+            ),
             key,
-            false,
         )
         .await
     }
@@ -404,12 +337,12 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::DELETE,
-            &format!("/handles/{id}"),
-            Body::Empty,
-            vec![],
+            Route::new(
+                Method::DELETE,
+                self.workspace_route(&format!("/handles/{id}")),
+                Body::Empty,
+            ),
             key,
-            false,
         )
         .await
     }
@@ -420,28 +353,26 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::POST,
-            &format!("/handles/{id}/truncate"),
-            Body::Json(json!({"size":size})),
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route(&format!("/handles/{id}/truncate")),
+                Body::Json(json!({"size":size})),
+            )
+            .data(),
             key,
-            true,
         )
         .await
     }
     pub async fn fsync(&self, id: Uuid) -> Result<InodeAttributes, ClientError> {
-        decode(
-            self.request(
+        self.decoded(
+            Route::new(
                 Method::POST,
-                &self.workspace_route(&format!("/handles/{id}/fsync")),
-                vec![],
+                self.workspace_route(&format!("/handles/{id}/fsync")),
                 Body::Empty,
-                None,
-                self.data_deadline,
             )
-            .await?
-            .0,
+            .data(),
         )
+        .await
     }
     pub async fn read_range(
         &self,
@@ -449,19 +380,18 @@ impl Client {
         offset: u64,
         length: u32,
     ) -> Result<(Bytes, i64), ClientError> {
-        let (bytes, headers) = self
-            .request(
-                Method::GET,
-                &self.workspace_route(&format!("/handles/{id}/bytes")),
-                vec![
-                    ("offset".into(), offset.to_string()),
-                    ("length".into(), length.to_string()),
-                ],
-                Body::Empty,
-                None,
-                self.data_deadline,
-            )
-            .await?;
+        let route = Route::new(
+            Method::GET,
+            self.workspace_route(&format!("/handles/{id}/bytes")),
+            Body::Empty,
+        )
+        .query(vec![
+            ("offset".into(), offset.to_string()),
+            ("length".into(), length.to_string()),
+        ])
+        .data()
+        .octets();
+        let (bytes, headers) = execute(self, &route, None).await?;
         let generation = headers
             .get("X-Anchorfs-Generation")
             .and_then(|v| v.to_str().ok())
@@ -478,12 +408,14 @@ impl Client {
     ) -> Result<WriteResult, ClientError> {
         validate_bytes(&bytes)?;
         self.mutation(
-            Method::PUT,
-            &format!("/handles/{id}/bytes"),
-            Body::Bytes(bytes),
-            vec![("offset".into(), offset.to_string())],
+            Route::new(
+                Method::PUT,
+                self.workspace_route(&format!("/handles/{id}/bytes")),
+                Body::Bytes(bytes),
+            )
+            .query(vec![("offset".into(), offset.to_string())])
+            .data(),
             key,
-            true,
         )
         .await
     }
@@ -495,12 +427,13 @@ impl Client {
     ) -> Result<WriteResult, ClientError> {
         validate_bytes(&bytes)?;
         self.mutation(
-            Method::POST,
-            &format!("/handles/{id}/append"),
-            Body::Bytes(bytes),
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route(&format!("/handles/{id}/append")),
+                Body::Bytes(bytes),
+            )
+            .data(),
             key,
-            true,
         )
         .await
     }
@@ -511,12 +444,12 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::POST,
-            "/directories",
-            Body::Json(json!({"path":path,"mode":mode})),
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route("/directories"),
+                Body::Json(json!({"path":path,"mode":mode})),
+            ),
             key,
-            false,
         )
         .await
     }
@@ -526,12 +459,13 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::DELETE,
-            "/directories",
-            Body::Empty,
-            path_query(Some(path)),
+            Route::new(
+                Method::DELETE,
+                self.workspace_route("/directories"),
+                Body::Empty,
+            )
+            .query(path_query(Some(path))),
             key,
-            false,
         )
         .await
     }
@@ -541,12 +475,9 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::DELETE,
-            "/files",
-            Body::Empty,
-            path_query(Some(path)),
+            Route::new(Method::DELETE, self.workspace_route("/files"), Body::Empty)
+                .query(path_query(Some(path))),
             key,
-            false,
         )
         .await
     }
@@ -557,12 +488,12 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::POST,
-            "/links",
-            Body::Json(json!({"existing_path":existing_path,"new_path":new_path})),
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route("/links"),
+                Body::Json(json!({"existing_path":existing_path,"new_path":new_path})),
+            ),
             key,
-            false,
         )
         .await
     }
@@ -573,12 +504,12 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::POST,
-            "/symlinks",
-            Body::Json(json!({"path":path,"target":target})),
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route("/symlinks"),
+                Body::Json(json!({"path":path,"target":target})),
+            ),
             key,
-            false,
         )
         .await
     }
@@ -589,12 +520,12 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::POST,
-            "/rename",
-            Body::Json(json!({"from":from,"to":to})),
-            vec![],
+            Route::new(
+                Method::POST,
+                self.workspace_route("/rename"),
+                Body::Json(json!({"from":from,"to":to})),
+            ),
             key,
-            false,
         )
         .await
     }
@@ -604,12 +535,16 @@ impl Client {
         key: &IdempotencyKey,
     ) -> Result<MutationResult, ClientError> {
         self.mutation(
-            Method::PATCH,
-            "/attributes",
-            Body::Json(json!(attributes)),
-            vec![],
+            Route::new(
+                Method::PATCH,
+                self.workspace_route("/attributes"),
+                Body::Json(
+                    serde_json::to_value(attributes).map_err(|_| {
+                        ClientError::InvalidInput("invalid explicit timestamp".into())
+                    })?,
+                ),
+            ),
             key,
-            false,
         )
         .await
     }
@@ -630,7 +565,7 @@ fn validate_bytes(bytes: &Bytes) -> Result<(), ClientError> {
         Ok(())
     }
 }
-fn resolution_error(code: &str, operation_id: Option<Uuid>) -> ClientError {
+fn resolution_error(code: ErrorCode, operation_id: Option<Uuid>) -> ClientError {
     ClientError::Api(ApiFailure {
         status: 409,
         code: code.into(),

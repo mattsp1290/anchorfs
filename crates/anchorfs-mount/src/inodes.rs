@@ -1,12 +1,10 @@
 use crate::errno::ErrnoName;
-use anchorfs_client::wire::InodeKind;
 use anchorfs_core::{Name, PathError, WorkspacePath};
 use std::{collections::BTreeMap, ffi::OsStr};
 
 #[derive(Debug)]
 pub struct Node {
     pub names: Vec<(u64, Name)>,
-    pub kind: InodeKind,
     pub nlookup: u64,
     pub detached: bool,
 }
@@ -24,7 +22,6 @@ impl InodeTable {
                 1,
                 Node {
                     names: vec![],
-                    kind: InodeKind::Directory,
                     nlookup: 1,
                     detached: false,
                 },
@@ -56,14 +53,12 @@ impl InodeTable {
         server_id: i64,
         parent: u64,
         name: Name,
-        kind: InodeKind,
     ) -> Result<u64, ErrnoName> {
         let ino = self.child_ino(server_id)?;
         // A fresh lookup can observe a different inode at a known name.
         self.unlink_name(parent, &name);
         let node = self.nodes.entry(ino).or_insert(Node {
             names: vec![],
-            kind,
             nlookup: 0,
             detached: false,
         });
@@ -188,11 +183,11 @@ mod tests {
         assert_eq!(t.server_id(1), 42);
         assert_eq!(t.child_ino(42), Err(ErrnoName::EIO));
         assert_eq!(t.ino(1), Err(ErrnoName::EIO));
-        t.record_name(50, 1, n("d"), InodeKind::Directory).unwrap();
-        t.record_name(51, 50, n("f"), InodeKind::File).unwrap();
+        t.record_name(50, 1, n("d")).unwrap();
+        t.record_name(51, 50, n("f")).unwrap();
         t.rename(1, &n("d"), 1, n("e"));
         assert_eq!(t.path(51).unwrap().unwrap().as_str(), "e/f");
-        t.record_name(51, 50, n("f"), InodeKind::File).unwrap();
+        t.record_name(51, 50, n("f")).unwrap();
         t.forget(51, 1);
         assert!(t.path(51).is_ok());
         t.forget(50, 1);
@@ -203,26 +198,26 @@ mod tests {
     #[test]
     fn replaced_names_detach_and_hard_links_survive() {
         let mut t = InodeTable::new(2);
-        t.record_name(3, 1, n("a"), InodeKind::File).unwrap();
-        t.record_name(3, 1, n("b"), InodeKind::File).unwrap();
+        t.record_name(3, 1, n("a")).unwrap();
+        t.record_name(3, 1, n("b")).unwrap();
         t.unlink_name(1, &n("a"));
         assert_eq!(t.path(3).unwrap().unwrap().as_str(), "b");
-        t.record_name(4, 1, n("c"), InodeKind::File).unwrap();
+        t.record_name(4, 1, n("c")).unwrap();
         t.rename(1, &n("c"), 1, n("b"));
         assert_eq!(t.path(3), Err(ErrnoName::ESTALE));
         assert_eq!(t.path(4).unwrap().unwrap().as_str(), "b");
-        t.record_name(5, 1, n("b"), InodeKind::File).unwrap();
+        t.record_name(5, 1, n("b")).unwrap();
         assert_eq!(t.path(4), Err(ErrnoName::ESTALE));
     }
     #[test]
     fn fresh_lookup_prefers_the_verified_hard_link_alias() {
         let mut table = InodeTable::new(2);
-        table.record_name(3, 1, n("old"), InodeKind::File).unwrap();
-        table.record_name(3, 1, n("live"), InodeKind::File).unwrap();
-        table.record_name(3, 1, n("old"), InodeKind::File).unwrap();
+        table.record_name(3, 1, n("old")).unwrap();
+        table.record_name(3, 1, n("live")).unwrap();
+        table.record_name(3, 1, n("old")).unwrap();
         assert_eq!(table.path(3).unwrap().unwrap().as_str(), "old");
         table.detach(3);
-        table.record_name(3, 1, n("live"), InodeKind::File).unwrap();
+        table.record_name(3, 1, n("live")).unwrap();
         assert_eq!(table.path(3).unwrap().unwrap().as_str(), "live");
     }
     #[test]
@@ -237,7 +232,7 @@ mod tests {
             let b = n(&format!("n{}", (seed >> 8) % 24));
             match seed % 5 {
                 0 | 1 => {
-                    table.record_name(id as i64, 1, a, InodeKind::File).unwrap();
+                    table.record_name(id as i64, 1, a).unwrap();
                 }
                 2 => table.rename(1, &a, 1, b),
                 3 => table.unlink_name(1, &a),
@@ -265,8 +260,7 @@ mod tests {
         let mut t = InodeTable::new(2);
         let mut parent = 1;
         for id in 3..25 {
-            t.record_name(id, parent, n(&"a".repeat(255)), InodeKind::Directory)
-                .unwrap();
+            t.record_name(id, parent, n(&"a".repeat(255))).unwrap();
             parent = id as u64;
         }
         assert_eq!(t.path(parent), Err(ErrnoName::ENAMETOOLONG));

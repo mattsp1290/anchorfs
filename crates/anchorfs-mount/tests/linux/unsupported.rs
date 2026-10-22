@@ -18,7 +18,10 @@ fn unsupported_operations_are_explicit() {
     let relay = f.run(super::relay::ApiProxy::start(address));
     f.endpoint = relay.endpoint.clone();
     f.put("f", b"mapped bytes");
-    let m = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let m = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
     let file = OpenOptions::new()
         .read(true)
         .write(true)

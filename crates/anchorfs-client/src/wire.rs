@@ -1,4 +1,5 @@
 //! Independent client wire shapes derived from AnchorFS service DTOs.
+use anchorfs_core::timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -133,32 +134,6 @@ pub struct OpenHandle {
 pub struct SetAttributes {
     /// Omit to select the workspace root.
     pub path: Option<String>,
-    pub mode: Option<u32>,
-    pub uid: Option<u32>,
-    pub gid: Option<u32>,
-    /// Explicit RFC3339 time requires the inode owner or a workspace administrator.
-    /// Omission leaves it unchanged. PostgreSQL retains microsecond precision.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub atime: Option<String>,
-    /// Explicit RFC3339 time requires the inode owner or a workspace administrator.
-    /// Omission leaves it unchanged. PostgreSQL retains microsecond precision.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mtime: Option<String>,
-}
-
-mod timestamp {
-    use serde::{Deserialize, Deserializer, Serializer};
-    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-    pub fn serialize<S: Serializer>(
-        value: &OffsetDateTime,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&value.format(&Rfc3339).map_err(serde::ser::Error::custom)?)
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<OffsetDateTime, D::Error> {
-        OffsetDateTime::parse(&String::deserialize(deserializer)?, &Rfc3339)
-            .map_err(serde::de::Error::custom)
-    }
+    #[serde(flatten)]
+    pub update: anchorfs_core::AttributeUpdate,
 }

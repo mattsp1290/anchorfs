@@ -485,20 +485,22 @@ impl NamespaceMutation<'_, '_> {
         self.bump().await?;
         Ok(mutated(&row))
     }
-    #[allow(clippy::too_many_arguments)]
     pub async fn set_attributes(
         &mut self,
         caller: &Caller,
         path: Option<&WorkspacePath>,
-        mode: Option<u32>,
-        uid: Option<u32>,
-        gid: Option<u32>,
-        atime: Option<time::OffsetDateTime>,
-        mtime: Option<time::OffsetDateTime>,
+        update: anchorfs_core::AttributeUpdate,
     ) -> Result<Mutated, NamespaceError> {
-        if mode.is_none() && uid.is_none() && gid.is_none() && atime.is_none() && mtime.is_none() {
+        if update.is_empty() {
             return Err(NamespaceError::InvalidInput);
         }
+        let anchorfs_core::AttributeUpdate {
+            mode,
+            uid,
+            gid,
+            atime,
+            mtime,
+        } = update;
         if let Some(mode) = mode {
             validate_mode(mode)?;
         }

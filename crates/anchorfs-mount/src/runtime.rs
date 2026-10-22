@@ -6,10 +6,8 @@ use crate::{
     handles::*,
     inodes::InodeTable,
 };
-use anchorfs_client::{
-    Client, auth::SessionAuthority, error::ClientError, retry::IdempotencyKey, wire::*,
-};
-use anchorfs_core::{Name, SessionId, WorkspacePath};
+use anchorfs_client::{Client, error::ClientError, retry::IdempotencyKey, wire::*};
+use anchorfs_core::{ErrorCode, Name, WorkspacePath};
 use std::{
     future::Future,
     sync::{
@@ -19,239 +17,135 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
 }
+mod renewal;
+mod startup;
+
+pub(crate) struct Resolved {
+    pub path: Option<WorkspacePath>,
+    pub attributes: InodeAttributes,
+}
 pub struct Mount {
-    pub client: Client,
-    pub cfg: MountConfig,
-    pub inodes: Mutex<InodeTable>,
-    pub files: Mutex<OpenFiles>,
-    pub dirs: Mutex<OpenDirs>,
-    pub fence: AtomicBool,
-    pub stopping: AtomicBool,
-    pub rt: tokio::runtime::Handle,
+    client: Client,
+    cfg: MountConfig,
+    inodes: Mutex<InodeTable>,
+    files: Mutex<OpenFiles>,
+    dirs: Mutex<OpenDirs>,
+    fence: AtomicBool,
+    stopping: AtomicBool,
+    rt: tokio::runtime::Handle,
     self_minted: bool,
+    changed: Arc<tokio::sync::Notify>,
 }
 impl Mount {
     pub async fn start(
         cfg: MountConfig,
         rt: tokio::runtime::Handle,
     ) -> Result<Arc<Self>, MountError> {
-        let auth = |e: ClientError| MountError::Authorization(e.to_string());
-        let mut client = Client::new(
-            cfg.endpoint.clone(),
-            cfg.args.workspace,
-            cfg.authority.clone(),
-            cfg.ca_bundle.as_deref(),
-        )
-        .map_err(auth)?;
-        client = client.with_deadlines(
-            Duration::from_millis(cfg.args.metadata_deadline_ms),
-            Duration::from_millis(cfg.args.data_deadline_ms),
-        );
-        let self_minted = client.authority().session.is_none();
-        if self_minted {
-            let grant = client
-                .create_session(
-                    client.authority().bearer.credential_id.0,
-                    &IdempotencyKey::new(),
-                )
-                .await
-                .map_err(|e| {
-                    if e.code() == Some("forbidden") {
-                        MountError::Authorization(
-                            "worker credentials require a host-minted session".into(),
-                        )
-                    } else {
-                        auth(e)
-                    }
-                })?;
-            let mut authority = client.authority();
-            authority.session = Some(SessionAuthority {
-                session_id: SessionId(grant.session_id),
-                session_epoch: grant.session_epoch,
-            });
-            client = client.with_authority(authority);
-        }
-        let startup = async {
-        let root = client.get_workspace().await.map_err(auth)?;
-        let probe = client.stat(None).await.map_err(auth)?;
-        if probe.inode_id != root.root.inode_id {
-            return Err(MountError::Authorization(
-                "workspace root changed during startup".into(),
-            ));
-        }
-        if let Some(w) = client.authority().workflow
-            && !root
-                .workflow
-                .as_ref()
-                .is_some_and(|live| live.active && live.mutation_epoch == w.epoch)
-        {
-            return Err(MountError::Authorization(
-                "workflow epoch does not match a live lease".into(),
-            ));
-        }
-        let session = client.authority().session.expect("session established");
-        let renewed = client
-            .renew_session(session.session_id.0, &IdempotencyKey::new())
-            .await
-            .map_err(auth)?;
-        tracing::info!(expires_at=%renewed.expires_at, "mount session renewed at startup");
-        if !cfg.args.allow_other && (nix_uid() != probe.uid || nix_gid() != probe.gid) {
-            tracing::warn!(
-                "mount uid/gid differ from workspace root; default_permissions can reject the caller"
-            );
-        }
-        Ok::<_, MountError>((root, probe))
-        }.await;
-        let (root, _probe) = match startup {
-            Ok(value) => value,
-            Err(error) => {
-                if self_minted {
-                    let session = client.authority().session.expect("session established");
-                    let _ = tokio::time::timeout(
-                        Duration::from_secs(10),
-                        client.revoke_session(session.session_id.0, &IdempotencyKey::new()),
-                    )
-                    .await;
-                }
-                return Err(error);
-            }
-        };
+        let established = startup::connect(&cfg).await?;
         let mount = Arc::new(Self {
-            client,
+            client: established.client,
             cfg,
-            inodes: Mutex::new(InodeTable::new(root.root.inode_id)),
+            inodes: Mutex::new(InodeTable::new(established.root)),
             files: Mutex::new(OpenFiles::default()),
             dirs: Mutex::new(OpenDirs::default()),
             fence: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             rt,
-            self_minted,
+            self_minted: established.self_minted,
+            changed: Arc::new(tokio::sync::Notify::new()),
         });
-        // Session renewal has its own task: slow handle renewals cannot starve it.
-        let weak = Arc::downgrade(&mount);
-        mount.rt.spawn(async move {
-            let mut session_at = Instant::now();
-            let mut next_try = Instant::now();
-            let mut backoff = Duration::from_millis(250);
-            loop {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                let Some(mount) = weak.upgrade() else { break };
-                if mount.stopping.load(Ordering::SeqCst) {
-                    break;
-                }
-                if mount.fence.load(Ordering::SeqCst) {
-                    continue;
-                }
-                let ttl = Duration::from_millis(mount.cfg.args.session_ttl_hint_ms);
-                if session_at.elapsed() < ttl / 2 || Instant::now() < next_try {
-                    continue;
-                }
-                let session = mount.client.authority().session.expect("session");
-                match mount
-                    .client
-                    .renew_session(session.session_id.0, &IdempotencyKey::new())
-                    .await
-                {
-                    Ok(_) => {
-                        session_at = Instant::now();
-                        backoff = Duration::from_millis(250);
-                    }
-                    Err(error) => {
-                        let delay = renewal_delay(&error, backoff);
-                        next_try = Instant::now() + delay;
-                        backoff = (backoff * 2).min(
-                            (ttl / 8).clamp(Duration::from_millis(250), Duration::from_secs(5)),
-                        );
-                        mount.api_error(error, CallClass::Read, None).await;
-                    }
-                }
-            }
-        });
-        let weak = Arc::downgrade(&mount);
-        mount.rt.spawn(async move {
-            let mut retries = std::collections::BTreeMap::<u64, (Instant, Duration)>::new();
-            loop {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                let Some(mount) = weak.upgrade() else { break };
-                if mount.stopping.load(Ordering::SeqCst) {
-                    break;
-                }
-                if mount.fence.load(Ordering::SeqCst) {
-                    continue;
-                }
-                let due = Duration::from_millis(mount.cfg.args.handle_ttl_hint_ms / 2);
-                let renew: Vec<_> = {
-                    let files = lock(&mount.files);
-                    retries.retain(|fh, _| files.entries.contains_key(fh));
-                    files
-                        .entries
-                        .iter()
-                        .filter(|(fh, f)| {
-                            !f.fenced
-                                && f.renewed.elapsed() >= due
-                                && retries.get(fh).is_none_or(|(at, _)| Instant::now() >= *at)
-                        })
-                        .take(8)
-                        .map(|(fh, f)| (*fh, f.handle_id))
-                        .collect()
-                };
-                let mut jobs = tokio::task::JoinSet::new();
-                for (fh, id) in renew {
-                    let mount = mount.clone();
-                    jobs.spawn(async move {
-                        (
-                            fh,
-                            mount.client.renew_handle(id, &IdempotencyKey::new()).await,
-                        )
-                    });
-                }
-                while let Some(result) = jobs.join_next().await {
-                    let Ok((fh, result)) = result else { continue };
-                    match result {
-                        Ok(_) => {
-                            retries.remove(&fh);
-                            if let Some(f) = lock(&mount.files).entries.get_mut(&fh) {
-                                f.renewed = Instant::now();
-                            }
-                        }
-                        Err(error) => {
-                            let backoff = retries
-                                .get(&fh)
-                                .map_or(Duration::from_millis(250), |(_, b)| *b);
-                            retries.insert(
-                                fh,
-                                (
-                                    Instant::now() + renewal_delay(&error, backoff),
-                                    (backoff * 2).min(
-                                        (due / 4).clamp(
-                                            Duration::from_millis(250),
-                                            Duration::from_secs(5),
-                                        ),
-                                    ),
-                                ),
-                            );
-                            mount.api_error(error, CallClass::Read, Some(fh)).await;
-                        }
-                    }
-                }
-            }
-        });
+        renewal::spawn(&mount);
         Ok(mount)
     }
-    pub fn block<T>(&self, future: impl Future<Output = T>) -> T {
+    pub fn config(&self) -> &MountConfig {
+        &self.cfg
+    }
+    pub(crate) fn client(&self) -> &Client {
+        &self.client
+    }
+    fn stopped(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst) || self.fence.load(Ordering::SeqCst)
+    }
+    pub(crate) fn forget(&self, ino: u64, n: u64) {
+        lock(&self.inodes).forget(ino, n);
+    }
+    pub(crate) fn inode_number(&self, id: i64) -> Result<u64, ErrnoName> {
+        lock(&self.inodes).ino(id)
+    }
+    pub(crate) fn child_inode(&self, id: i64) -> Result<u64, ErrnoName> {
+        lock(&self.inodes).child_ino(id)
+    }
+    pub(crate) fn parent(&self, ino: u64) -> Result<u64, ErrnoName> {
+        lock(&self.inodes).parent(ino)
+    }
+    pub(crate) fn record(
+        &self,
+        parent: u64,
+        name: Name,
+        attrs: &InodeAttributes,
+    ) -> Result<(), ErrnoName> {
+        lock(&self.inodes).record_name(attrs.inode_id, parent, name)?;
+        Ok(())
+    }
+    pub(crate) fn unlink_name(&self, parent: u64, name: &Name) {
+        lock(&self.inodes).unlink_name(parent, name);
+    }
+    pub(crate) fn rename_names(&self, parent: u64, name: &Name, newparent: u64, newname: Name) {
+        lock(&self.inodes).rename(parent, name, newparent, newname);
+    }
+    pub(crate) fn remember_file(&self, grant: &HandleGrant) -> u64 {
+        let fh = lock(&self.files).insert(OpenFile {
+            handle_id: grant.handle_id,
+            server_ino: grant.attributes.inode_id,
+            fenced: false,
+            renewed: Instant::now(),
+        });
+        self.changed.notify_one();
+        fh
+    }
+    pub(crate) fn take_file(&self, fh: u64) -> Option<OpenFile> {
+        let file = lock(&self.files).entries.remove(&fh);
+        self.changed.notify_one();
+        file
+    }
+    pub(crate) fn remember_directory(&self, entries: Vec<DirEntrySnapshot>) -> u64 {
+        lock(&self.dirs).insert(entries)
+    }
+    pub(crate) fn release_directory(&self, fh: u64) {
+        lock(&self.dirs).entries.remove(&fh);
+    }
+    pub(crate) fn with_directory<T>(
+        &self,
+        fh: u64,
+        f: impl FnOnce(&[DirEntrySnapshot]) -> T,
+    ) -> Result<T, ErrnoName> {
+        let dirs = lock(&self.dirs);
+        let entries = dirs.entries.get(&fh).ok_or(ErrnoName::ESTALE)?;
+        Ok(f(entries))
+    }
+    pub(crate) async fn close_quietly(&self, handle: uuid::Uuid) {
+        if let Err(error) = self
+            .client
+            .close_handle(handle, &IdempotencyKey::new())
+            .await
+        {
+            self.api_error(error, CallClass::Mutation, None).await;
+        }
+    }
+    pub(crate) fn block<T>(&self, future: impl Future<Output = T>) -> T {
         self.rt.block_on(future)
     }
-    pub fn live(&self) -> Result<(), ErrnoName> {
+    pub(crate) fn live(&self) -> Result<(), ErrnoName> {
         if self.fence.load(Ordering::SeqCst) {
             Err(ErrnoName::ESTALE)
         } else {
             Ok(())
         }
     }
-    pub async fn api<T>(
+    pub(crate) async fn api<T>(
         &self,
         result: Result<T, ClientError>,
         class: CallClass,
@@ -267,12 +161,21 @@ impl Mount {
             Err(error) => Err(self.api_error(error, class, fh).await),
         }
     }
-    pub async fn api_error(
+    pub(crate) async fn api_error(
         &self,
         error: ClientError,
         class: CallClass,
         fh: Option<u64>,
     ) -> ErrnoName {
+        if let ClientError::Api(e) = &error {
+            tracing::warn!(
+                status = e.status, code = %e.code, trace_id = %e.trace_id,
+                operation_id = ?e.operation_id, max_io_bytes = self.cfg.max_io,
+                "native API call failed"
+            );
+        } else {
+            tracing::warn!(code = error.code(), "native API call failed");
+        }
         if self.fence.load(Ordering::SeqCst) {
             return ErrnoName::ESTALE;
         }
@@ -286,19 +189,18 @@ impl Mount {
             file.fenced = true;
         }
         if let ClientError::Api(e) = &error {
-            tracing::warn!(status=e.status,code=%e.code,trace_id=%e.trace_id,operation_id=?e.operation_id,max_io_bytes=self.cfg.args.max_io_bytes,"native API call failed");
             if e.status == 401 {
                 self.fence.store(true, Ordering::SeqCst);
                 return ErrnoName::ESTALE;
             }
-            let handle_fenced = e.code == "stale_handle"
-                || (e.code == "fenced" && matches!(class, CallClass::Read));
+            let handle_fenced = e.code.kind() == Some(ErrorCode::StaleHandle)
+                || (e.code.kind() == Some(ErrorCode::Fenced) && matches!(class, CallClass::Read));
             if let Some(id) = fh.filter(|_| handle_fenced)
                 && let Some(file) = lock(&self.files).entries.get_mut(&id)
             {
                 file.fenced = true;
             }
-            if e.code == "fenced" {
+            if e.code.kind() == Some(ErrorCode::Fenced) {
                 let bound_mutation = self.client.authority().workflow.is_some()
                     && matches!(class, CallClass::Mutation)
                     && e.message != anchorfs_core::error::RESERVATION_EXPIRED;
@@ -308,7 +210,10 @@ impl Mount {
                     self.fence.store(true, Ordering::SeqCst);
                 } else {
                     let probe = self.client.stat(None).await;
-                    let dead = matches!(&probe,Err(ClientError::Api(p)) if p.status==401 || p.code=="fenced");
+                    let dead = matches!(
+                        &probe,
+                        Err(ClientError::Api(p)) if p.status == 401 || p.code.kind() == Some(ErrorCode::Fenced)
+                    );
                     if dead {
                         self.fence.store(true, Ordering::SeqCst);
                     }
@@ -317,7 +222,7 @@ impl Mount {
         }
         errno_for(&error, class)
     }
-    pub fn file(&self, fh: u64) -> Result<OpenFile, ErrnoName> {
+    pub(crate) fn file(&self, fh: u64) -> Result<OpenFile, ErrnoName> {
         self.live()?;
         lock(&self.files)
             .entries
@@ -326,7 +231,7 @@ impl Mount {
             .cloned()
             .ok_or(ErrnoName::ESTALE)
     }
-    pub async fn checked_path(&self, ino: u64) -> Result<Option<WorkspacePath>, ErrnoName> {
+    pub(crate) async fn resolve(&self, ino: u64) -> Result<Resolved, ErrnoName> {
         self.live()?;
         let path = lock(&self.inodes).path(ino)?;
         let result = self
@@ -341,9 +246,12 @@ impl Mount {
             other => other?,
         };
         self.identity(ino, attributes.inode_id)?;
-        Ok(path)
+        Ok(Resolved { path, attributes })
     }
-    pub fn identity(&self, ino: u64, server: i64) -> Result<(), ErrnoName> {
+    pub(crate) async fn checked_path(&self, ino: u64) -> Result<Option<WorkspacePath>, ErrnoName> {
+        Ok(self.resolve(ino).await?.path)
+    }
+    pub(crate) fn identity(&self, ino: u64, server: i64) -> Result<(), ErrnoName> {
         let mut table = lock(&self.inodes);
         if table.server_id(ino) != server {
             table.detach(ino);
@@ -352,7 +260,7 @@ impl Mount {
             Ok(())
         }
     }
-    pub async fn child_path(&self, parent: u64, name: &Name) -> Result<String, ErrnoName> {
+    pub(crate) async fn child_path(&self, parent: u64, name: &Name) -> Result<String, ErrnoName> {
         let parent = self.checked_path(parent).await?;
         let path = parent.map_or_else(
             || name.as_str().to_owned(),
@@ -361,7 +269,7 @@ impl Mount {
         WorkspacePath::parse(&path).map_err(|_| ErrnoName::ENAMETOOLONG)?;
         Ok(path)
     }
-    pub async fn attributes(
+    pub(crate) async fn attributes(
         &self,
         ino: u64,
         fh: Option<u64>,
@@ -387,15 +295,7 @@ impl Mount {
             )
             .await?
         } else {
-            let path = self.checked_path(ino).await?;
-            self.api(
-                self.client
-                    .stat(path.as_ref().map(WorkspacePath::as_str))
-                    .await,
-                CallClass::Read,
-                None,
-            )
-            .await?
+            self.resolve(ino).await?.attributes
         };
         self.identity(ino, attributes.inode_id)?;
         Ok(attributes)
@@ -404,13 +304,11 @@ impl Mount {
         if self.stopping.swap(true, Ordering::SeqCst) {
             return;
         }
+        self.changed.notify_one();
         let files = std::mem::take(&mut lock(&self.files).entries);
         let _ = tokio::time::timeout(Duration::from_secs(10), async {
-            for (_, f) in files {
-                let _ = self
-                    .client
-                    .close_handle(f.handle_id, &IdempotencyKey::new())
-                    .await;
+            for (_, file) in files {
+                self.close_quietly(file.handle_id).await;
             }
             if self.self_minted {
                 let session = self.client.authority().session.expect("session");
@@ -421,34 +319,5 @@ impl Mount {
             }
         })
         .await;
-    }
-}
-// Reading effective ids from proc avoids an unsafe block in production code.
-fn effective_id(field: &str) -> u32 {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with(field))
-                .and_then(|l| l.split_whitespace().nth(2))
-                .and_then(|v| v.parse().ok())
-        })
-        .unwrap_or(u32::MAX)
-}
-fn nix_uid() -> u32 {
-    effective_id("Uid:")
-}
-fn nix_gid() -> u32 {
-    effective_id("Gid:")
-}
-
-fn renewal_delay(error: &ClientError, backoff: Duration) -> Duration {
-    match error {
-        ClientError::Api(e) => e
-            .retry_after_ms
-            .map(Duration::from_millis)
-            .unwrap_or(backoff)
-            .max(backoff),
-        _ => backoff,
     }
 }

@@ -339,11 +339,11 @@ async fn explicit_times_update_generation_and_empty_update_is_rejected() {
         .set_attributes(
             &caller(),
             None,
-            None,
-            None,
-            None,
-            Some(instant),
-            Some(instant),
+            anchorfs_core::AttributeUpdate {
+                atime: Some(instant),
+                mtime: Some(instant),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -355,7 +355,7 @@ async fn explicit_times_update_generation_and_empty_update_is_rejected() {
         namespace::lock(&mut tx, w)
             .await
             .unwrap()
-            .set_attributes(&caller(), None, None, None, None, None, None)
+            .set_attributes(&caller(), None, anchorfs_core::AttributeUpdate::default())
             .await,
         Err(NamespaceError::InvalidInput)
     ));

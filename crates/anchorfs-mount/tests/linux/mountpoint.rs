@@ -73,27 +73,65 @@ pub struct TempMount {
     watchdog: Option<std::thread::JoinHandle<()>>,
     expired: Arc<AtomicBool>,
 }
+pub struct MountBuilder<'a> {
+    fixture: &'a Fixture,
+    credential: &'a Credential,
+    session: Option<&'a Value>,
+    workflow: Option<(&'a str, i64)>,
+    max_io: u32,
+    watchdog: Duration,
+}
+impl<'a> MountBuilder<'a> {
+    pub fn credential(mut self, credential: &'a Credential) -> Self {
+        self.credential = credential;
+        self
+    }
+    pub fn session(mut self, session: &'a Value) -> Self {
+        self.session = Some(session);
+        self
+    }
+    pub fn workflow(mut self, workflow: (&'a str, i64)) -> Self {
+        self.workflow = Some(workflow);
+        self
+    }
+    pub fn max_io(mut self, bytes: u32) -> Self {
+        self.max_io = bytes;
+        self
+    }
+    pub fn watchdog(mut self, duration: Duration) -> Self {
+        self.watchdog = duration;
+        self
+    }
+    pub fn process(self) -> TempMount {
+        TempMount::start(self, true)
+    }
+    pub fn in_process(self) -> TempMount {
+        TempMount::start(self, false)
+    }
+}
 impl TempMount {
-    pub fn process(
-        f: &Fixture,
-        credential: &Credential,
-        session: Option<&Value>,
-        workflow: Option<(&str, i64)>,
-        max_io: u32,
-    ) -> Self {
-        Self::start(f, credential, session, workflow, max_io, true)
+    pub fn builder(fixture: &Fixture) -> MountBuilder<'_> {
+        MountBuilder {
+            fixture,
+            credential: &fixture.host,
+            session: None,
+            workflow: None,
+            max_io: 1048576,
+            watchdog: Duration::from_secs(120),
+        }
     }
     pub fn in_process(f: &Fixture) -> Self {
-        Self::start(f, &f.host, None, None, 1048576, false)
+        Self::builder(f).in_process()
     }
-    fn start(
-        f: &Fixture,
-        credential: &Credential,
-        session: Option<&Value>,
-        workflow: Option<(&str, i64)>,
-        max_io: u32,
-        process: bool,
-    ) -> Self {
+    fn start(builder: MountBuilder<'_>, process: bool) -> Self {
+        let MountBuilder {
+            fixture: f,
+            credential,
+            session,
+            workflow,
+            max_io,
+            watchdog,
+        } = builder;
         require_fuse();
         local(&std::env::temp_dir());
         local(Path::new(env!("CARGO_MANIFEST_DIR")));
@@ -170,24 +208,13 @@ impl TempMount {
             this.mount = Some(mount);
             this.runtime = Some(rt);
         }
-        let test_name = std::thread::current().name().unwrap_or("").to_owned();
-        let watchdog_seconds = if test_name.contains("git_smoke") {
-            600
-        } else if test_name.contains("renewal_keeps") || test_name.contains("sigstop_paused") {
-            180
-        } else {
-            120
-        };
         let (cancel, receive) = std::sync::mpsc::channel();
         let path = this.path.clone();
         let pid = this.process.as_ref().map(Child::id);
         let expired = this.expired.clone();
         this.cancel = Some(cancel);
         this.watchdog = Some(std::thread::spawn(move || {
-            if receive
-                .recv_timeout(Duration::from_secs(watchdog_seconds))
-                .is_err()
-            {
+            if receive.recv_timeout(watchdog).is_err() {
                 expired.store(true, Ordering::SeqCst);
                 // A helper's exec can flush inherited FUSE descriptors. Kill
                 // a paused process directly before attempting cleanup helpers.
@@ -215,17 +242,8 @@ impl TempMount {
         }
         this
     }
-    pub fn signal(&self, name: &str) {
-        use nix::{
-            sys::signal::{Signal, kill},
-            unistd::Pid,
-        };
-        let signal = match name {
-            "-STOP" => Signal::SIGSTOP,
-            "-CONT" => Signal::SIGCONT,
-            "-TERM" => Signal::SIGTERM,
-            _ => panic!("unsupported test signal"),
-        };
+    pub fn signal(&self, signal: nix::sys::signal::Signal) {
+        use nix::{sys::signal::kill, unistd::Pid};
         // Avoid forking with an open fd into a paused FUSE filesystem.
         kill(
             Pid::from_raw(self.process.as_ref().unwrap().id() as i32),
@@ -244,7 +262,7 @@ impl TempMount {
     pub fn stop(&mut self) {
         // The watchdog must not retain a numeric pid after we reap the child.
         self.disarm_watchdog();
-        self.signal("-TERM");
+        self.signal(nix::sys::signal::Signal::SIGTERM);
         self.wait_exit();
     }
     pub fn wait_exit(&mut self) {

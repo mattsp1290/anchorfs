@@ -3,10 +3,10 @@ use crate::{
     MountError,
     config::MountConfig,
     errno::{CallClass, ErrnoName},
-    handles::{DirEntrySnapshot, write_slices},
+    handles::{DirEntrySnapshot, Slice, write_slices},
     inodes::name,
     profile::MountProfile,
-    runtime::{Mount, lock},
+    runtime::Mount,
 };
 use anchorfs_client::{retry::IdempotencyKey, wire::InodeKind};
 use fuser::*;
@@ -21,29 +21,51 @@ use translation::*;
 pub struct AnchorFs {
     pub mount: Arc<Mount>,
 }
-macro_rules! empty_reply {
-    ($reply:expr,$result:expr) => {
-        match $result {
-            Ok(()) => $reply.ok(),
-            Err(e) => $reply.error(Errno::from(e)),
-        }
-    };
+trait ReplyResult<T> {
+    fn send(self, result: Result<T, ErrnoName>);
 }
-macro_rules! attr_reply {
-    ($reply:expr,$result:expr) => {
-        match $result {
-            Ok(a) => $reply.attr(&Duration::ZERO, &a),
-            Err(e) => $reply.error(Errno::from(e)),
+impl ReplyResult<()> for ReplyEmpty {
+    fn send(self, result: Result<(), ErrnoName>) {
+        match result {
+            Ok(()) => self.ok(),
+            Err(e) => self.error(e.into()),
         }
-    };
+    }
 }
-macro_rules! entry_reply {
-    ($reply:expr,$result:expr) => {
-        match $result {
-            Ok(a) => $reply.entry(&Duration::ZERO, &a, Generation(1)),
-            Err(e) => $reply.error(Errno::from(e)),
+impl ReplyResult<FileAttr> for ReplyAttr {
+    fn send(self, result: Result<FileAttr, ErrnoName>) {
+        match result {
+            Ok(a) => self.attr(&Duration::ZERO, &a),
+            Err(e) => self.error(e.into()),
         }
-    };
+    }
+}
+impl ReplyResult<FileAttr> for ReplyEntry {
+    fn send(self, result: Result<FileAttr, ErrnoName>) {
+        match result {
+            Ok(a) => self.entry(&Duration::ZERO, &a, Generation(1)),
+            Err(e) => self.error(e.into()),
+        }
+    }
+}
+impl AnchorFs {
+    /// All serving callbacks check D8 before validation or a remote request.
+    /// Cleanup/forget/flush/statfs callbacks intentionally bypass this gate.
+    fn serve<T>(
+        &self,
+        future: impl std::future::Future<Output = Result<T, ErrnoName>>,
+    ) -> Result<T, ErrnoName> {
+        self.mount.live()?;
+        let result = self.mount.block(future);
+        // Preserve committed results; apply the final fence check to failures.
+        if result.is_err() {
+            self.mount.live()?;
+        }
+        result
+    }
+    fn unsupported(&self) -> Errno {
+        self.mount.live().err().unwrap_or(ErrnoName::ENOSYS).into()
+    }
 }
 impl Filesystem for AnchorFs {
     fn init(&mut self, _: &Request, config: &mut KernelConfig) -> std::io::Result<()> {
@@ -55,37 +77,35 @@ impl Filesystem for AnchorFs {
                 )
             })?;
         config
-            .set_max_write(self.mount.cfg.args.max_io_bytes)
+            .set_max_write(self.mount.config().max_io)
             .map_err(|_| std::io::Error::other("kernel refused max_write"))?;
-        tracing::info!(capabilities=?config.capabilities(),max_io_bytes=self.mount.cfg.args.max_io_bytes,"strict mount initialized");
+        tracing::info!(
+            capabilities = ?config.capabilities(),
+            max_io_bytes = self.mount.config().max_io,
+            "strict mount initialized"
+        );
         Ok(())
     }
     fn destroy(&mut self) {
         self.mount.block(self.mount.shutdown());
     }
     fn lookup(&self, _: &Request, parent: INodeNo, n: &OsStr, reply: ReplyEntry) {
-        entry_reply!(
-            reply,
-            self.mount.block(async {
-                let n = name(n)?;
-                let path = self.mount.child_path(parent.0, &n).await?;
-                stat_child(&self.mount, &path, parent.0, n, None).await
-            })
-        );
+        reply.send(self.serve(async {
+            let n = name(n)?;
+            let path = self.mount.child_path(parent.0, &n).await?;
+            stat_child(&self.mount, &path, parent.0, n, None).await
+        }));
     }
     fn forget(&self, _: &Request, ino: INodeNo, count: u64) {
-        lock(&self.mount.inodes).forget(ino.0, count);
+        self.mount.forget(ino.0, count);
     }
     fn getattr(&self, _: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
-        attr_reply!(
-            reply,
-            self.mount.block(async {
-                attr(
-                    &self.mount,
-                    &self.mount.attributes(ino.0, fh.map(|v| v.0)).await?,
-                )
-            })
-        );
+        reply.send(self.serve(async {
+            attr(
+                &self.mount,
+                &self.mount.attributes(ino.0, fh.map(|v| v.0)).await?,
+            )
+        }));
     }
     fn setattr(
         &self,
@@ -105,25 +125,22 @@ impl Filesystem for AnchorFs {
         _: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
-        attr_reply!(
-            reply,
-            self.mount.block(setattr(
-                &self.mount,
-                ino.0,
-                Attributes {
-                    mode,
-                    uid,
-                    gid,
-                    size,
-                    atime,
-                    mtime,
-                    fh: fh.map(|h| h.0)
-                }
-            ))
-        );
+        reply.send(self.serve(setattr(
+            &self.mount,
+            ino.0,
+            Attributes {
+                mode,
+                uid,
+                gid,
+                size,
+                atime,
+                mtime,
+                fh: fh.map(|h| h.0),
+            },
+        )));
     }
     fn readlink(&self, _: &Request, ino: INodeNo, reply: ReplyData) {
-        let result = self.mount.block(async {
+        let result = self.serve(async {
             let path = self
                 .mount
                 .checked_path(ino.0)
@@ -132,7 +149,7 @@ impl Filesystem for AnchorFs {
             let result = self
                 .mount
                 .api(
-                    self.mount.client.read_symlink(path.as_str()).await,
+                    self.mount.client().read_symlink(path.as_str()).await,
                     CallClass::Read,
                     None,
                 )
@@ -154,26 +171,23 @@ impl Filesystem for AnchorFs {
         umask: u32,
         reply: ReplyEntry,
     ) {
-        entry_reply!(
-            reply,
-            self.mount.block(async {
-                let bits = mode(bits)? & !umask;
-                let n = name(n)?;
-                let path = self.mount.child_path(parent.0, &n).await?;
-                let result = self
-                    .mount
-                    .api(
-                        self.mount
-                            .client
-                            .create_directory(&path, bits, &IdempotencyKey::new())
-                            .await,
-                        CallClass::Mutation,
-                        None,
-                    )
-                    .await?;
-                stat_child(&self.mount, &path, parent.0, n, result.inode_id).await
-            })
-        );
+        reply.send(self.serve(async {
+            let bits = mode(bits)? & !umask;
+            let n = name(n)?;
+            let path = self.mount.child_path(parent.0, &n).await?;
+            let result = self
+                .mount
+                .api(
+                    self.mount
+                        .client()
+                        .create_directory(&path, bits, &IdempotencyKey::new())
+                        .await,
+                    CallClass::Mutation,
+                    None,
+                )
+                .await?;
+            stat_child(&self.mount, &path, parent.0, n, result.inode_id).await
+        }));
     }
     fn mknod(
         &self,
@@ -185,78 +199,58 @@ impl Filesystem for AnchorFs {
         _: u32,
         reply: ReplyEntry,
     ) {
-        entry_reply!(
-            reply,
-            self.mount.block(async {
-                self.mount.live()?;
-                if bits & libc::S_IFMT != libc::S_IFREG {
-                    return Err(ErrnoName::EPERM);
-                }
-                let bits = mode(bits)? & !umask;
-                let n = name(n)?;
-                let path = self.mount.child_path(parent.0, &n).await?;
-                let h = self
-                    .mount
-                    .api(
-                        self.mount
-                            .client
-                            .open_handle(
-                                &open_body(path, libc::O_WRONLY | libc::O_EXCL, true, Some(bits)),
-                                &IdempotencyKey::new(),
-                            )
-                            .await,
-                        CallClass::Mutation,
-                        None,
-                    )
-                    .await?;
-                let close = self
-                    .mount
-                    .client
-                    .close_handle(h.handle_id, &IdempotencyKey::new())
-                    .await;
-                let _ = self.mount.api(close, CallClass::Mutation, None).await;
-                record(&self.mount, parent.0, n, &h.attributes)
-            })
-        );
+        reply.send(self.serve(async {
+            if bits & libc::S_IFMT != libc::S_IFREG {
+                return Err(ErrnoName::EPERM);
+            }
+            let bits = mode(bits)? & !umask;
+            let n = name(n)?;
+            let path = self.mount.child_path(parent.0, &n).await?;
+            let h = self
+                .mount
+                .api(
+                    self.mount
+                        .client()
+                        .open_handle(
+                            &open_body(path, libc::O_WRONLY | libc::O_EXCL, true, Some(bits)),
+                            &IdempotencyKey::new(),
+                        )
+                        .await,
+                    CallClass::Mutation,
+                    None,
+                )
+                .await?;
+            self.mount.close_quietly(h.handle_id).await;
+            record(&self.mount, parent.0, n, &h.attributes)
+        }));
     }
     fn unlink(&self, _: &Request, parent: INodeNo, n: &OsStr, reply: ReplyEmpty) {
-        empty_reply!(
-            reply,
-            self.mount
-                .block(async { remove(&self.mount, parent.0, name(n)?, false).await })
-        );
+        reply.send(self.serve(async { remove(&self.mount, parent.0, name(n)?, false).await }));
     }
     fn rmdir(&self, _: &Request, parent: INodeNo, n: &OsStr, reply: ReplyEmpty) {
-        empty_reply!(
-            reply,
-            self.mount
-                .block(async { remove(&self.mount, parent.0, name(n)?, true).await })
-        );
+        reply.send(self.serve(async { remove(&self.mount, parent.0, name(n)?, true).await }));
     }
     fn symlink(&self, _: &Request, parent: INodeNo, n: &OsStr, target: &Path, reply: ReplyEntry) {
-        entry_reply!(
-            reply,
-            self.mount.block(async {
-                let target = target
-                    .to_str()
-                    .filter(|s| !s.is_empty() && s.len() <= 4096)
-                    .ok_or(ErrnoName::EINVAL)?;
-                let n = name(n)?;
-                let path = self.mount.child_path(parent.0, &n).await?;
-                let result = self
-                    .mount
-                    .api(
-                        self.mount
-                            .client
-                            .create_symlink(&path, target, &IdempotencyKey::new())
-                            .await,
-                        CallClass::Mutation,
-                        None,
-                    )
-                    .await?;
-                stat_child(&self.mount, &path, parent.0, n, result.inode_id).await
-            })
-        );
+        reply.send(self.serve(async {
+            let target = target
+                .to_str()
+                .filter(|s| !s.is_empty() && s.len() <= 4096)
+                .ok_or(ErrnoName::EINVAL)?;
+            let n = name(n)?;
+            let path = self.mount.child_path(parent.0, &n).await?;
+            let result = self
+                .mount
+                .api(
+                    self.mount
+                        .client()
+                        .create_symlink(&path, target, &IdempotencyKey::new())
+                        .await,
+                    CallClass::Mutation,
+                    None,
+                )
+                .await?;
+            stat_child(&self.mount, &path, parent.0, n, result.inode_id).await
+        }));
     }
     fn rename(
         &self,
@@ -268,82 +262,81 @@ impl Filesystem for AnchorFs {
         flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
-        empty_reply!(
-            reply,
-            self.mount.block(async {
-                self.mount.live()?;
-                if !flags.is_empty() {
-                    return Err(ErrnoName::EINVAL);
-                }
-                let (n, newn) = (name(n)?, name(newn)?);
-                let from = self.mount.child_path(parent.0, &n).await?;
-                let to = self.mount.child_path(newparent.0, &newn).await?;
-                let before = self
-                    .mount
-                    .api(
-                        self.mount.client.stat(Some(&from)).await,
-                        CallClass::Read,
-                        None,
-                    )
-                    .await?;
-                let result = self
-                    .mount
-                    .api(
-                        self.mount
-                            .client
-                            .rename(&from, &to, &IdempotencyKey::new())
-                            .await,
-                        CallClass::Mutation,
-                        None,
-                    )
-                    .await?;
-                if result.inode_id != Some(before.inode_id) {
-                    let mut inodes = lock(&self.mount.inodes);
-                    inodes.unlink_name(parent.0, &n);
-                    inodes.unlink_name(newparent.0, &newn);
-                    tracing::warn!(operation_id=%result.operation_id, "rename committed with changed identity");
-                    return Err(ErrnoName::ESTALE);
-                }
-                lock(&self.mount.inodes).rename(parent.0, &n, newparent.0, newn);
-                Ok(())
-            })
-        );
+        reply.send(self.serve(async {
+            if !flags.is_empty() {
+                return Err(ErrnoName::EINVAL);
+            }
+            let (n, newn) = (name(n)?, name(newn)?);
+            let from = self.mount.child_path(parent.0, &n).await?;
+            let to = self.mount.child_path(newparent.0, &newn).await?;
+            let before = self
+                .mount
+                .api(
+                    self.mount.client().stat(Some(&from)).await,
+                    CallClass::Read,
+                    None,
+                )
+                .await?;
+            let result = self
+                .mount
+                .api(
+                    self.mount
+                        .client()
+                        .rename(&from, &to, &IdempotencyKey::new())
+                        .await,
+                    CallClass::Mutation,
+                    None,
+                )
+                .await?;
+            if result.inode_id != Some(before.inode_id) {
+                self.mount.unlink_name(parent.0, &n);
+                self.mount.unlink_name(newparent.0, &newn);
+                tracing::warn!(
+                    operation_id = %result.operation_id,
+                    "rename committed with changed identity"
+                );
+                return Err(ErrnoName::ESTALE);
+            }
+            self.mount.rename_names(parent.0, &n, newparent.0, newn);
+            Ok(())
+        }));
     }
     fn link(&self, _: &Request, ino: INodeNo, parent: INodeNo, n: &OsStr, reply: ReplyEntry) {
-        entry_reply!(
-            reply,
-            self.mount.block(async {
-                let from = self
-                    .mount
-                    .checked_path(ino.0)
-                    .await?
-                    .ok_or(ErrnoName::EPERM)?;
-                let n = name(n)?;
-                let to = self.mount.child_path(parent.0, &n).await?;
-                let result = self
-                    .mount
-                    .api(
-                        self.mount
-                            .client
-                            .create_link(from.as_str(), &to, &IdempotencyKey::new())
-                            .await,
-                        CallClass::Mutation,
-                        None,
-                    )
-                    .await?;
-                if let Err(error) = self.mount.identity(ino.0, result.inode_id.ok_or(ErrnoName::EIO)?) {
-                    lock(&self.mount.inodes).unlink_name(parent.0, &n);
-                    tracing::warn!(operation_id=%result.operation_id, "link committed with changed identity");
-                    return Err(error);
-                }
-                stat_child(&self.mount, &to, parent.0, n, result.inode_id).await
-            })
-        );
+        reply.send(self.serve(async {
+            let from = self
+                .mount
+                .checked_path(ino.0)
+                .await?
+                .ok_or(ErrnoName::EPERM)?;
+            let n = name(n)?;
+            let to = self.mount.child_path(parent.0, &n).await?;
+            let result = self
+                .mount
+                .api(
+                    self.mount
+                        .client()
+                        .create_link(from.as_str(), &to, &IdempotencyKey::new())
+                        .await,
+                    CallClass::Mutation,
+                    None,
+                )
+                .await?;
+            let id = result.inode_id.ok_or(ErrnoName::EIO)?;
+            if let Err(error) = self.mount.identity(ino.0, id) {
+                self.mount.unlink_name(parent.0, &n);
+                tracing::warn!(
+                    operation_id = %result.operation_id,
+                    "link committed with changed identity"
+                );
+                return Err(error);
+            }
+            stat_child(&self.mount, &to, parent.0, n, result.inode_id).await
+        }));
     }
     fn open(&self, _: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
-        match self.mount.block(open_checked(&self.mount, ino.0, flags.0)) {
+        match self.serve(open_checked(&self.mount, ino.0, flags.0)) {
             Ok(h) => reply.opened(
-                FileHandle(save_file(&self.mount, &h, flags.0)),
+                FileHandle(self.mount.remember_file(&h)),
                 FopenFlags::FOPEN_DIRECT_IO,
             ),
             Err(e) => reply.error(e.into()),
@@ -359,7 +352,7 @@ impl Filesystem for AnchorFs {
         flags: i32,
         reply: ReplyCreate,
     ) {
-        let result = self.mount.block(async {
+        let result = self.serve(async {
             let bits = mode(bits)? & !umask;
             let n = name(n)?;
             let path = self.mount.child_path(parent.0, &n).await?;
@@ -367,7 +360,7 @@ impl Filesystem for AnchorFs {
                 .mount
                 .api(
                     self.mount
-                        .client
+                        .client()
                         .open_handle(
                             &open_body(path, flags, true, Some(bits)),
                             &IdempotencyKey::new(),
@@ -380,15 +373,11 @@ impl Filesystem for AnchorFs {
             let a = match record(&self.mount, parent.0, n, &h.attributes) {
                 Ok(a) => a,
                 Err(e) => {
-                    let _ = self
-                        .mount
-                        .client
-                        .close_handle(h.handle_id, &IdempotencyKey::new())
-                        .await;
+                    self.mount.close_quietly(h.handle_id).await;
                     return Err(e);
                 }
             };
-            Ok::<_, ErrnoName>((a, save_file(&self.mount, &h, flags)))
+            Ok::<_, ErrnoName>((a, self.mount.remember_file(&h)))
         });
         match result {
             Ok((a, fh)) => reply.created(
@@ -412,7 +401,7 @@ impl Filesystem for AnchorFs {
         _: Option<LockOwner>,
         reply: ReplyData,
     ) {
-        let result = self.mount.block(async {
+        let result = self.serve(async {
             self.mount.file(fh.0)?;
             let mut bytes = Vec::new();
             let mut generation = None;
@@ -426,15 +415,15 @@ impl Filesystem for AnchorFs {
                         break;
                     }
                 };
-                let n = (size as usize - bytes.len()).min(self.mount.cfg.args.max_io_bytes as usize)
-                    as u32;
+                let n =
+                    (size as usize - bytes.len()).min(self.mount.config().max_io as usize) as u32;
                 let at = offset
                     .checked_add(bytes.len() as u64)
                     .ok_or(ErrnoName::EFBIG)?;
                 let result = self
                     .mount
                     .api(
-                        self.mount.client.read_range(file.handle_id, at, n).await,
+                        self.mount.client().read_range(file.handle_id, at, n).await,
                         CallClass::Read,
                         Some(fh.0),
                     )
@@ -479,43 +468,46 @@ impl Filesystem for AnchorFs {
         _: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
-        let result = self.mount.block(async {
+        let result = self.serve(async {
             let file = self.mount.file(fh.0)?;
             let (done, error) = write_slices(
                 data,
                 offset,
-                self.mount.cfg.args.max_io_bytes as usize,
+                self.mount.config().max_io as usize,
                 |at, bytes, key| {
                     let file = &file;
                     async move {
-                        self.mount.file(fh.0).map_err(|_| {
-                            anchorfs_client::error::ClientError::Api(
-                                anchorfs_client::error::ApiFailure {
-                                    status: 410,
-                                    code: "stale_handle".into(),
-                                    message: "local mount or handle fenced".into(),
-                                    trace_id: String::new(),
-                                    operation_id: None,
-                                    retry_after_ms: None,
-                                },
-                            )
-                        })?;
+                        if let Err(error) = self.mount.file(fh.0) {
+                            return Slice::Failed(error);
+                        }
                         let result = if flags.0 & libc::O_APPEND != 0 {
-                            self.mount.client.append(file.handle_id, bytes, &key).await
+                            self.mount
+                                .client()
+                                .append(file.handle_id, bytes, &key)
+                                .await
                         } else {
                             self.mount
-                                .client
+                                .client()
                                 .write_at(file.handle_id, at, bytes, &key)
                                 .await
                         };
-                        if let Err(error) = &result {
-                            // latch before another slice or callback can start
-                            let e = error.clone();
-                            self.mount
-                                .api_error(e, CallClass::Mutation, Some(fh.0))
-                                .await;
+                        match result {
+                            Ok(result) => Slice::Committed(result),
+                            Err(error)
+                                if error.kind()
+                                    == Some(anchorfs_core::ErrorCode::GenerationConflict) =>
+                            {
+                                match self.mount.live() {
+                                    Ok(()) => Slice::Conflict,
+                                    Err(e) => Slice::Failed(e),
+                                }
+                            }
+                            Err(error) => Slice::Failed(
+                                self.mount
+                                    .api_error(error, CallClass::Mutation, Some(fh.0))
+                                    .await,
+                            ),
                         }
-                        result
                     }
                 },
             )
@@ -538,20 +530,17 @@ impl Filesystem for AnchorFs {
         reply.ok();
     }
     fn fsync(&self, _: &Request, _: INodeNo, fh: FileHandle, _: bool, reply: ReplyEmpty) {
-        empty_reply!(
-            reply,
-            self.mount.block(async {
-                let file = self.mount.file(fh.0)?;
-                self.mount
-                    .api(
-                        self.mount.client.fsync(file.handle_id).await,
-                        CallClass::Read,
-                        Some(fh.0),
-                    )
-                    .await?;
-                Ok::<(), ErrnoName>(())
-            })
-        );
+        reply.send(self.serve(async {
+            let file = self.mount.file(fh.0)?;
+            self.mount
+                .api(
+                    self.mount.client().fsync(file.handle_id).await,
+                    CallClass::Read,
+                    Some(fh.0),
+                )
+                .await?;
+            Ok::<(), ErrnoName>(())
+        }));
     }
     fn release(
         &self,
@@ -563,23 +552,15 @@ impl Filesystem for AnchorFs {
         _: bool,
         reply: ReplyEmpty,
     ) {
-        let file = lock(&self.mount.files).entries.remove(&fh.0);
-        if let Some(file) = file {
-            let result = self.mount.block(
-                self.mount
-                    .client
-                    .close_handle(file.handle_id, &IdempotencyKey::new()),
-            );
-            if let Err(error) = result {
-                tracing::warn!(code = error.code(), "close handle failed");
-            }
+        if let Some(file) = self.mount.take_file(fh.0) {
+            self.mount.block(self.mount.close_quietly(file.handle_id));
         }
         reply.ok();
     }
     fn opendir(&self, _: &Request, ino: INodeNo, _: OpenFlags, reply: ReplyOpen) {
-        let result = self.mount.block(async {
+        let result = self.serve(async {
             let path = self.mount.checked_path(ino.0).await?;
-            let parent = lock(&self.mount.inodes).parent(ino.0)?;
+            let parent = self.mount.parent(ino.0)?;
             let mut snapshot = vec![
                 DirEntrySnapshot {
                     ino: ino.0,
@@ -599,7 +580,7 @@ impl Filesystem for AnchorFs {
                     .mount
                     .api(
                         self.mount
-                            .client
+                            .client()
                             .list_directory(path_str(&path), cursor.as_deref(), 1000)
                             .await,
                         CallClass::Read,
@@ -608,7 +589,7 @@ impl Filesystem for AnchorFs {
                     .await?;
                 for e in page.entries {
                     snapshot.push(DirEntrySnapshot {
-                        ino: lock(&self.mount.inodes).child_ino(e.attributes.inode_id)?,
+                        ino: self.mount.child_inode(e.attributes.inode_id)?,
                         name: e.name,
                         kind: e.attributes.kind,
                     });
@@ -618,7 +599,7 @@ impl Filesystem for AnchorFs {
                     break;
                 }
             }
-            Ok::<_, ErrnoName>(lock(&self.mount.dirs).insert(snapshot))
+            Ok::<_, ErrnoName>(self.mount.remember_directory(snapshot))
         });
         match result {
             Ok(fh) => reply.opened(FileHandle(fh), FopenFlags::empty()),
@@ -633,32 +614,35 @@ impl Filesystem for AnchorFs {
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        if let Err(e) = self.mount.live() {
-            reply.error(e.into());
-            return;
+        let result = self.serve(async {
+            self.mount.with_directory(fh.0, |entries| {
+                for (i, entry) in entries
+                    .iter()
+                    .enumerate()
+                    .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+                {
+                    if reply.add(
+                        INodeNo(entry.ino),
+                        (i + 1) as u64,
+                        file_type(&entry.kind),
+                        &entry.name,
+                    ) {
+                        break;
+                    }
+                }
+            })
+        });
+        match result {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(e.into()),
         }
-        let dirs = lock(&self.mount.dirs);
-        let Some(entries) = dirs.entries.get(&fh.0) else {
-            reply.error(Errno::ESTALE);
-            return;
-        };
-        for (i, e) in entries
-            .iter()
-            .enumerate()
-            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
-        {
-            if reply.add(INodeNo(e.ino), (i + 1) as u64, file_type(&e.kind), &e.name) {
-                break;
-            }
-        }
-        reply.ok();
     }
     fn releasedir(&self, _: &Request, _: INodeNo, fh: FileHandle, _: OpenFlags, reply: ReplyEmpty) {
-        lock(&self.mount.dirs).entries.remove(&fh.0);
+        self.mount.release_directory(fh.0);
         reply.ok();
     }
     fn fsyncdir(&self, _: &Request, _: INodeNo, _: FileHandle, _: bool, reply: ReplyEmpty) {
-        empty_reply!(reply, self.mount.live());
+        reply.send(self.mount.live());
     }
     fn statfs(&self, _: &Request, _: INodeNo, reply: ReplyStatfs) {
         reply.statfs(0, 0, 0, 0, 0, 4096, 255, 4096);
@@ -675,12 +659,15 @@ impl Filesystem for AnchorFs {
         _: u32,
         reply: ReplyLock,
     ) {
-        if self.mount.live().is_err() {
-            reply.error(Errno::ESTALE);
-        } else if typ == libc::F_UNLCK {
-            reply.locked(start, end, typ, 0);
-        } else {
-            reply.error(Errno::ENOLCK);
+        match self.serve(async {
+            if typ == libc::F_UNLCK {
+                Ok(())
+            } else {
+                Err(ErrnoName::ENOLCK)
+            }
+        }) {
+            Ok(()) => reply.locked(start, end, typ, 0),
+            Err(e) => reply.error(e.into()),
         }
     }
     fn setlk(
@@ -696,13 +683,13 @@ impl Filesystem for AnchorFs {
         _: bool,
         reply: ReplyEmpty,
     ) {
-        if let Err(e) = self.mount.live() {
-            reply.error(e.into());
-        } else if typ == libc::F_UNLCK {
-            reply.ok();
-        } else {
-            reply.error(Errno::ENOLCK);
-        }
+        reply.send(self.serve(async {
+            if typ == libc::F_UNLCK {
+                Ok(())
+            } else {
+                Err(ErrnoName::ENOLCK)
+            }
+        }));
     }
     fn readdirplus(
         &self,
@@ -712,18 +699,10 @@ impl Filesystem for AnchorFs {
         _: u64,
         reply: ReplyDirectoryPlus,
     ) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn access(&self, _: &Request, _: INodeNo, _: AccessFlags, reply: ReplyEmpty) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn setxattr(
         &self,
@@ -735,32 +714,16 @@ impl Filesystem for AnchorFs {
         _: u32,
         reply: ReplyEmpty,
     ) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn getxattr(&self, _: &Request, _: INodeNo, _: &OsStr, _: u32, reply: ReplyXattr) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn listxattr(&self, _: &Request, _: INodeNo, _: u32, reply: ReplyXattr) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn removexattr(&self, _: &Request, _: INodeNo, _: &OsStr, reply: ReplyEmpty) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn ioctl(
         &self,
@@ -773,11 +736,7 @@ impl Filesystem for AnchorFs {
         _: u32,
         reply: ReplyIoctl,
     ) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn poll(
         &self,
@@ -789,11 +748,7 @@ impl Filesystem for AnchorFs {
         _: PollFlags,
         reply: ReplyPoll,
     ) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn fallocate(
         &self,
@@ -805,18 +760,10 @@ impl Filesystem for AnchorFs {
         _: i32,
         reply: ReplyEmpty,
     ) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn lseek(&self, _: &Request, _: INodeNo, _: FileHandle, _: i64, _: i32, reply: ReplyLseek) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn copy_file_range(
         &self,
@@ -831,61 +778,58 @@ impl Filesystem for AnchorFs {
         _: CopyFileRangeFlags,
         reply: ReplyWrite,
     ) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
     fn bmap(&self, _: &Request, _: INodeNo, _: u32, _: u64, reply: ReplyBmap) {
-        reply.error(if self.mount.live().is_err() {
-            Errno::ESTALE
-        } else {
-            Errno::ENOSYS
-        });
+        reply.error(self.unsupported());
     }
 }
 pub fn platform_supported() -> bool {
     true
 }
-pub fn mount_options(profile: &MountProfile) -> Result<Vec<String>, MountError> {
-    if profile != &MountProfile::strict() {
-        return Err(MountError::UnsupportedProfile);
-    }
-    Ok([
-        "default_permissions",
-        "nosuid",
-        "nodev",
-        "noatime",
-        "fsname=anchorfs",
-        "subtype=anchorfs",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect())
-}
-pub fn fuse_config(cfg: &MountConfig) -> Config {
-    let mut config = Config::default();
-    config.mount_options = vec![
+fn strict_options() -> Vec<MountOption> {
+    vec![
         MountOption::DefaultPermissions,
         MountOption::NoSuid,
         MountOption::NoDev,
         MountOption::NoAtime,
         MountOption::FSName("anchorfs".into()),
         MountOption::Subtype("anchorfs".into()),
-    ];
-    config.acl = if cfg.args.allow_other {
+    ]
+}
+fn render_option(option: &MountOption) -> String {
+    match option {
+        MountOption::DefaultPermissions => "default_permissions".into(),
+        MountOption::NoSuid => "nosuid".into(),
+        MountOption::NoDev => "nodev".into(),
+        MountOption::NoAtime => "noatime".into(),
+        MountOption::FSName(name) => format!("fsname={name}"),
+        MountOption::Subtype(name) => format!("subtype={name}"),
+        _ => unreachable!("strict option must have a renderer"),
+    }
+}
+pub fn mount_options(profile: &MountProfile) -> Result<Vec<String>, MountError> {
+    if profile != &MountProfile::strict() {
+        return Err(MountError::UnsupportedProfile);
+    }
+    Ok(strict_options().iter().map(render_option).collect())
+}
+
+pub fn fuse_config(cfg: &MountConfig) -> Config {
+    let mut config = Config::default();
+    config.mount_options = strict_options();
+    config.acl = if cfg.allow_other {
         SessionACL::All
     } else {
         SessionACL::Owner
     };
-    config.n_threads = Some(cfg.args.fuse_threads);
+    config.n_threads = Some(cfg.fuse_threads);
     config.clone_fd = true;
     config
 }
 pub fn spawn(mount: Arc<Mount>) -> Result<BackgroundSession, MountError> {
-    let config = fuse_config(&mount.cfg);
-    let path = mount.cfg.args.mountpoint.clone();
+    let config = fuse_config(mount.config());
+    let path = mount.config().mountpoint.clone();
     fuser::spawn_mount(AnchorFs { mount }, path, &config).map_err(|e| MountError::Mount {
         kind: format!("{:?}", e.kind()),
         message: e.to_string(),
@@ -922,7 +866,7 @@ mod tests {
         let bearer = format!("{}.{}", uuid::Uuid::new_v4(), "ab".repeat(32));
         let mut cfg = args.with_secrets(&bearer, None).unwrap();
         assert_eq!(fuse_config(&cfg).acl, SessionACL::Owner);
-        cfg.args.allow_other = true;
+        cfg.allow_other = true;
         assert_eq!(fuse_config(&cfg).acl, SessionACL::All);
         assert_eq!(
             mount_options(&MountProfile::strict()).unwrap(),

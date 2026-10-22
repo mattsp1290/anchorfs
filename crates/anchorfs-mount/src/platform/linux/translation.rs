@@ -1,15 +1,11 @@
 use crate::{
     errno::{CallClass, ErrnoName},
-    handles::OpenFile,
-    runtime::{Mount, lock},
+    runtime::Mount,
 };
 use anchorfs_client::{retry::IdempotencyKey, wire::*};
-use anchorfs_core::{Name, WorkspacePath};
+use anchorfs_core::{AttributeUpdate, Name, WorkspacePath};
 use fuser::{FileAttr, FileType, INodeNo, TimeOrNow};
-use std::{
-    sync::Arc,
-    time::{Instant, SystemTime},
-};
+use std::{sync::Arc, time::SystemTime};
 
 pub fn file_type(kind: &InodeKind) -> FileType {
     match kind {
@@ -20,7 +16,7 @@ pub fn file_type(kind: &InodeKind) -> FileType {
 }
 pub fn attr(m: &Mount, a: &InodeAttributes) -> Result<FileAttr, ErrnoName> {
     Ok(FileAttr {
-        ino: INodeNo(lock(&m.inodes).ino(a.inode_id)?),
+        ino: INodeNo(m.inode_number(a.inode_id)?),
         size: a.size,
         blocks: a.size.div_ceil(512),
         atime: a.atime.into(),
@@ -43,7 +39,7 @@ pub fn record(
     name: Name,
     a: &InodeAttributes,
 ) -> Result<FileAttr, ErrnoName> {
-    lock(&m.inodes).record_name(a.inode_id, parent, name, a.kind.clone())?;
+    m.record(parent, name, a)?;
     attr(m, a)
 }
 pub fn mode(mode: u32) -> Result<u32, ErrnoName> {
@@ -64,22 +60,11 @@ pub fn open_body(path: String, flags: i32, create: bool, mode: Option<u32>) -> O
         mode,
     }
 }
-pub fn save_file(m: &Mount, h: &HandleGrant, flags: i32) -> u64 {
-    lock(&m.files).insert(OpenFile {
-        handle_id: h.handle_id,
-        server_ino: h.attributes.inode_id,
-        read: h.access_read,
-        write: h.access_write,
-        append: flags & libc::O_APPEND != 0,
-        fenced: false,
-        renewed: Instant::now(),
-    })
-}
 pub async fn open_checked(m: &Mount, ino: u64, flags: i32) -> Result<HandleGrant, ErrnoName> {
     let path = m.checked_path(ino).await?.ok_or(ErrnoName::EISDIR)?;
     let h = m
         .api(
-            m.client
+            m.client()
                 .open_handle(
                     &open_body(path.to_string(), flags, false, None),
                     &IdempotencyKey::new(),
@@ -90,10 +75,7 @@ pub async fn open_checked(m: &Mount, ino: u64, flags: i32) -> Result<HandleGrant
         )
         .await?;
     if let Err(e) = m.identity(ino, h.attributes.inode_id) {
-        let _ = m
-            .client
-            .close_handle(h.handle_id, &IdempotencyKey::new())
-            .await;
+        m.close_quietly(h.handle_id).await;
         return Err(e);
     }
     Ok(h)
@@ -113,12 +95,20 @@ pub async fn setattr(m: &Mount, ino: u64, change: Attributes) -> Result<FileAttr
     let mode = change.mode.map(mode).transpose()?;
     let atime = change.atime.map(timestamp).transpose()?;
     let mtime = change.mtime.map(timestamp).transpose()?;
-    let before = m.attributes(ino, change.fh).await?;
+    let resolved = if change.fh.is_none() {
+        Some(m.resolve(ino).await?)
+    } else {
+        None
+    };
+    let before = match &resolved {
+        Some(value) => value.attributes.clone(),
+        None => m.attributes(ino, change.fh).await?,
+    };
     if let Some(size) = change.size {
         if let Some(fh) = change.fh {
             let file = m.file(fh)?;
             m.api(
-                m.client
+                m.client()
                     .truncate(file.handle_id, size, &IdempotencyKey::new())
                     .await,
                 CallClass::Mutation,
@@ -129,42 +119,36 @@ pub async fn setattr(m: &Mount, ino: u64, change: Attributes) -> Result<FileAttr
             let h = open_checked(m, ino, libc::O_WRONLY).await?;
             let result = m
                 .api(
-                    m.client
+                    m.client()
                         .truncate(h.handle_id, size, &IdempotencyKey::new())
                         .await,
                     CallClass::Mutation,
                     None,
                 )
                 .await;
-            let _ = m
-                .client
-                .close_handle(h.handle_id, &IdempotencyKey::new())
-                .await;
+            m.close_quietly(h.handle_id).await;
             result?;
         }
     }
-    let attributes = SetAttributes {
-        path: None,
+    let update = AttributeUpdate {
         mode,
         uid: change.uid.filter(|v| *v != before.uid),
         gid: change.gid.filter(|v| *v != before.gid),
         atime,
         mtime,
     };
-    if attributes.mode.is_some()
-        || attributes.uid.is_some()
-        || attributes.gid.is_some()
-        || attributes.atime.is_some()
-        || attributes.mtime.is_some()
-    {
-        let path = m.checked_path(ino).await?;
+    if !update.is_empty() {
+        let path = match resolved {
+            Some(value) => value.path,
+            None => m.checked_path(ino).await?,
+        };
         let attributes = SetAttributes {
             path: path.map(|p| p.to_string()),
-            ..attributes
+            update,
         };
         let result = m
             .api(
-                m.client
+                m.client()
                     .set_attributes(&attributes, &IdempotencyKey::new())
                     .await,
                 CallClass::Mutation,
@@ -177,7 +161,7 @@ pub async fn setattr(m: &Mount, ino: u64, change: Attributes) -> Result<FileAttr
     }
     attr(m, &m.attributes(ino, change.fh).await?)
 }
-fn timestamp(value: TimeOrNow) -> Result<String, ErrnoName> {
+fn timestamp(value: TimeOrNow) -> Result<time::OffsetDateTime, ErrnoName> {
     let value = match value {
         TimeOrNow::Now => SystemTime::now(),
         TimeOrNow::SpecificTime(value) => value,
@@ -194,21 +178,19 @@ fn timestamp(value: TimeOrNow) -> Result<String, ErrnoName> {
     if !(1..=9999).contains(&instant.year()) {
         return Err(ErrnoName::EINVAL);
     }
-    instant
-        .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|_| ErrnoName::EINVAL)
+    Ok(instant)
 }
 
 pub async fn remove(m: &Mount, parent: u64, name: Name, directory: bool) -> Result<(), ErrnoName> {
     let path = m.child_path(parent, &name).await?;
     let key = IdempotencyKey::new();
     let result = if directory {
-        m.client.remove_directory(&path, &key).await
+        m.client().remove_directory(&path, &key).await
     } else {
-        m.client.unlink(&path, &key).await
+        m.client().unlink(&path, &key).await
     };
     m.api(result, CallClass::Mutation, None).await?;
-    lock(&m.inodes).unlink_name(parent, &name);
+    m.unlink_name(parent, &name);
     Ok(())
 }
 pub async fn stat_child(
@@ -219,7 +201,7 @@ pub async fn stat_child(
     expected: Option<i64>,
 ) -> Result<FileAttr, ErrnoName> {
     let a = m
-        .api(m.client.stat(Some(path)).await, CallClass::Read, None)
+        .api(m.client().stat(Some(path)).await, CallClass::Read, None)
         .await?;
     if expected.is_some_and(|id| id != a.inode_id) {
         return Err(ErrnoName::ESTALE);
@@ -236,7 +218,7 @@ mod tests {
     #[test]
     fn timestamp_bounds_return_errno_without_panicking() {
         let epoch = TimeOrNow::SpecificTime(SystemTime::UNIX_EPOCH);
-        assert_eq!(timestamp(epoch).unwrap(), "1970-01-01T00:00:00Z");
+        assert_eq!(timestamp(epoch).unwrap().unix_timestamp(), 0);
         for value in [
             SystemTime::UNIX_EPOCH
                 .checked_add(std::time::Duration::from_secs(253_402_300_800))

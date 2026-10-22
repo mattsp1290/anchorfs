@@ -30,7 +30,7 @@ fn sigterm_with_open_files_keeps_serving() {
     let _serial = serial();
     let f = Fixture::new();
     f.put("f", b"old");
-    let mut m = TempMount::process(&f, &f.host, None, None, 1048576);
+    let mut m = TempMount::builder(&f).process();
     let mut helper = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "lifecycle::open_file_helper", "--nocapture"])
         .env("ANCHORFS_TEST_HELD_FILE", m.path.join("f"))
@@ -48,7 +48,7 @@ fn sigterm_with_open_files_keeps_serving() {
         }
     }
     let closed = f.count("handle_close");
-    m.signal("-TERM");
+    m.signal(nix::sys::signal::Signal::SIGTERM);
     std::thread::sleep(Duration::from_millis(500));
     assert!(m.process.as_mut().unwrap().try_wait().unwrap().is_none());
     assert_eq!(f.count("handle_close"), closed);
@@ -74,7 +74,10 @@ fn replaced_ancestor_directory_is_estale() {
     )
     .unwrap();
     f.put("d/x", b"x");
-    let a = TempMount::process(&f, &f.worker, Some(&f.session), None, 1048576);
+    let a = TempMount::builder(&f)
+        .credential(&f.worker)
+        .session(&f.session)
+        .process();
     let b = TempMount::in_process(&f);
     let dir = fs::File::open(b.path.join("d")).unwrap();
     fs::rename(a.path.join("d"), a.path.join("old")).unwrap();
@@ -121,7 +124,7 @@ fn replaced_ancestor_directory_is_estale() {
 fn external_unmount_cleans_up_self_minted_session() {
     let _serial = serial();
     let f = Fixture::new();
-    let mut m = TempMount::process(&f, &f.host, None, None, 1048576);
+    let mut m = TempMount::builder(&f).process();
     fs::write(m.path.join("created"), b"committed").unwrap();
     assert!(
         Command::new("fusermount3")

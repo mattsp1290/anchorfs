@@ -16,16 +16,18 @@ impl Default for IdempotencyKey {
     }
 }
 #[derive(Debug, Clone, Copy)]
-pub struct Budget {
-    pub attempts: u32,
-    pub deadline: Instant,
+pub(crate) struct Budget {
+    pub(crate) attempts: u32,
+    pub(crate) deadline: Instant,
 }
 impl Budget {
-    pub fn new(duration: Duration) -> Self {
-        Self {
+    pub(crate) fn new(duration: Duration) -> Result<Self, crate::error::ClientError> {
+        Ok(Self {
             attempts: 3,
-            deadline: Instant::now() + duration,
-        }
+            deadline: Instant::now().checked_add(duration).ok_or_else(|| {
+                crate::error::ClientError::InvalidInput("deadline exceeds clock range".into())
+            })?,
+        })
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -46,9 +48,72 @@ impl std::str::FromStr for IdempotencyKey {
     }
 }
 
+/// Bounded transport retry. Once any keyed attempt was uncertain, a later gate
+/// cannot establish non-publication: pass the actual error as an ambiguous cause.
+pub(crate) async fn execute(
+    client: &crate::Client,
+    route: &crate::ops::Route,
+    key: Option<&IdempotencyKey>,
+) -> Result<crate::ops::Response, crate::error::ClientError> {
+    use crate::error::ClientError;
+    use anchorfs_core::ErrorCode;
+    let timeout = route.timeout(client).saturating_add(Duration::from_secs(1));
+    let budget = Budget::new(timeout.saturating_mul(3))?;
+    let mut last = ClientError::Deadline;
+    let mut ambiguous = false;
+    for attempt in 0..budget.attempts {
+        let remaining = budget.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match client.once(route, key, timeout.min(remaining)).await {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                let uncertain = matches!(error, ClientError::Transport(_) | ClientError::Deadline)
+                    || error.kind() == Some(ErrorCode::OutcomeUnknown);
+                ambiguous |= uncertain;
+                let retry = matches!(error, ClientError::Transport(_) | ClientError::Deadline)
+                    || error.kind() == Some(ErrorCode::DependencyUnavailable)
+                    || (key.is_some() && error.kind() == Some(ErrorCode::OutcomeUnknown));
+                if !retry {
+                    return Err(if key.is_some() && ambiguous {
+                        ClientError::Ambiguous(Box::new(error))
+                    } else {
+                        error
+                    });
+                }
+                let delay = match &error {
+                    ClientError::Api(e) => e.retry_after_ms.unwrap_or(100),
+                    _ => 100,
+                };
+                last = error;
+                if attempt + 1 < budget.attempts {
+                    tokio::time::sleep(
+                        Duration::from_millis(delay)
+                            .min(budget.deadline.saturating_duration_since(Instant::now())),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+    Err(if key.is_some() && ambiguous {
+        ClientError::Ambiguous(Box::new(last))
+    } else {
+        last
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_unrepresentable_deadline_is_rejected_without_panicking() {
+        assert!(matches!(
+            Budget::new(Duration::MAX),
+            Err(crate::error::ClientError::InvalidInput(_))
+        ));
+    }
     #[test]
     fn persisted_keys_round_trip_without_changing_identity() {
         let original = IdempotencyKey::new();

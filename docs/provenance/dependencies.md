@@ -32,7 +32,7 @@ Source category: general-purpose libraries from the public crates.io registry. M
 | testcontainers | 0.27.3 | MIT OR Apache-2.0 | https://github.com/testcontainers/testcontainers-rs | disposable test infrastructure |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror | typed errors |
 | time | 0.3.55 | MIT OR Apache-2.0 | https://github.com/time-rs/time | timestamps |
-| tokio | 1.53.3 | MIT | https://github.com/tokio-rs/tokio | async runtime |
+| tokio | 1.53.3 | MIT | https://github.com/tokio-rs/tokio | async runtime; process feature for the event-driven non-lazy unmount helper |
 | toml | 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | manifest verification |
 | tower-http | 0.6.11 | MIT | https://github.com/tower-rs/tower-http | HTTP middleware |
 | tower | 0.5.3 | MIT | https://github.com/tower-rs/tower | service composition and testing |
@@ -152,3 +152,8 @@ API response-loss relay by path. The new fixture, syscall tests and workloads
 are independently authored from the plan and the existing service contract.
 All added dev-dependencies were already pinned and licensed workspace inputs;
 only workspace crate/dependency edges change in Cargo.lock.
+
+Stage 2b structural hardening enables Tokio's existing `process` feature for the
+non-lazy helper. The package version, source and license remain unchanged; no
+registry package is added. RFC3339 serde helpers move from the independently
+authored client wire module into core for the shared metadata-update type.
