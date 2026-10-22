@@ -1,0 +1,9 @@
+# AnchorFS Helm chart metadata. Flat scalar keys only: the shared publisher's
+# chart parser reads this file without a full YAML implementation.
+apiVersion: v2
+name: anchorfs
+description: AnchorFS durable workspace service
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.32.0-0"

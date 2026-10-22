@@ -1,0 +1,81 @@
+# AnchorFS in-cluster PKI (cert-manager.io/v1), owner-applied:
+#   k3s kubectl apply -n anchorfs -f deploy/k8s/anchorfs-pki.yaml
+# Chain: SelfSigned Issuer -> CA Certificate -> CA Issuer -> service and MinIO
+# leaf Certificates, all namespaced in "anchorfs". Pattern from
+# https://cert-manager.io/docs/configuration/selfsigned/ (bootstrap a CA with a
+# SelfSigned Issuer, then issue leaves from a CA Issuer backed by that Secret).
+# Rotation is cert-manager's; the service loads certificates at startup only, so
+# a renewed certificate takes effect at the next restart. Gate G3 (leaf Secrets
+# carry ca.crt) is verified by scripts/cluster/prepare-namespace.sh.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: anchorfs-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: anchorfs-ca
+spec:
+  isCA: true
+  commonName: anchorfs-ca
+  secretName: anchorfs-ca
+  duration: 2160h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: anchorfs-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: anchorfs-ca
+spec:
+  ca:
+    secretName: anchorfs-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: anchorfs-service-tls
+spec:
+  secretName: anchorfs-tls
+  duration: 2160h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - anchorfs
+    - anchorfs.anchorfs.svc
+    - anchorfs.anchorfs.svc.cluster.local
+    - localhost
+  ipAddresses:
+    - 127.0.0.1
+  issuerRef:
+    name: anchorfs-ca
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: anchorfs-minio-tls
+spec:
+  secretName: anchorfs-minio-tls
+  duration: 2160h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - anchorfs-minio
+    - anchorfs-minio.anchorfs.svc
+    - anchorfs-minio.anchorfs.svc.cluster.local
+  issuerRef:
+    name: anchorfs-ca
+    kind: Issuer
+    group: cert-manager.io

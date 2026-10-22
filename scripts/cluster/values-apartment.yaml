@@ -1,0 +1,20 @@
+# Non-secret chart values for the apartment k3s cluster (committed). Image
+# repositories and digests are supplied by install.sh from publication.json.
+deploymentId: anchorfs-apartment
+durabilityProfile: durable
+nodeSelector:
+  kubernetes.io/hostname: infra-control-master
+resources:
+  requests: {cpu: 250m, memory: 256Mi}
+  limits: {cpu: "2", memory: 1Gi}
+s3:
+  endpoint: https://anchorfs-minio:9000
+  region: local
+  bucket: anchorfs
+  addressing: path
+  checksumMode: sha256
+  caBundleFromSecret: true
+devDependencies:
+  nodeSelector:
+    kubernetes.io/hostname: infra-control-master
+  storageClass: local-path

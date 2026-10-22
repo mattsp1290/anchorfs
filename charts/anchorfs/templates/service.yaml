@@ -1,0 +1,17 @@
+# ClusterIP Service in front of the TLS listener (named port "https").
+apiVersion: v1
+kind: Service
+metadata:
+  name: anchorfs
+  labels:
+    {{- include "anchorfs.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "anchorfs.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: service
+  ports:
+    - name: https
+      port: {{ .Values.service.port }}
+      targetPort: https
+      protocol: TCP

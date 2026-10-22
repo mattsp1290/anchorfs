@@ -1,0 +1,47 @@
+{{- if .Values.test.enabled }}
+# Helm test hook: probes the service's /readyz over verified TLS. The URL is the
+# origin only (Endpoint::parse rejects paths; the client appends /readyz).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: anchorfs-test-probe
+  labels:
+    {{- include "anchorfs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  nodeSelector:
+    {{- toYaml .Values.nodeSelector | nindent 4 }}
+  securityContext:
+    {{- include "anchorfs.podContext" . | nindent 4 }}
+  containers:
+    - name: probe
+      image: {{ include "anchorfs.image" (dict "img" .Values.image.service "path" "image.service") | quote }}
+      args:
+        - probe
+        - --url
+        - {{ printf "https://anchorfs:%v" .Values.service.port | quote }}
+        - --ca-bundle
+        - /etc/anchorfs/ca/ca.crt
+        - --require-tls
+        {{- if eq .Values.durabilityProfile "durable" }}
+        - --require-durable
+        {{- end }}
+        - --timeout-ms
+        - "5000"
+      securityContext:
+        {{- include "anchorfs.restrictedContext" . | nindent 8 }}
+      volumeMounts:
+        - {name: ca, mountPath: /etc/anchorfs/ca, readOnly: true}
+  volumes:
+    - name: ca
+      secret:
+        secretName: {{ .Values.secrets.tls | quote }}
+        defaultMode: 288  # decimal for octal 0440 (owner+group read; group is fsGroup 10001)
+        items:
+          - {key: ca.crt, path: ca.crt}
+{{- end }}
