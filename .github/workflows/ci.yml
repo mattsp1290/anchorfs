@@ -79,6 +79,25 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --no-run --locked
       - run: cargo test -p anchorfs-core -p anchorfs-backend -p anchorfs-mount --locked
+  packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - run: python3 --version
+      - name: Exporter unit tests
+        run: python3 -I -m unittest discover -s scripts/tests -v
+      - name: Install pinned Helm 3.13.0 (checksum verified)
+        run: echo "HELM_COMPAT=$(bash ci/install-helm.sh "$RUNNER_TEMP/helm-3.13.0")" >> "$GITHUB_ENV"
+      - name: Chart lint and render checks (Helm 3.13.0)
+        run: |
+          zero=$(printf '0%.0s' $(seq 64))
+          "$HELM_COMPAT" lint charts/anchorfs \
+            --set image.service.repository=x --set "image.service.digest=sha256:$zero" \
+            --set image.mount.repository=x --set "image.mount.digest=sha256:$zero"
+          PATH="$(dirname "$HELM_COMPAT"):$PATH" CHART_STRICT=0 bash scripts/check-chart.sh
+      - name: Shell script syntax
+        run: for f in scripts/*.sh scripts/cluster/*.sh ci/*.sh; do bash -n "$f"; done
   image-amd64:
     runs-on: ubuntu-latest
     timeout-minutes: 60

@@ -10,9 +10,33 @@ docker build -f docker/Dockerfile --target mount -t anchorfs-mount:local .
 Both targets share one release builder, use `--locked` and digest-pinned
 Rust/Debian bases, and run as uid/gid 10001. apt package versions are unpinned.
 The service runtime contains ca-certificates. The mount runtime additionally
-contains fuse3 and its fusermount3 helper. CI builds and smoke-tests on native
-amd64 and arm64 runners. No images are published or uploaded; there is no
-multi-arch manifest list, signing or SBOM.
+contains fuse3 and its fusermount3 helper. GitHub CI builds and smoke-tests
+these Docker targets on native amd64 and arm64 runners; they are the test path,
+not the deployed artifacts.
+
+## Runtime bases and the daemonless delivery path
+
+The Dockerfile's runtime layers are separate stages, `service-base` and
+`mount-base`, that contain the packages and the uid 10001 user but no binary.
+`service` and `mount` build `FROM` them. The owner publishes the two base stages
+once as multi-platform images `anchorfs/service-base` and `anchorfs/mount-base`
+to the apartment Zot registry with `scripts/publish-bases.sh` (workstation on
+the apartment LAN only; the script writes the index and per-platform digests
+into `docker/bases.json`, which is committed and checked by a provenance test).
+The Forgejo delivery workflow (`docs/ops/forgejo-delivery.md`) never runs
+Docker: it cross-compiles both binaries with cargo-zigbuild
+(`scripts/build-release-binaries.sh`), pulls the bases by digest, and
+`scripts/oci_export.py` appends one deterministic binary layer per platform
+onto the base manifests, producing OCI layouts and a v1 build receipt that the
+shared birbhomes publisher uploads. A base stage change requires re-running
+`publish-bases.sh` and committing the new digests; the exporter refuses a
+mismatch. The Docker targets and the exporter output are built from the same
+stages at different times (apt is unpinned), so their package sets can differ.
+
+The deployed images therefore come from `publication.json` of a recorded
+Forgejo main run, pulled by cluster nodes as
+`10.0.0.106:30001/anchorfs/<role>@sha256:<digest>`. No image is published to
+any public registry; there is no signing or SBOM.
 
 The service defaults to durable and `127.0.0.1:8080`, so the default container
 listener is unreachable from outside. For a reachable durable service:
@@ -38,6 +62,13 @@ allow that user. These runtime settings and containerized kernel mounting
 are not verified by packaging smoke. No cluster, Helm, Spaces or cross-node
 run is part of this milestone. Image publication and registry credentials
 require a later deployment decision.
+
+The chart in `charts/anchorfs` installs the service with these images (see
+`docs/ops/cluster-proof.md`); its Helm test runs `anchorfs-service probe --url
+https://anchorfs:8080 --ca-bundle … --require-tls --require-durable`, an
+unauthenticated single `GET /readyz` with exit codes 0 (ready and requirements
+met), 1 (not ready or requirement failed) and 2 (invalid arguments, unreadable
+CA bundle or transport failure).
 
 [Acceptance evidence](../provenance/stage3a-tls-and-images-acceptance.md)
 separates kernel tests of the host binary from packaging smoke tests.
