@@ -43,7 +43,10 @@ the workspace edge `anchorfs-service` -> `anchorfs-client`. cargo-zigbuild
 archive checksums were read from get.helm.sh the same day. Action pins are full
 40-hex commits; the CI image is pinned by digest and its in-image tool versions
 were verified on 2026-10-22. The runtime base digests in `docker/bases.json`
-are null: the owner has not yet run `scripts/publish-bases.sh`.
+were published by the owner on 2026-10-23 (container mode, from commit
+`a430d02`) and are listed in `docs/provenance/dependencies.md`; both indexes
+were read back from Zot by digest with matching SHA-256 before the record was
+committed.
 
 ## Executed verification
 
