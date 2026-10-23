@@ -152,6 +152,21 @@ impl Kubectl {
         }
         serde_json::from_str(&output.stdout).ok()
     }
+    /// Parses a manifest client-side (`create --dry-run=client`) and returns it as JSON, so
+    /// callers edit structure instead of text.
+    pub fn to_json(&self, manifest: &str) -> Value {
+        let output = self.run_stdin(
+            &["create", "--dry-run=client", "-o", "json", "-f", "-"],
+            manifest.as_bytes(),
+            Duration::from_secs(30),
+        );
+        assert!(
+            output.success(),
+            "kubectl could not parse the manifest: {}",
+            output.stderr.trim()
+        );
+        serde_json::from_str(&output.stdout).expect("kubectl rendered the manifest as JSON")
+    }
     pub fn apply(&self, manifest: &str) {
         let output = self.run_stdin(
             &["apply", "-f", "-"],
@@ -207,10 +222,6 @@ impl Kubectl {
     pub fn create_secret(&self, name: &str, key: &str, value: &str, labels: &[(&str, &str)]) {
         let file = SecretFile::create(value);
         let from_file = format!("--from-file={key}={}", file.path());
-        let _ = self.run(
-            &["delete", "secret", name, "--ignore-not-found"],
-            Duration::from_secs(30),
-        );
         let output = self.run(
             &[
                 "create",
@@ -239,13 +250,16 @@ impl Kubectl {
         let manifest = serde_json::to_string(&secret).expect("secret manifest serializes");
         self.apply(&manifest);
     }
-    /// Reads one key of a Secret as bytes. The result is returned to the caller only.
+    /// Reads one key of a Secret as bytes, decoded by kubectl itself. The result is returned to
+    /// the caller only; it is never logged.
     pub fn secret_value(&self, name: &str, key: &str) -> Vec<u8> {
-        let secret = self.get_json(&["secret", name]);
-        let encoded = secret["data"][key]
-            .as_str()
-            .unwrap_or_else(|| panic!("secret {name} has no key {key}"));
-        base64_decode(encoded)
+        let template = format!("go-template={{{{index .data \"{key}\" | base64decode}}}}");
+        let value = self.ok(
+            &["get", "secret", name, "-o", &template],
+            Duration::from_secs(30),
+        );
+        assert!(!value.is_empty(), "secret {name} has no key {key}");
+        value.into_bytes()
     }
     pub fn secret_keys(&self, name: &str) -> Vec<String> {
         let secret = self.get_json(&["secret", name]);
@@ -285,29 +299,6 @@ impl Drop for SecretFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
-}
-
-fn base64_decode(text: &str) -> Vec<u8> {
-    let mut out = Vec::new();
-    let (mut accumulator, mut bits) = (0u32, 0u32);
-    for byte in text.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => continue,
-        };
-        accumulator = (accumulator << 6) | u32::from(value);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((accumulator >> bits) as u8);
-            accumulator &= (1 << bits) - 1;
-        }
-    }
-    out
 }
 
 /// `kubectl port-forward` child bound to a free loopback port; killed on drop.

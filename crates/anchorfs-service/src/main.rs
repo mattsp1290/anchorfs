@@ -33,21 +33,23 @@ enum Command {
     /// One unauthenticated `GET /readyz` against a service origin; never retries.
     /// Exit 0: ready and every requirement met. 1: not ready or a requirement failed.
     /// 2: invalid arguments, unreadable CA, or transport failure before any HTTP response.
-    Probe {
-        /// Service origin such as `https://host:8080` (no path, query or fragment).
-        #[arg(long)]
-        url: String,
-        #[arg(long)]
-        ca_bundle: Option<PathBuf>,
-        #[arg(long)]
-        require_tls: bool,
-        #[arg(long)]
-        require_durable: bool,
-        #[arg(long, default_value_t = 5000)]
-        timeout_ms: u64,
-        #[arg(long)]
-        allow_plaintext: bool,
-    },
+    Probe(ProbeArgs),
+}
+#[derive(clap::Args)]
+struct ProbeArgs {
+    /// Service origin such as `https://host:8080` (no path, query or fragment).
+    #[arg(long)]
+    url: String,
+    #[arg(long)]
+    ca_bundle: Option<PathBuf>,
+    #[arg(long)]
+    require_tls: bool,
+    #[arg(long)]
+    require_durable: bool,
+    #[arg(long, default_value_t = 5000)]
+    timeout_ms: u64,
+    #[arg(long)]
+    allow_plaintext: bool,
 }
 #[derive(Clone, ValueEnum)]
 enum Format {
@@ -70,24 +72,7 @@ async fn main() {
             Ok(())
         }
         Command::Serve => serve().await,
-        Command::Probe {
-            url,
-            ca_bundle,
-            require_tls,
-            require_durable,
-            timeout_ms,
-            allow_plaintext,
-        } => {
-            probe(
-                &url,
-                ca_bundle,
-                require_tls,
-                require_durable,
-                timeout_ms,
-                allow_plaintext,
-            )
-            .await
-        }
+        Command::Probe(args) => probe(args).await,
         Command::BootstrapAdmin {
             uid,
             gid,
@@ -100,57 +85,49 @@ async fn main() {
         std::process::exit(code)
     }
 }
-async fn probe(
-    url: &str,
-    ca_bundle: Option<PathBuf>,
-    require_tls: bool,
-    require_durable: bool,
-    timeout_ms: u64,
-    allow_plaintext: bool,
-) -> Result<(), (i32, String)> {
-    use anchorfs_client::{endpoint::Endpoint, error::ClientError};
-    if timeout_ms == 0 {
-        return Err((2, "timeout must be positive".into()));
-    }
-    let endpoint = Endpoint::parse(url, allow_plaintext).map_err(|e| (2, e.to_string()))?;
-    let ca = ca_bundle
+async fn probe(args: ProbeArgs) -> Result<(), (i32, String)> {
+    use anchorfs_client::{endpoint::Endpoint, error::ClientError, readiness::Readiness};
+    let endpoint =
+        Endpoint::parse(&args.url, args.allow_plaintext).map_err(|e| (2, e.to_string()))?;
+    let ca = args
+        .ca_bundle
         .map(|path| std::fs::read(path).map_err(|_| (2, "CA bundle unreadable".to_string())))
         .transpose()?;
     let report = match anchorfs_client::readiness::readiness(
         &endpoint,
         ca.as_deref(),
-        std::time::Duration::from_millis(timeout_ms),
+        std::time::Duration::from_millis(args.timeout_ms),
     )
     .await
     {
         Ok(report) => report,
         // A 200 whose body is not a readiness document is an HTTP answer, not a transport failure.
         Err(ClientError::Decode(why)) => return Err((1, format!("not ready: {why}"))),
+        // Invalid input (zero timeout, bad CA bundle) and transport failures never saw a response.
         Err(error) => return Err((2, error.to_string())),
     };
-    let Some(ready) = report.ready else {
-        let code = report.error.map(|e| e.code);
-        println!(
-            "{}",
-            serde_json::json!({"status":report.status,"code":code})
-        );
-        return Err((
-            1,
-            format!(
-                "not ready: status {} code {}",
-                report.status,
-                code.as_deref().unwrap_or("none")
-            ),
-        ));
+    let ready = match report {
+        Readiness::Ready(ready) => ready,
+        Readiness::NotReady { status, error } => {
+            let code = error.map(|e| e.code);
+            println!("{}", serde_json::json!({"status":status,"code":code}));
+            return Err((
+                1,
+                format!(
+                    "not ready: status {status} code {}",
+                    code.as_deref().unwrap_or("none")
+                ),
+            ));
+        }
     };
     println!(
         "{}",
-        serde_json::json!({"status":report.status,"tls":ready.tls,"durability_profile":ready.durability_profile,"database":ready.database,"backend":ready.backend})
+        serde_json::json!({"status":200,"tls":ready.tls,"durability_profile":ready.durability_profile,"database":ready.database,"backend":ready.backend})
     );
-    if require_tls && !ready.tls {
+    if args.require_tls && !ready.tls {
         return Err((1, "requirement failed: tls".into()));
     }
-    if require_durable && ready.durability_profile != "durable" {
+    if args.require_durable && ready.durability_profile != "durable" {
         return Err((1, "requirement failed: durable profile".into()));
     }
     Ok(())

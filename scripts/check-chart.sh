@@ -95,13 +95,13 @@ run_with() {
   local secrets modes
   secrets="$(grep -c '^ *secret:$' "$wt" || true)"
   modes="$(grep -c 'defaultMode: 288$' "$wt" || true)"
-  if [ "$secrets" = "$modes" ] && [ "$secrets" -ge 3 ]; then ok "worker template: every secret volume has defaultMode 288 ($secrets)"; else fail "worker template: secret volumes=$secrets defaultMode 288=$modes"; fi
+  if [ "$secrets" = "$modes" ] && [ "$secrets" -ge 2 ]; then ok "worker template: every secret volume has defaultMode 288 ($secrets)"; else fail "worker template: secret volumes=$secrets defaultMode 288=$modes"; fi
   expect_count "$wt" '^ +emptyDir:$' 2 "worker template: two emptyDirs"
   expect_count "$wt" 'sizeLimit: 64Mi' 2 "worker template: sizeLimit on both emptyDirs"
   expect_count "$wt" 'medium: Memory' 1 "worker template: memory-backed workspace"
   expect_count "$wt" "registry.invalid/anchorfs/mount@$d2" 2 "worker template: mount digest bound in both containers"
   expect_count "$wt" 'automountServiceAccountToken: false' 1 "worker template: no API token"
-  for ph in __NAME__ __NODE__ __WORKSPACE__ __SESSION_ID__ __SESSION_EPOCH__ __CREDENTIAL_SECRET__ __WORKFLOW_SECRET__ __WORKFLOW_EPOCH_ARGS__; do
+  for ph in __NAME__ __NODE__ __WORKSPACE__ __SESSION_ID__ __SESSION_EPOCH__ __CREDENTIAL_SECRET__; do
     if grep -q "$ph" "$wt"; then ok "placeholder $ph present"; else fail "placeholder $ph missing"; fi
   done
   local block

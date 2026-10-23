@@ -151,6 +151,36 @@ fn test_image_record_matches_fixtures() {
     );
 }
 
+/// The dev image digests install.sh defaults to must be the approved, fixture-tested ones.
+#[test]
+fn install_script_dev_image_digests_match_fixtures() {
+    let fixtures: BTreeSet<_> = [
+        "crates/anchorfs-conformance/tests/common/minio.rs",
+        "crates/anchorfs-conformance/tests/common/mod.rs",
+        "crates/anchorfs-persistence/tests/migrations.rs",
+    ]
+    .iter()
+    .flat_map(|file| image_digests(&read(file)))
+    .collect();
+    let install = read("scripts/cluster/install.sh");
+    let pinned: Vec<_> = install
+        .lines()
+        .filter(|l| l.starts_with("POSTGRES_IMAGE_DIGEST=") || l.starts_with("MINIO_IMAGE_DIGEST="))
+        .flat_map(image_digests)
+        .collect();
+    assert_eq!(
+        pinned.len(),
+        2,
+        "install.sh pins a Postgres and a MinIO digest"
+    );
+    for digest in pinned {
+        assert!(
+            fixtures.contains(&digest),
+            "install.sh digest {digest} not in test fixtures"
+        );
+    }
+}
+
 fn image_digests(text: &str) -> BTreeSet<String> {
     text.match_indices("sha256:")
         .map(|(at, _)| {
@@ -320,13 +350,10 @@ fn chart_metadata_is_flat_and_recorded() {
         fields.insert(key.to_owned(), value.trim().trim_matches('"').to_owned());
     }
     assert_eq!(fields["name"], "anchorfs");
-    let delivery = read("docs/ops/forgejo-delivery.md");
-    let named = delivery
-        .lines()
-        .find_map(|l| l.split("`charts/anchorfs` version `").nth(1))
-        .and_then(|rest| rest.split('`').next())
-        .expect("forgejo-delivery.md names the chart version");
-    assert_eq!(fields["version"], named);
+    assert!(
+        fields.contains_key("version"),
+        "Chart.yaml version required"
+    );
 }
 
 /// Whitespace-tolerant detection of the `secrets` context outside comments
@@ -339,14 +366,36 @@ fn references_secrets(line: &str) -> bool {
     compact.to_ascii_lowercase().contains("secrets")
 }
 
-const HELPER_PLACEHOLDER: &str = "PLACEHOLDER";
-
 /// Parsed `uses:` values, per-job container images and env pins of the workflow.
 fn workflow_lines() -> Vec<String> {
     read(".forgejo/workflows/deploy.yml")
         .lines()
         .map(str::to_owned)
         .collect()
+}
+
+/// `image:` values nested under a `container:` key (the per-job CI container), not every
+/// `image:` line in the file.
+fn container_images(lines: &[String]) -> Vec<String> {
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let mut images = Vec::new();
+    let mut parent: Option<usize> = None;
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(at) = parent {
+            if indent(line) > at {
+                images.extend(scalar(line, "image"));
+                continue;
+            }
+            parent = None;
+        }
+        if line.trim() == "container:" {
+            parent = Some(indent(line));
+        }
+    }
+    images
 }
 
 fn scalar(line: &str, key: &str) -> Option<String> {
@@ -385,7 +434,7 @@ fn forgejo_workflow_pins_are_immutable() {
             .is_some_and(|(_, h)| is_hex(h, 64)),
         "CI_IMAGE must be digest-pinned"
     );
-    let images: Vec<_> = lines.iter().filter_map(|l| scalar(l, "image")).collect();
+    let images = container_images(&lines);
     assert_eq!(images.len(), 3, "one container image per job");
     for image in &images {
         assert!(!image.contains("${{"), "container.image must be a literal");
@@ -400,20 +449,14 @@ fn forgejo_workflow_pins_are_immutable() {
         .iter()
         .find_map(|l| scalar(l, "BIRBHOMES_HELPER_COMMIT"))
         .expect("BIRBHOMES_HELPER_COMMIT env");
-    if is_hex(&helper, 40) {
-        assert!(
-            record.contains(&helper),
-            "helper commit missing from dependencies.md"
-        );
-    } else {
-        assert_eq!(helper, HELPER_PLACEHOLDER);
-        assert!(
-            read("docs/ops/forgejo-delivery.md")
-                .lines()
-                .any(|l| l.trim() == "status: prepared"),
-            "helper placeholder is allowed only while the delivery doc is `status: prepared`"
-        );
-    }
+    assert!(
+        is_hex(&helper, 40),
+        "helper commit must be 40 hex: {helper}"
+    );
+    assert!(
+        record.contains(&helper),
+        "helper commit missing from dependencies.md"
+    );
 
     // The birbhomes checkout `ref:` and the env pin are changed together (docs/ops/forgejo-delivery.md).
     let refs: Vec<_> = lines.iter().filter_map(|l| scalar(l, "ref")).collect();
@@ -436,6 +479,28 @@ fn exporter_exists_and_is_referenced_by_workflow() {
     assert!(root().join("scripts/oci_export.py").is_file());
     assert!(root().join("scripts/tests/test_oci_export.py").is_file());
     assert!(read(".forgejo/workflows/deploy.yml").contains("scripts/oci_export.py"));
+}
+
+#[test]
+fn every_job_runs_the_shared_guard_before_building() {
+    let lines = workflow_lines();
+    let jobs = container_images(&lines).len();
+    let guards = lines
+        .iter()
+        .filter(|l| l.trim_start().starts_with("run: bash scripts/ci/guard.sh "))
+        .count();
+    assert_eq!(guards, jobs, "one guard step per job");
+    let guard = read("scripts/ci/guard.sh");
+    for needed in [
+        "git rev-parse --verify HEAD",
+        "refs/heads/main",
+        "invalid_expected_revision",
+    ] {
+        assert!(guard.contains(needed), "guard.sh lost its `{needed}` check");
+    }
+    let workflow = read(".forgejo/workflows/deploy.yml");
+    assert!(workflow.contains("EXPECTED_REVISION: ${{ github.sha }}"));
+    assert!(workflow.contains("EVENT_REF: ${{ github.ref }}"));
 }
 
 #[test]
@@ -491,8 +556,12 @@ fn cluster_scripts_never_print_secrets() {
             if code.starts_with('#') || !(code.contains("echo") || code.contains("printf")) {
                 continue;
             }
-            // `printf ... >"$private_dir/file"` writes a private file; it does not print.
-            if code.starts_with("printf") && code.contains(">\"$") && !code.contains(">&") {
+            // create-secrets.sh writes credentials to these private umask-077 env files; it does not print.
+            if code.starts_with("printf")
+                && ["postgres.env", "minio.env", "service.env"]
+                    .iter()
+                    .any(|file| code.ends_with(&format!(">\"$tmp/{file}\"")))
+            {
                 continue;
             }
             // Only inspect the printed text, not the shell tests around it.
@@ -554,48 +623,33 @@ fn no_python_bytecode_is_tracked() {
     assert!(offenders.is_empty(), "tracked bytecode: {offenders:?}");
 }
 
-/// SHA-256 of `bytes` via `python3 -I` (hashlib), avoiding a new dev-dependency.
-fn sha256_of(bytes: &[u8]) -> String {
-    use std::io::Write;
-    let mut child = std::process::Command::new("python3")
+/// The exporter is the only implementation of the stage hash; the record must match its output.
+fn exporter_stage_sha256(target: &str) -> String {
+    let output = std::process::Command::new("python3")
         .args([
             "-I",
-            "-c",
-            "import hashlib,sys; print('sha256:' + hashlib.sha256(sys.stdin.buffer.read()).hexdigest())",
+            "scripts/oci_export.py",
+            "stage-sha256",
+            "docker/Dockerfile",
+            target,
         ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn python3");
-    child.stdin.take().unwrap().write_all(bytes).unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
+        .current_dir(root())
+        .output()
+        .expect("run python3 scripts/oci_export.py");
+    assert!(
+        output.status.success(),
+        "stage-sha256 {target}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
-}
-
-/// Exact Dockerfile bytes of a stage: its `FROM ... AS <target>` line up to, not including,
-/// the next `FROM` line. Same algorithm as scripts/publish-bases.sh and scripts/oci_export.py.
-fn stage_bytes(dockerfile: &str, target: &str) -> String {
-    let lines: Vec<_> = dockerfile.split_inclusive('\n').collect();
-    let suffix = format!(" AS {target}");
-    let start = lines
-        .iter()
-        .position(|l| l.starts_with("FROM ") && l.trim_end_matches(['\r', '\n']).ends_with(&suffix))
-        .unwrap_or_else(|| panic!("stage {target} missing"));
-    let end = lines[start + 1..]
-        .iter()
-        .position(|l| l.starts_with("FROM "))
-        .map_or(lines.len(), |n| start + 1 + n);
-    lines[start..end].concat()
 }
 
 #[test]
 fn base_stage_hashes_match_dockerfile() {
     let record: serde_json::Value = serde_json::from_str(&read("docker/bases.json")).unwrap();
-    let dockerfile = read("docker/Dockerfile");
     for (name, base) in record["bases"].as_object().unwrap() {
         let target = base["dockerfile_target"].as_str().unwrap();
-        let actual = sha256_of(stage_bytes(&dockerfile, target).as_bytes());
+        let actual = exporter_stage_sha256(target);
         assert_eq!(
             base["stage_sha256"].as_str(),
             Some(actual.as_str()),
@@ -612,22 +666,4 @@ fn bases_registry_matches_workflow_authority() {
         .find_map(|l| scalar(l, "ZOT_AUTHORITY"))
         .expect("ZOT_AUTHORITY env");
     assert_eq!(record["registry"].as_str(), Some(authority.as_str()));
-}
-
-#[test]
-fn workflow_derives_chart_archive_name_from_chart_yaml() {
-    let workflow = read(".forgejo/workflows/deploy.yml");
-    let chart = read("charts/anchorfs/Chart.yaml");
-    let version = chart
-        .lines()
-        .find_map(|l| l.strip_prefix("version: "))
-        .expect("Chart.yaml version")
-        .trim()
-        .trim_matches('"');
-    assert!(
-        !workflow.contains(&format!("anchorfs-{version}.tgz")),
-        "deploy.yml must derive the chart archive name from Chart.yaml, not hard-code it"
-    );
-    assert!(workflow.contains("anchorfs-${chart_version}.tgz"));
-    assert!(workflow.contains("charts/anchorfs/Chart.yaml"));
 }

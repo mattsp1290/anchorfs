@@ -50,21 +50,23 @@ record the result here before treating either key as effective.
 
 ## Jobs
 
-All three jobs run in the digest-pinned CI container on the exact runner label
-and start by verifying `git rev-parse HEAD == github.sha` (40 lowercase hex, same
-guard in all three jobs) and
-`github.ref == refs/heads/main`.
+All three jobs run in the digest-pinned CI container on the exact runner label.
+Right after checkout each runs `scripts/ci/guard.sh <tools...>` (one script, so
+the three jobs cannot drift): the tools exist, the host is linux/aarch64,
+Python is 3.11 or newer, `git rev-parse HEAD == github.sha` (40 lowercase hex)
+and `github.ref == refs/heads/main`. Nothing is built before it passes.
 
 1. `checks` — `cargo fmt --check`, `clippy -D warnings`, `cargo build --locked`,
    container-free tests (`anchorfs-core`, `anchorfs-backend`, `anchorfs-client`,
    service unit + OpenAPI snapshot, conformance `provenance` and `chunking_props`,
-   mount `cli`), exporter unit tests, chart lint under Helm 4.3.0 and 3.13.0,
-   `scripts/check-chart.sh`, `git diff --exit-code Cargo.lock`. `cargo deny`
+   mount `cli`), exporter unit tests, `scripts/check-chart.sh` (lint and render
+   checks under Helm 4.3.0 and 3.13.0), `git diff --exit-code Cargo.lock`. `cargo deny`
    stays in GitHub CI (not in the CI image).
 2. `build-export` — `scripts/build-release-binaries.sh` (cargo-zigbuild, both
    GNU targets at glibc 2.36), `crane pull --insecure --format=oci` of the
-   digest-pinned bases from `docker/bases.json` with an empty credential
-   store, `helm-compat package`, `scripts/oci_export.py` → three OCI layouts,
+   digest-pinned bases listed by `oci_export.py bases pull-refs` with an empty
+   credential store, `helm-compat package --destination dist/chart` (the single
+   archive there is passed to the exporter), `scripts/oci_export.py` → three OCI layouts,
    `build.json` (v1 receipt), `SHA256SUMS`, `export-evidence.json`. No registry
    write, no daemon. Uploads `oci.tar` + `oci.tar.sha256`.
 3. `publish` — downloads and checksum-verifies the layouts, checks out the
@@ -120,7 +122,7 @@ failed readback stops any install and reopens the birbhomes request.
 `BIRBHOMES_HELPER_COMMIT` (workflow `env` and the `ref:` of the birbhomes
 checkout step) must be a 40-character commit present on the birbhomes Forgejo
 mirror and recorded in `docs/provenance/dependencies.md`. Change both places
-together; the provenance test checks the format and that the two are equal.
+together; the provenance test requires 40 hex characters and that the two are equal.
 
 ## What a failed run leaves behind
 
@@ -148,6 +150,6 @@ that) and note the substitution in the Stage 3b review record.
 - Actions: `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2),
   `code.forgejo.org/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5` (v3.2.1),
   `code.forgejo.org/actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59` (v3.1.0, same artifact-API generation as the upload action proven on this runner).
-- Chart: `charts/anchorfs` version `0.1.0`. The workflow derives the archive
-  name `anchorfs-<version>.tgz` from `Chart.yaml`.
+- Chart: `charts/anchorfs` (the version lives only in `Chart.yaml`). The workflow
+  packages into `dist/chart/` and passes the one archive found there to the exporter.
 - Hub request: `birbhomes-r-80he` (platform side), `anchorfs-r-mx8o` (application side).

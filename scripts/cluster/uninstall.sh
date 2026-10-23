@@ -8,11 +8,8 @@
 # other namespaces.
 set -euo pipefail
 
-: "${KUBECONFIG:?set KUBECONFIG, e.g. /etc/rancher/k3s/k3s.yaml}"
-KUBECTL="${KUBECTL:-k3s kubectl}"
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 HELM="${HELM:-helm}"
-NS=anchorfs
-k() { $KUBECTL "$@"; }
 
 delete_data=0; delete_pki=0
 for arg in "$@"; do

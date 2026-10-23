@@ -5,11 +5,8 @@
 # for gate G3. Requires KUBECONFIG (e.g. /etc/rancher/k3s/k3s.yaml).
 set -euo pipefail
 
-: "${KUBECONFIG:?set KUBECONFIG, e.g. /etc/rancher/k3s/k3s.yaml}"
-KUBECTL="${KUBECTL:-k3s kubectl}"
-NS=anchorfs
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-k() { $KUBECTL "$@"; }
 
 echo "client/server versions:"; k version | sed 's/^/  /'
 

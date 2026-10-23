@@ -7,11 +7,13 @@
 #
 # Usage: [CRANE_IMAGE=<image>] scripts/publish-bases.sh [--replace]
 # Needs: git, docker buildx (multi-platform), crane, python3 (stdlib only), tar.
+# Orchestration only: stage hashing, readback verification and every bases.json
+# read/write are subcommands of scripts/oci_export.py (the single owner).
 # Refuses: dirty tree, non-LAN registry host, missing tools, already-recorded
 # bases without --replace, a CRANE_IMAGE that is not pinned (see below). Prints
 # digests only. Also records `stage_sha256` per base: the SHA-256 of the exact
 # Dockerfile bytes of the base stage (its `FROM ... AS <target>` line up to, not
-# including, the next `FROM` line). A provenance test recomputes it, so editing a
+# including, the next `FROM` line; `oci_export.py stage-sha256`). A provenance test recomputes it, so editing a
 # base stage without re-running this script fails the test.
 #
 # CRANE_IMAGE: when set, every crane call runs inside `docker run --rm
@@ -29,6 +31,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 die() { echo "publish-bases: $*" >&2; exit 1; }
+export_py() { python3 -I scripts/oci_export.py "$@"; }
 
 replace=0
 case "${1:-}" in
@@ -51,7 +54,7 @@ docker buildx version >/dev/null 2>&1 || die "docker buildx is required"
 [ -z "$(git status --porcelain --untracked-files=all)" ] || die "working tree is not clean; commit first"
 source_sha=$(git rev-parse HEAD)
 
-registry=$(python3 -I -c 'import json,sys; print(json.load(open("docker/bases.json"))["registry"])')
+registry=$(export_py bases registry docker/bases.json) || die "cannot read docker/bases.json"
 host=${registry%%:*}
 # Only RFC 1918 IPv4 literals are accepted as the registry host.
 if ! [[ $host =~ ^(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})$ ]]; then
@@ -59,18 +62,13 @@ if ! [[ $host =~ ^(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.
 fi
 [[ $registry =~ ^[0-9.]+:[0-9]{2,5}$ ]] || die "registry '$registry' must be host:port"
 
-if [ "$replace" -eq 0 ]; then
-  python3 -I - <<'PY' || die "docker/bases.json already records a base digest; pass --replace to publish again"
-import json, sys
-bases = json.load(open("docker/bases.json"))["bases"]
-sys.exit(1 if any(b["index_digest"] is not None for b in bases.values()) else 0)
-PY
+bases_list=$(export_py bases list docker/bases.json) || die "cannot read docker/bases.json"
+if [ "$replace" -eq 0 ] && grep -qvE ' none$' <<<"$bases_list"; then
+  die "docker/bases.json already records a base digest; pass --replace to publish again"
 fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-results="$work/results.json"
-echo '{}' > "$results"
 
 # crane on the host, or inside CRANE_IMAGE (read-only commands: no mounts).
 run_crane() {
@@ -95,25 +93,11 @@ push_layout() {
 run_crane catalog --insecure "$registry" >/dev/null \
   || die "cannot reach registry $registry with crane${CRANE_IMAGE:+ (inside $CRANE_IMAGE)}; on macOS a shell without Local Network permission fails with 'no route to host' while curl works: grant the permission or set CRANE_IMAGE to the pinned CI image"
 
+recorded=()
 for base in service mount; do
-  read -r repository target old < <(python3 -I - "$base" <<'PY'
-import json, sys
-b = json.load(open("docker/bases.json"))["bases"][sys.argv[1]]
-print(b["repository"], b["dockerfile_target"], b["index_digest"] or "none")
-PY
-)
+  read -r _ repository target _ < <(grep "^$base " <<<"$bases_list")
   ref="$registry/$repository"
-  stage_sha256=$(python3 -I - "$target" <<'PY'
-import hashlib, sys
-lines = open("docker/Dockerfile", "rb").read().splitlines(keepends=True)
-start = next((i for i, l in enumerate(lines)
-              if l.startswith(b"FROM ") and l.rstrip(b"\r\n").endswith(b" AS " + sys.argv[1].encode())), None)
-if start is None:
-    sys.exit("Dockerfile stage not found")
-end = next((j for j in range(start + 1, len(lines)) if lines[j].startswith(b"FROM ")), len(lines))
-print("sha256:" + hashlib.sha256(b"".join(lines[start:end])).hexdigest())
-PY
-)
+  stage_sha256=$(export_py stage-sha256 docker/Dockerfile "$target") || die "cannot hash Dockerfile stage $target"
   echo "building $target for linux/amd64,linux/arm64" >&2
   docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 --target "$target" \
     --provenance=false --sbom=false \
@@ -122,70 +106,29 @@ PY
   tar -xf "$work/$base.tar" -C "$work/$base"
 
   # The layout's index.json has exactly one entry: the multi-platform index.
-  expected=$(python3 -I - "$work/$base/index.json" <<'PY'
-import json, sys
-m = json.load(open(sys.argv[1]))["manifests"]
-if len(m) != 1:
-    sys.exit("layout index.json must hold exactly one entry")
-print(m[0]["digest"])
-PY
-)
+  expected=$(export_py layout-digest "$work/$base/index.json") || die "$base: layout index.json must hold exactly one entry"
   # Without --index, crane pushes that single entry (the index) directly; --index
   # would wrap it in a second index.
   push_layout "$base" "$ref" >/dev/null
   run_crane manifest --insecure "$ref@$expected" > "$work/$base.manifest.json"
-  # Also fetch every platform manifest by digest and verify its SHA-256, so a
-  # partially pushed index cannot be recorded.
-  while read -r pdigest; do
+  # Verify the index SHA-256 and platform set, then fetch every platform manifest
+  # by digest and verify its SHA-256, so a partially pushed index cannot be recorded.
+  platform_digests=$(export_py verify-readback index "$expected" "$work/$base.manifest.json") \
+    || die "$base: readback of the pushed index failed verification"
+  while read -r _ pdigest; do
     run_crane manifest --insecure "$ref@$pdigest" > "$work/$base.platform.json"
-    python3 -I - "$pdigest" "$work/$base.platform.json" <<'PY'
-import hashlib, re, sys
-digest, path = sys.argv[1:]
-if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-    sys.exit("malformed platform digest in index")
-if "sha256:" + hashlib.sha256(open(path, "rb").read()).hexdigest() != digest:
-    sys.exit("platform manifest readback digest mismatch")
-PY
-  done < <(python3 -I -c 'import json,sys; [print(m["digest"]) for m in json.load(open(sys.argv[1]))["manifests"]]' "$work/$base.manifest.json")
-  python3 -I - "$base" "$expected" "$work/$base.manifest.json" "$results" "$old" "$stage_sha256" <<'PY'
-import hashlib, json, sys
-base, expected, path, results, old, stage_sha256 = sys.argv[1:]
-raw = open(path, "rb").read()
-if "sha256:" + hashlib.sha256(raw).hexdigest() != expected:
-    sys.exit("readback digest mismatch")
-index = json.loads(raw)
-platforms = {}
-for m in index["manifests"]:
-    p = m["platform"]
-    platforms[p["os"] + "/" + p["architecture"]] = m["digest"]
-if sorted(platforms) != ["linux/amd64", "linux/arm64"] or len(index["manifests"]) != 2:
-    sys.exit("readback index must list exactly linux/amd64 and linux/arm64")
-data = json.load(open(results))
-data[base] = {"index_digest": expected, "platforms": platforms, "stage_sha256": stage_sha256}
-json.dump(data, open(results, "w"))
-print(f"{base}: old {old}")
-print(f"{base}: new {expected}")
-for k in sorted(platforms):
-    print(f"{base}: {k} {platforms[k]}")
-PY
+    export_py verify-readback platform "$pdigest" "$work/$base.platform.json" \
+      || die "$base: platform manifest $pdigest failed readback verification"
+  done <<<"$platform_digests"
+  recorded+=("$base $expected $stage_sha256")
 done
 
-python3 -I - "$results" "$source_sha" <<'PY'
-import datetime, json, sys
-results = json.load(open(sys.argv[1]))
-doc = json.load(open("docker/bases.json"))
-now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-for name, r in results.items():
-    b = doc["bases"][name]
-    b["index_digest"] = r["index_digest"]
-    b["platforms"] = r["platforms"]
-    b["published_at"] = now
-    b["source_sha"] = sys.argv[2]
-    b["stage_sha256"] = r["stage_sha256"]
-with open("docker/bases.json", "w") as f:
-    json.dump(doc, f, indent=2)
-    f.write("\n")
-PY
+# Both bases are pushed and verified; only now is docker/bases.json rewritten.
+for entry in "${recorded[@]}"; do
+  read -r base expected stage_sha256 <<<"$entry"
+  export_py bases record docker/bases.json "$base" "$expected" "$work/$base.manifest.json" "$stage_sha256" "$source_sha"
+done
+
 echo "docker/bases.json updated; review the diff and commit it promptly." >&2
 if [ "$replace" -eq 1 ]; then
   echo "note: the 'latest' tag moved to the new indexes; the previous digests stay served only while the registry retains untagged manifests." >&2

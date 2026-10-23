@@ -9,15 +9,26 @@ Never contacts a registry or a container daemon.
 
 Run with: python3 -I scripts/oci_export.py --help
 
-bases.json may carry a per-base `stage_sha256` (hash of the Dockerfile base stage at
-publication). It is validated when present; with the optional `--dockerfile` the
-exporter also recomputes it from that Dockerfile and refuses a mismatch (base_mismatch).
+Every base in bases.json records `stage_sha256` (hash of its Dockerfile base stage at
+publication). The export always recomputes it from --dockerfile (default: docker/Dockerfile
+of this repository) and refuses a mismatch (base_mismatch).
 
-Errors print one stable code on stderr (invalid_input, base_mismatch,
+This module is also the single owner of the delivery primitives the shell scripts, the
+workflow and the provenance test need; each is a subcommand (see --help):
+  stage-sha256 <dockerfile> <target>
+  check-elf <path> <amd64|arm64>
+  layout-digest <index.json>
+  verify-readback index <expected-digest> <index.json>
+  verify-readback platform <digest> <manifest.json>
+  bases registry|list|pull-refs <bases.json>
+  bases record <bases.json> <role> <index-digest> <index.json> <stage-sha256> <source-sha>
+
+Errors print one stable code on stderr (invalid_input, base_mismatch, readback_mismatch,
 elf_architecture, chart_invalid, output_exists) and exit 2. File contents are
 never printed. The receipt is written last, so a failed export has no receipt.
 """
 import argparse
+import datetime
 import hashlib
 import io
 import json
@@ -49,6 +60,7 @@ BINARIES = {"service": "anchorfs-service", "mount": "anchorfs-mount"}
 CHART_SCALARS = ("apiVersion", "name", "version", "appVersion", "description", "type", "kubeVersion")
 MAX_JSON = 8 * 1024 * 1024
 MAX_CHART_YAML = 64 * 1024
+DEFAULT_DOCKERFILE = Path(__file__).resolve().parent.parent / "docker" / "Dockerfile"
 
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 RUN_ID_RE = re.compile(r"[1-9][0-9]*")
@@ -157,9 +169,8 @@ def load_bases(path):
     require(isinstance(bases, dict) and set(bases) == set(BINARIES), "invalid_input")
     for item in bases.values():
         check_keys(item, ["repository", "dockerfile_target", "index_digest", "platforms",
-                          "published_at", "source_sha"], optional=["stage_sha256"])
-        if "stage_sha256" in item:
-            match(item["stage_sha256"], DIGEST_RE)
+                          "published_at", "source_sha", "stage_sha256"])
+        match(item["stage_sha256"], DIGEST_RE)
         require(isinstance(item["platforms"], dict)
                 and set(item["platforms"]) == {"linux/amd64", "linux/arm64"}, "invalid_input")
         # The exporter refuses a base that has not been published yet.
@@ -172,7 +183,7 @@ def load_bases(path):
 def dockerfile_stage_sha256(dockerfile, target):
     """SHA-256 of the exact bytes from `FROM ... AS <target>` up to the next `FROM` line.
 
-    Same algorithm as scripts/publish-bases.sh and the provenance test."""
+    This is the one definition: publish-bases.sh, the workflow and the provenance test call it."""
     lines = read_regular(dockerfile, MAX_JSON).splitlines(keepends=True)
     suffix = b" AS " + target.encode("utf-8")
     start = next((i for i, line in enumerate(lines)
@@ -183,9 +194,8 @@ def dockerfile_stage_sha256(dockerfile, target):
 
 
 def verify_stage_hashes(bases, dockerfile):
-    """With --dockerfile, refuse a base whose recorded stage hash differs from the Dockerfile."""
+    """Refuse a base whose recorded stage hash differs from the Dockerfile."""
     for item in bases["bases"].values():
-        require("stage_sha256" in item, "base_mismatch")
         require(dockerfile_stage_sha256(dockerfile, item["dockerfile_target"]) == item["stage_sha256"],
                 "base_mismatch")
 
@@ -211,65 +221,60 @@ class BaseLayout:
         return raw
 
     def verify_blob_file(self, desc):
-        path = self.blob_path(desc["digest"])
+        path = self.blob_path(desc.get("digest"))
         require(path.is_file() and not path.is_symlink(), "base_mismatch")
-        require(type(desc["size"]) is int and path.stat().st_size == desc["size"], "base_mismatch")
+        require(type(desc.get("size")) is int and path.stat().st_size == desc["size"], "base_mismatch")
         require("sha256:" + file_sha256(path) == desc["digest"], "base_mismatch")
         return path
 
     def platform(self, index_digest, platform_digests):
         """Return {arch: (manifest_digest, config_obj, layer_descriptors)}.
 
-        Structurally malformed (but valid JSON) layouts are refused as base_mismatch."""
-        try:
-            return self._platform(index_digest, platform_digests)
-        except (KeyError, TypeError, AttributeError, ValueError):
-            raise ExportError("base_mismatch") from None
-
-    def _platform(self, index_digest, platform_digests):
-        require((self.root / "oci-layout").is_file(), "base_mismatch")
-        try:
-            layout = decode_json(read_regular(self.root / "oci-layout"), "base_mismatch")
-            top = decode_json(read_regular(self.root / "index.json", MAX_JSON), "base_mismatch")
-        except ExportError:
-            raise ExportError("base_mismatch") from None
-        require(layout.get("imageLayoutVersion") == "1.0.0", "base_mismatch")
+        Every shape is checked explicitly; a malformed layout is refused as base_mismatch."""
+        bad = "base_mismatch"
+        require((self.root / "oci-layout").is_file(), bad)
+        layout = decode_json(read_regular(self.root / "oci-layout", MAX_JSON, bad), bad)
+        top = decode_json(read_regular(self.root / "index.json", MAX_JSON, bad), bad)
+        require(isinstance(layout, dict) and layout.get("imageLayoutVersion") == "1.0.0", bad)
+        require(isinstance(top, dict) and isinstance(top.get("manifests", []), list), bad)
         entries = [m for m in top.get("manifests", []) if isinstance(m, dict) and m.get("digest") == index_digest]
-        require(len(entries) == 1, "base_mismatch")
-        require(entries[0].get("mediaType") == OCI_INDEX, "base_mismatch")
-        index = decode_json(self.read_blob(index_digest), "base_mismatch")
-        require(index.get("schemaVersion") == 2 and index.get("mediaType") == OCI_INDEX, "base_mismatch")
+        require(len(entries) == 1, bad)
+        require(entries[0].get("mediaType") == OCI_INDEX, bad)
+        index = decode_json(self.read_blob(index_digest), bad)
+        require(isinstance(index, dict) and index.get("schemaVersion") == 2
+                and index.get("mediaType") == OCI_INDEX, bad)
         children = index.get("manifests")
-        require(isinstance(children, list), "base_mismatch")
+        require(isinstance(children, list), bad)
         result = {}
         for arch in PLATFORMS:
             wanted = platform_digests["linux/" + arch]
             found = [c for c in children if isinstance(c, dict) and c.get("digest") == wanted]
-            require(len(found) == 1, "base_mismatch")
+            require(len(found) == 1, bad)
             child = found[0]
             platform = child.get("platform")
             require(isinstance(platform, dict) and platform.get("os") == "linux"
-                    and platform.get("architecture") == arch, "base_mismatch")
-            require(child.get("mediaType") == OCI_MANIFEST, "base_mismatch")
-            manifest = decode_json(self.read_blob(wanted), "base_mismatch")
-            require(manifest.get("schemaVersion") == 2 and manifest.get("mediaType") == OCI_MANIFEST,
-                    "base_mismatch")
+                    and platform.get("architecture") == arch, bad)
+            require(child.get("mediaType") == OCI_MANIFEST, bad)
+            manifest = decode_json(self.read_blob(wanted), bad)
+            require(isinstance(manifest, dict) and manifest.get("schemaVersion") == 2
+                    and manifest.get("mediaType") == OCI_MANIFEST, bad)
             config_desc = manifest.get("config")
-            require(isinstance(config_desc, dict) and config_desc.get("mediaType") == OCI_CONFIG, "base_mismatch")
-            config_raw = self.read_blob(config_desc["digest"])
-            require(len(config_raw) == config_desc.get("size"), "base_mismatch")
-            config = decode_json(config_raw, "base_mismatch")
-            require(config.get("os") == "linux" and config.get("architecture") == arch, "base_mismatch")
+            require(isinstance(config_desc, dict) and config_desc.get("mediaType") == OCI_CONFIG, bad)
+            config_raw = self.read_blob(config_desc.get("digest"))
+            require(len(config_raw) == config_desc.get("size"), bad)
+            config = decode_json(config_raw, bad)
+            require(isinstance(config, dict) and config.get("os") == "linux"
+                    and config.get("architecture") == arch, bad)
             layers = manifest.get("layers")
-            require(isinstance(layers, list) and 0 < len(layers) <= 127, "base_mismatch")
+            require(isinstance(layers, list) and 0 < len(layers) <= 127, bad)
             clean = []
             for layer in layers:
-                require(isinstance(layer, dict) and layer.get("mediaType") in OCI_BASE_LAYERS, "base_mismatch")
+                require(isinstance(layer, dict) and layer.get("mediaType") in OCI_BASE_LAYERS, bad)
                 self.verify_blob_file(layer)
                 clean.append({"mediaType": layer["mediaType"], "digest": layer["digest"], "size": layer["size"]})
             rootfs = config.get("rootfs")
             require(isinstance(rootfs, dict) and isinstance(rootfs.get("diff_ids"), list)
-                    and len(rootfs["diff_ids"]) == len(clean), "base_mismatch")
+                    and len(rootfs["diff_ids"]) == len(clean), bad)
             result[arch] = (wanted, config, clean)
         return result
 
@@ -518,8 +523,7 @@ def export(args):
         check_no_symlinks(path)
 
     bases = load_bases(args.bases)
-    if args.dockerfile is not None:
-        verify_stage_hashes(bases, args.dockerfile)
+    verify_stage_hashes(bases, args.dockerfile)
 
     binaries = {}
     for role, name in BINARIES.items():
@@ -580,18 +584,143 @@ def export(args):
     return receipt
 
 
+# ---------------------------------------------------------------- subcommands
+
+def _arity(args, count):
+    require(len(args) == count, "invalid_input")
+    return args
+
+
+def cmd_stage_sha256(args):
+    dockerfile, target = _arity(args, 2)
+    print(dockerfile_stage_sha256(dockerfile, target))
+
+
+def cmd_check_elf(args):
+    path, arch = _arity(args, 2)
+    require(arch in ELF_MACHINE, "invalid_input")
+    check_elf(path, arch)
+
+
+def cmd_layout_digest(args):
+    """The digest of the single entry of a buildx OCI layout's index.json."""
+    (path,) = _arity(args, 1)
+    top = decode_json(read_regular(path, MAX_JSON))
+    require(isinstance(top, dict) and isinstance(top.get("manifests"), list)
+            and len(top["manifests"]) == 1 and isinstance(top["manifests"][0], dict), "readback_mismatch")
+    print(match(top["manifests"][0].get("digest"), DIGEST_RE, "readback_mismatch"))
+
+
+def readback_index(expected, path):
+    """Verify an index read back from the registry; return {"linux/<arch>": manifest digest}."""
+    match(expected, DIGEST_RE)
+    raw = read_regular(path, MAX_JSON, "readback_mismatch")
+    require("sha256:" + sha256_hex(raw) == expected, "readback_mismatch")
+    index = decode_json(raw, "readback_mismatch")
+    children = index.get("manifests") if isinstance(index, dict) else None
+    require(isinstance(children, list) and all(isinstance(c, dict) for c in children), "readback_mismatch")
+    platforms = {}
+    for child in children:
+        platform = child.get("platform")
+        require(isinstance(platform, dict), "readback_mismatch")
+        key = f"{platform.get('os')}/{platform.get('architecture')}"
+        require(key not in platforms, "readback_mismatch")
+        platforms[key] = match(child.get("digest"), DIGEST_RE, "readback_mismatch")
+    require(sorted(platforms) == ["linux/amd64", "linux/arm64"] and len(children) == 2, "readback_mismatch")
+    return dict(sorted(platforms.items()))
+
+
+def cmd_verify_readback(args):
+    require(args and args[0] in ("index", "platform"), "invalid_input")
+    kind, digest, path = _arity(args, 3)
+    if kind == "index":
+        for key, value in readback_index(digest, path).items():
+            print(key, value)
+    else:
+        match(digest, DIGEST_RE)
+        raw = read_regular(path, MAX_JSON, "readback_mismatch")
+        require("sha256:" + sha256_hex(raw) == digest, "readback_mismatch")
+
+
+def read_bases_lenient(path):
+    """bases.json as the publisher sees it: a base may still be unpublished (null digest)."""
+    doc = decode_json(read_regular(path, MAX_JSON))
+    check_keys(doc, ["schema_version", "registry", "bases"])
+    require(isinstance(doc["registry"], str) and isinstance(doc["bases"], dict)
+            and set(doc["bases"]) == set(BINARIES), "invalid_input")
+    for item in doc["bases"].values():
+        check_keys(item, ["repository", "dockerfile_target", "index_digest", "platforms",
+                          "published_at", "source_sha", "stage_sha256"])
+        require(isinstance(item["repository"], str) and isinstance(item["dockerfile_target"], str),
+                "invalid_input")
+        if item["index_digest"] is not None:
+            match(item["index_digest"], DIGEST_RE)
+    return doc
+
+
+def write_bases(path, doc):
+    tmp = Path(str(path) + ".tmp")
+    tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def cmd_bases(args):
+    require(args and args[0] in ("registry", "list", "pull-refs", "record"), "invalid_input")
+    kind, rest = args[0], args[1:]
+    if kind == "registry":
+        (path,) = _arity(rest, 1)
+        print(read_bases_lenient(path)["registry"])
+    elif kind == "list":  # "<role> <repository> <dockerfile_target> <index digest | none>"
+        (path,) = _arity(rest, 1)
+        for role, item in read_bases_lenient(path)["bases"].items():
+            print(role, item["repository"], item["dockerfile_target"], item["index_digest"] or "none")
+    elif kind == "pull-refs":  # "<role> <registry>/<repository>@<index digest>", fully published only
+        (path,) = _arity(rest, 1)
+        doc = load_bases(path)
+        for role, item in doc["bases"].items():
+            print(role, f"{doc['registry']}/{item['repository']}@{item['index_digest']}")
+    else:
+        path, role, index_digest, index_path, stage, source_sha = _arity(rest, 6)
+        doc = read_bases_lenient(path)
+        require(role in doc["bases"], "invalid_input")
+        match(stage, DIGEST_RE)
+        match(source_sha, SHA_RE)
+        platforms = readback_index(index_digest, index_path)
+        item = doc["bases"][role]
+        print(f"{role}: old {item['index_digest'] or 'none'}")
+        print(f"{role}: new {index_digest}")
+        for key, value in platforms.items():
+            print(f"{role}: {key} {value}")
+        item.update(index_digest=index_digest, platforms=platforms, source_sha=source_sha,
+                    published_at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    stage_sha256=stage)
+        write_bases(Path(path), doc)
+
+
+COMMANDS = {
+    "stage-sha256": cmd_stage_sha256,
+    "check-elf": cmd_check_elf,
+    "layout-digest": cmd_layout_digest,
+    "verify-readback": cmd_verify_readback,
+    "bases": cmd_bases,
+}
+
+
 class _Parser(argparse.ArgumentParser):
     def error(self, message):
         raise ExportError("invalid_input")
 
 
 def parse_args(argv):
-    p = _Parser(description="Export AnchorFS OCI layouts and a v1 build receipt.")
+    p = _Parser(description="Export AnchorFS OCI layouts and a v1 build receipt.",
+                epilog="Delivery primitives (subcommands, first argument): " + ", ".join(sorted(COMMANDS))
+                + ". See the module docstring for their usage.")
     for flag in ("--source-sha", "--run-id", "--builder-image", "--toolchain-digest", "--bases",
                  "--base-layouts", "--binaries", "--chart-package", "--chart-dir", "--output"):
         p.add_argument(flag, required=True)
-    p.add_argument("--dockerfile", default=None,
-                   help="optional: verify each base's recorded stage_sha256 against this Dockerfile")
+    p.add_argument("--dockerfile", default=str(DEFAULT_DOCKERFILE),
+                   help="Dockerfile each base's recorded stage_sha256 is verified against "
+                        "(default: docker/Dockerfile of this repository)")
     p.add_argument("--app-id", default="anchorfs")
     p.add_argument("--source-repository", default="mattsp1290/anchorfs")
     return p.parse_args(argv)
@@ -599,8 +728,11 @@ def parse_args(argv):
 
 def main(argv=None):
     try:
-        args = parse_args(sys.argv[1:] if argv is None else argv)
-        export(args)
+        argv = sys.argv[1:] if argv is None else argv
+        if argv and argv[0] in COMMANDS:
+            COMMANDS[argv[0]](argv[1:])
+        else:
+            export(parse_args(argv))
     except ExportError as exc:
         print(f"oci_export: {exc.code}", file=sys.stderr)
         return 2

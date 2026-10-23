@@ -22,26 +22,19 @@
 # ${XDG_RUNTIME_DIR:-$HOME} and only its path is printed.
 set -euo pipefail
 
-: "${KUBECONFIG:?set KUBECONFIG, e.g. /etc/rancher/k3s/k3s.yaml}"
-KUBECTL="${KUBECTL:-k3s kubectl}"
-export KUBECTL
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 HELM="${HELM:-helm}"
-NS=anchorfs
 REGISTRY_URL="${REGISTRY_URL:-http://10.0.0.106:30001}"
-# Digests of the pinned dev dependency images (same pins as the integration tests).
+# Digests of the pinned dev dependency images (same pins as the integration tests; provenance.rs checks them against the fixtures).
 POSTGRES_IMAGE_DIGEST="${POSTGRES_IMAGE_DIGEST:-sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3}"
 MINIO_IMAGE_DIGEST="${MINIO_IMAGE_DIGEST:-sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20}"
 export MINIO_IMAGE_DIGEST
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-k() { $KUBECTL "$@"; }
 
 [ "$#" -eq 1 ] || { echo "usage: $0 <publication.json>" >&2; exit 2; }
 receipt="$1"
 [ -r "$receipt" ] || { echo "cannot read $receipt" >&2; exit 2; }
 
-sha256_of() { # file -> hex digest
-  if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi
-}
 digest_re='^sha256:[a-f0-9]{64}$'
 field() { jq -er ".artifacts.$1.$2" "$receipt"; }
 

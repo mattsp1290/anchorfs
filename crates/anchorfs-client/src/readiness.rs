@@ -1,19 +1,22 @@
 //! Unauthenticated readiness probe: a single `GET /readyz`, never retried.
 use crate::{
-    build_http,
     endpoint::Endpoint,
     error::ClientError,
+    http_builder,
     wire::{ApiErrorBody, ReadyzBody},
 };
 use std::time::Duration;
 
 /// Outcome of one readiness request that produced an HTTP response.
-/// A 200 yields `ready`; any other status yields `error` when the body is an API error document.
 #[derive(Debug, Clone)]
-pub struct Readiness {
-    pub status: u16,
-    pub ready: Option<ReadyzBody>,
-    pub error: Option<ApiErrorBody>,
+pub enum Readiness {
+    /// HTTP 200 with a readiness document.
+    Ready(ReadyzBody),
+    /// Any other status; `error` is the parsed API error document when the body is one.
+    NotReady {
+        status: u16,
+        error: Option<ApiErrorBody>,
+    },
 }
 
 /// Requests `<origin>/readyz` without credentials. Transport failures (including TLS trust
@@ -26,7 +29,9 @@ pub async fn readiness(
     if timeout.is_zero() {
         return Err(ClientError::InvalidInput("timeout must be positive".into()));
     }
-    let http = build_http(endpoint, ca_bundle, None)?;
+    let http = http_builder(endpoint, ca_bundle)?
+        .build()
+        .map_err(ClientError::transport)?;
     let response = http
         .get(endpoint.route("/readyz"))
         .header("accept", "application/json")
@@ -36,16 +41,14 @@ pub async fn readiness(
         .map_err(ClientError::transport)?;
     let status = response.status().as_u16();
     let bytes = response.bytes().await.map_err(ClientError::transport)?;
-    let (ready, error) = if status == 200 {
+    if status == 200 {
         let body = serde_json::from_slice::<ReadyzBody>(&bytes)
             .map_err(|_| ClientError::Decode("readyz body".into()))?;
-        (Some(body), None)
+        Ok(Readiness::Ready(body))
     } else {
-        (None, serde_json::from_slice::<ApiErrorBody>(&bytes).ok())
-    };
-    Ok(Readiness {
-        status,
-        ready,
-        error,
-    })
+        Ok(Readiness::NotReady {
+            status,
+            error: serde_json::from_slice::<ApiErrorBody>(&bytes).ok(),
+        })
+    }
 }

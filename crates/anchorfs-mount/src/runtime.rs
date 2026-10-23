@@ -190,8 +190,7 @@ impl Mount {
         }
         if let ClientError::Api(e) = &error {
             if e.status == 401 {
-                self.fence.store(true, Ordering::SeqCst);
-                tracing::warn!(reason = "unauthenticated", "mount fenced");
+                self.latch_fence("unauthenticated");
                 return ErrnoName::ESTALE;
             }
             let handle_fenced = e.code.kind() == Some(ErrorCode::StaleHandle)
@@ -208,8 +207,7 @@ impl Mount {
                 if bound_mutation {
                     // Mere lease expiry still permits server reads. Latch before
                     // any await so another callback cannot start a new read.
-                    self.fence.store(true, Ordering::SeqCst);
-                    tracing::warn!(reason = "fenced_mutation", "mount fenced");
+                    self.latch_fence("fenced_mutation");
                 } else {
                     let probe = self.client.stat(None).await;
                     let dead = matches!(
@@ -217,13 +215,17 @@ impl Mount {
                         Err(ClientError::Api(p)) if p.status == 401 || p.code.kind() == Some(ErrorCode::Fenced)
                     );
                     if dead {
-                        self.fence.store(true, Ordering::SeqCst);
-                        tracing::warn!(reason = "probe", "mount fenced");
+                        self.latch_fence("probe");
                     }
                 }
             }
         }
         errno_for(&error, class)
+    }
+    /// Latches the mount fence and emits the lifecycle event the cluster proof depends on.
+    fn latch_fence(&self, reason: &'static str) {
+        self.fence.store(true, Ordering::SeqCst);
+        tracing::warn!(reason, "mount fenced");
     }
     pub(crate) fn file(&self, fh: u64) -> Result<OpenFile, ErrnoName> {
         self.live()?;

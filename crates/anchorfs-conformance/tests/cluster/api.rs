@@ -1,36 +1,41 @@
 //! Test-private raw-JSON layer over `reqwest` for the routes `anchorfs-client` does not wrap:
-//! workspace and credential administration, session minting with lease binding, workflow
-//! leases, and the session negatives. Shapes follow `docs/api/openapi-v1.yaml`; the in-process
-//! helpers under `tests/common` are shape references only (they use axum `oneshot`).
-//! Debug output of secret-bearing types is redacted.
+//! workspace and credential administration, bound session minting, workflow leases and
+//! rebind. Unbound `createSession` and `renewSession` go through the typed `Client`. Requests
+//! carry `anchorfs_client::auth::Authority`, so headers and secret redaction have one owner.
+//! Shapes follow `docs/api/openapi-v1.yaml`.
 use crate::kube::PortForward;
+use anchorfs_client::{
+    Client,
+    auth::{Authority, Bearer, SessionAuthority, WorkflowAuthority},
+    endpoint::Endpoint,
+    error::ClientError,
+    retry::IdempotencyKey,
+    wire::SessionGrant,
+};
+use anchorfs_core::{Secret, SessionId};
+use reqwest::Method;
 use serde_json::{Value, json};
 use std::{
-    fmt,
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-/// `<credential_id>.<secret>`; the secret part is 64 lowercase hex characters.
-#[derive(Clone)]
-pub struct Bearer {
-    pub credential_id: Uuid,
-    value: String,
+/// A composed `<credential_id>.<secret>` bearer. The composed text is kept for Kubernetes
+/// Secret creation only; both parts redact in `Debug`.
+#[derive(Clone, Debug)]
+pub struct Credential {
+    bearer: Bearer,
+    composed: Secret<String>,
 }
-impl Bearer {
+impl Credential {
     pub fn compose(credential_id: Uuid, secret: &str) -> Self {
-        assert!(
-            secret.len() == 64
-                && secret
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-            "credential secret is not 64 lowercase hex characters"
-        );
+        let composed = format!("{credential_id}.{secret}");
+        let bearer = Bearer::parse(&composed).expect("credential secret is not a valid bearer");
         Self {
-            credential_id,
-            value: format!("{credential_id}.{secret}"),
+            bearer,
+            composed: Secret::new(composed),
         }
     }
     /// Parses the owner-only bootstrap JSON `{"credential_id","secret","credential_epoch"}`.
@@ -42,30 +47,35 @@ impl Bearer {
             .expect("bootstrap credential_id");
         Self::compose(id, value["secret"].as_str().expect("bootstrap secret"))
     }
-    /// The composed value, for Secret creation and request headers only.
-    pub fn expose(&self) -> &str {
-        &self.value
+    pub fn id(&self) -> Uuid {
+        self.bearer.credential_id.0
     }
-}
-impl fmt::Debug for Bearer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Bearer({}.[redacted])", self.credential_id)
+    /// The composed value, for Secret creation only.
+    pub fn composed(&self) -> &str {
+        self.composed.expose()
+    }
+    pub fn authority(&self, session: Option<&SessionAuthority>) -> Authority {
+        Authority {
+            bearer: self.bearer.clone(),
+            session: session.cloned(),
+            workflow: None,
+        }
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct SessionRef {
-    pub session_id: Uuid,
-    pub session_epoch: i64,
+pub fn session_of(grant: &SessionGrant) -> SessionAuthority {
+    SessionAuthority {
+        session_id: SessionId(grant.session_id),
+        session_epoch: grant.session_epoch,
+    }
 }
-#[derive(Clone)]
-pub struct Lease {
-    pub token: String,
-    pub epoch: i64,
-}
-impl fmt::Debug for Lease {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Lease(epoch {}, token [redacted])", self.epoch)
+
+/// HTTP status of a typed-client outcome, for the negative checks (success reads as 200).
+pub fn status_of<T>(result: Result<T, ClientError>) -> u16 {
+    match result {
+        Ok(_) => 200,
+        Err(ClientError::Api(failure)) => failure.status,
+        Err(error) => panic!("negative check failed without an HTTP status: {error}"),
     }
 }
 
@@ -94,83 +104,113 @@ impl Reply {
     }
 }
 
-/// Where a lost mutation response is resolved from.
+/// Where a lost mutation response is resolved from; mirrors the service's receipt scope and
+/// the client's `Resolver` for the same route.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Scope {
+pub enum Scope {
     Admin,
     Workspace(Uuid),
 }
 
+/// One request: what to send and as whom.
+pub struct Call<'a> {
+    method: Method,
+    path: String,
+    authority: &'a Authority,
+    body: Option<Value>,
+}
+impl<'a> Call<'a> {
+    pub fn new(method: Method, path: impl Into<String>, authority: &'a Authority) -> Self {
+        Self {
+            method,
+            path: path.into(),
+            authority,
+            body: None,
+        }
+    }
+    pub fn json(mut self, body: Value) -> Self {
+        self.body = Some(body);
+        self
+    }
+}
+
 pub struct Api {
     runtime: Arc<Runtime>,
+    forward: Arc<Mutex<PortForward>>,
+    ca: Vec<u8>,
     http: reqwest::Client,
-    base: String,
-    forward: Option<Arc<Mutex<PortForward>>>,
 }
 impl Api {
-    pub fn new(runtime: Arc<Runtime>, base: &str, ca_pem: &[u8]) -> Self {
+    pub fn new(runtime: Arc<Runtime>, forward: Arc<Mutex<PortForward>>, ca: Vec<u8>) -> Self {
         let mut builder = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30));
-        for cert in reqwest::Certificate::from_pem_bundle(ca_pem).expect("CA bundle") {
+        for cert in reqwest::Certificate::from_pem_bundle(&ca).expect("CA bundle") {
             builder = builder.add_root_certificate(cert);
         }
         Self {
             runtime,
+            forward,
+            ca,
             http: builder.build().expect("http client"),
-            base: base.trim_end_matches('/').to_owned(),
-            forward: None,
         }
     }
 
-    /// Shares the port-forward so every request (including retries) can restart a dead one.
-    pub fn with_forward(mut self, forward: Arc<Mutex<PortForward>>) -> Self {
-        self.forward = Some(forward);
-        self
+    pub fn ca(&self) -> &[u8] {
+        &self.ca
     }
 
+    pub fn forward_stderr(&self) -> String {
+        self.forward
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .stderr_text()
+    }
+
+    fn origin(&self) -> String {
+        let port = self
+            .forward
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .local_port;
+        // The forward binds IPv4 loopback only and the service certificate carries the IP SAN
+        // `127.0.0.1`, so the literal address is used (no `::1` attempt).
+        format!("https://127.0.0.1:{port}")
+    }
+
+    pub fn endpoint(&self) -> Endpoint {
+        Endpoint::parse(&self.origin(), false).expect("endpoint")
+    }
+
+    pub fn client(&self, workspace: Uuid, authority: Authority) -> Client {
+        Client::new(self.endpoint(), workspace, authority, Some(&self.ca)).expect("client")
+    }
+
+    /// Restarts the port-forward if its child exited.
     fn ensure_forward(&self) {
-        if let Some(forward) = &self.forward {
-            forward
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .ensure_alive();
-        }
+        self.forward
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .ensure_alive();
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn send_once(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        query: &[(&str, &str)],
-        bearer: &Bearer,
-        session: Option<&SessionRef>,
-        lease: Option<&Lease>,
-        key: Option<&str>,
-        body: Option<&Value>,
-    ) -> Result<Reply, String> {
+    /// Every typed-client call goes through here: a dropped forward is restarted first.
+    pub fn block_on<T>(&self, future: impl std::future::Future<Output = T>) -> T {
         self.ensure_forward();
-        let mut request = self
-            .http
-            .request(method, format!("{}{path}", self.base))
-            .query(query)
-            .bearer_auth(bearer.expose());
-        if let Some(session) = session {
-            request = request
-                .header("X-Anchorfs-Session-Id", session.session_id.to_string())
-                .header("X-Anchorfs-Session-Epoch", session.session_epoch);
-        }
-        if let Some(lease) = lease {
-            request = request
-                .header("X-Anchorfs-Workflow-Token", lease.token.as_str())
-                .header("X-Anchorfs-Workflow-Epoch", lease.epoch);
-        }
+        self.runtime.block_on(future)
+    }
+
+    fn send(&self, call: &Call<'_>, key: Option<&str>) -> Result<Reply, String> {
+        self.ensure_forward();
+        let url = format!("{}{}", self.origin(), call.path);
+        let mut request = call
+            .authority
+            .apply(self.http.request(call.method.clone(), url));
         if let Some(key) = key {
             request = request.header("Idempotency-Key", key);
         }
-        if let Some(body) = body {
+        if let Some(body) = &call.body {
             request = request.json(body);
         }
         self.runtime.block_on(async {
@@ -192,49 +232,31 @@ impl Api {
         })
     }
 
+    /// One request with a fresh idempotency key and no recovery, for the negative checks.
+    pub fn raw(&self, call: Call<'_>) -> Reply {
+        self.send(&call, Some(&Uuid::new_v4().to_string()))
+            .unwrap_or_else(|e| panic!("{} {} transport: {e}", call.method, call.path))
+    }
+
     /// A mutation with a stable idempotency key. A transport failure or a 503 is resolved
     /// through the operation lookup; when nothing was recorded the same key is replayed once.
-    #[allow(clippy::too_many_arguments)]
-    fn mutate(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        scope: Scope,
-        bearer: &Bearer,
-        session: Option<&SessionRef>,
-        lease: Option<&Lease>,
-        body: Option<&Value>,
-    ) -> Reply {
+    pub fn mutate(&self, call: Call<'_>, scope: Scope) -> Reply {
         let key = Uuid::new_v4().to_string();
-        let first = self.send_once(
-            method.clone(),
-            path,
-            &[],
-            bearer,
-            session,
-            lease,
-            Some(&key),
-            body,
-        );
-        match first {
+        match self.send(&call, Some(&key)) {
             Ok(reply) if reply.status != 503 => return reply,
             _ => {}
         }
+        let lookup_authority = Authority {
+            workflow: None,
+            ..call.authority.clone()
+        };
         let lookup_path = match scope {
-            Scope::Admin => "/v1/admin-operations".to_owned(),
-            Scope::Workspace(id) => format!("/v1/workspaces/{id}/operations"),
+            Scope::Admin => format!("/v1/admin-operations?idempotency_key={key}"),
+            Scope::Workspace(id) => format!("/v1/workspaces/{id}/operations?idempotency_key={key}"),
         };
         for _ in 0..3 {
-            if let Ok(found) = self.send_once(
-                reqwest::Method::GET,
-                &lookup_path,
-                &[("idempotency_key", key.as_str())],
-                bearer,
-                session,
-                None,
-                None,
-                None,
-            ) {
+            let lookup = Call::new(Method::GET, lookup_path.as_str(), &lookup_authority);
+            if let Ok(found) = self.send(&lookup, None) {
                 if found.status == 200 && found.body["state"] == "committed" {
                     // The original body is not replayed for secrets; callers check for them.
                     return Reply {
@@ -251,25 +273,22 @@ impl Api {
                     };
                 }
             }
-            let replay = self.send_once(
-                method.clone(),
-                path,
-                &[],
-                bearer,
-                session,
-                lease,
-                Some(&key),
-                body,
-            );
-            if let Some(reply) = replay.ok().filter(|reply| reply.status != 503) {
+            if let Some(reply) = self
+                .send(&call, Some(&key))
+                .ok()
+                .filter(|reply| reply.status != 503)
+            {
                 return reply;
             }
             std::thread::sleep(Duration::from_secs(2));
         }
-        panic!("mutation {method} {path}: outcome unresolved after lookup and replay");
+        panic!(
+            "mutation {} {}: outcome unresolved after lookup and replay",
+            call.method, call.path
+        );
     }
 
-    pub fn create_workspace(&self, admin: &Bearer, root_uid: u32, root_gid: u32) -> Uuid {
+    pub fn create_workspace(&self, admin: &Authority, root_uid: u32, root_gid: u32) -> Uuid {
         let body = json!({
             "root_uid": root_uid,
             "root_gid": root_gid,
@@ -280,13 +299,8 @@ impl Api {
         });
         let reply = self
             .mutate(
-                reqwest::Method::POST,
-                "/v1/workspaces",
+                Call::new(Method::POST, "/v1/workspaces", admin).json(body),
                 Scope::Admin,
-                admin,
-                None,
-                None,
-                Some(&body),
             )
             .expect(201, "createWorkspace");
         reply.body["workspace"]["workspace_id"]
@@ -298,12 +312,12 @@ impl Api {
     /// `kind` is `host` or `worker`; the role is `write`.
     pub fn create_credential(
         &self,
-        actor: &Bearer,
+        actor: &Authority,
         workspace: Uuid,
         kind: &str,
         uid: u32,
         gid: u32,
-    ) -> Bearer {
+    ) -> Credential {
         let body = json!({
             "workspace_id": workspace,
             "kind": kind,
@@ -314,13 +328,8 @@ impl Api {
         });
         let reply = self
             .mutate(
-                reqwest::Method::POST,
-                "/v1/credentials",
+                Call::new(Method::POST, "/v1/credentials", actor).json(body),
                 Scope::Admin,
-                actor,
-                None,
-                None,
-                Some(&body),
             )
             .expect(201, "createCredential");
         let id = reply.body["credential_id"]
@@ -330,146 +339,125 @@ impl Api {
         let secret = reply.body["secret"]
             .as_str()
             .expect("credential secret missing (a lost response cannot be replayed)");
-        Bearer::compose(id, secret)
+        Credential::compose(id, secret)
     }
 
-    pub fn revoke_credential(&self, admin: &Bearer, credential: Uuid) {
+    pub fn revoke_credential(&self, admin: &Authority, credential: Uuid) {
         self.mutate(
-            reqwest::Method::DELETE,
-            &format!("/v1/credentials/{credential}"),
+            Call::new(
+                Method::DELETE,
+                format!("/v1/credentials/{credential}"),
+                admin,
+            ),
             Scope::Admin,
-            admin,
-            None,
-            None,
-            None,
         )
         .expect(200, "revokeCredential");
     }
 
-    /// Mints a session for `credential_id`, acting as `actor` (a host credential, or the
-    /// credential itself). `bind` is the workflow lease token for a bound successor.
+    /// Mints an unbound session for `credential_id`, acting as `actor`, through the typed
+    /// client (which resolves a lost response from the admin-operation lookup).
     pub fn create_session(
         &self,
-        actor: &Bearer,
+        actor: &Authority,
         workspace: Uuid,
         credential_id: Uuid,
-        bind: Option<&str>,
-    ) -> SessionRef {
-        let body = json!({"credential_id": credential_id, "bind_to_workflow_lease": bind});
+    ) -> SessionAuthority {
+        let client = self.client(workspace, actor.clone());
+        let grant = self
+            .block_on(client.create_session(credential_id, &IdempotencyKey::new()))
+            .unwrap_or_else(|e| panic!("createSession: {e}"));
+        session_of(&grant)
+    }
+
+    /// Mints a session bound to a workflow lease token (not wrapped by the typed client).
+    pub fn create_bound_session(
+        &self,
+        actor: &Authority,
+        workspace: Uuid,
+        credential_id: Uuid,
+        lease_token: &str,
+    ) -> SessionAuthority {
+        let body = json!({"credential_id": credential_id, "bind_to_workflow_lease": lease_token});
         let reply = self
             .mutate(
-                reqwest::Method::POST,
-                &format!("/v1/workspaces/{workspace}/sessions"),
-                Scope::Workspace(workspace),
-                actor,
-                None,
-                None,
-                Some(&body),
+                Call::new(
+                    Method::POST,
+                    format!("/v1/workspaces/{workspace}/sessions"),
+                    actor,
+                )
+                .json(body),
+                Scope::Admin,
             )
             .expect(201, "createSession");
-        session_from(&reply.body)
+        SessionAuthority {
+            session_id: SessionId(
+                reply.body["session_id"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .expect("session_id"),
+            ),
+            session_epoch: reply.body["session_epoch"].as_i64().expect("session_epoch"),
+        }
     }
 
-    /// Raw createSession for negatives: returns the reply instead of asserting.
-    pub fn create_session_raw(
-        &self,
-        actor: &Bearer,
-        workspace: Uuid,
-        credential_id: Uuid,
-    ) -> Reply {
-        let body = json!({"credential_id": credential_id, "bind_to_workflow_lease": null});
-        self.send_once(
-            reqwest::Method::POST,
-            &format!("/v1/workspaces/{workspace}/sessions"),
-            &[],
-            actor,
-            None,
-            None,
-            Some(&Uuid::new_v4().to_string()),
-            Some(&body),
-        )
-        .expect("createSession transport")
-    }
-
-    pub fn acquire_lease(&self, host: &Bearer, session: &SessionRef, workspace: Uuid) -> Lease {
+    /// `host` carries the owner's unbound session.
+    pub fn acquire_lease(&self, host: &Authority, workspace: Uuid) -> WorkflowAuthority {
         let reply = self
             .mutate(
-                reqwest::Method::POST,
-                &format!("/v1/workspaces/{workspace}/workflow-lease"),
+                Call::new(
+                    Method::POST,
+                    format!("/v1/workspaces/{workspace}/workflow-lease"),
+                    host,
+                ),
                 Scope::Workspace(workspace),
-                host,
-                Some(session),
-                None,
-                None,
             )
             .expect(201, "acquireWorkflowLease");
-        Lease {
-            token: reply.body["token"]
-                .as_str()
-                .expect("lease token missing (a lost response cannot be replayed)")
-                .to_owned(),
+        WorkflowAuthority {
+            token: Secret::new(
+                reply.body["token"]
+                    .as_str()
+                    .expect("lease token missing (a lost response cannot be replayed)")
+                    .to_owned(),
+            ),
             epoch: reply.body["mutation_epoch"]
                 .as_i64()
                 .expect("mutation_epoch"),
         }
     }
 
-    pub fn acquire_lease_raw(
-        &self,
-        actor: &Bearer,
-        session: &SessionRef,
-        workspace: Uuid,
-    ) -> Reply {
-        self.send_once(
-            reqwest::Method::POST,
-            &format!("/v1/workspaces/{workspace}/workflow-lease"),
-            &[],
+    pub fn acquire_lease_raw(&self, actor: &Authority, workspace: Uuid) -> Reply {
+        self.raw(Call::new(
+            Method::POST,
+            format!("/v1/workspaces/{workspace}/workflow-lease"),
             actor,
-            Some(session),
-            None,
-            Some(&Uuid::new_v4().to_string()),
-            None,
-        )
-        .expect("acquireWorkflowLease transport")
+        ))
     }
 
-    pub fn release_lease(
-        &self,
-        host: &Bearer,
-        session: &SessionRef,
-        workspace: Uuid,
-        lease: &Lease,
-    ) {
+    pub fn release_lease(&self, host: &Authority, workspace: Uuid, lease: &WorkflowAuthority) {
+        let leased = leased(host, lease);
         self.mutate(
-            reqwest::Method::DELETE,
-            &format!("/v1/workspaces/{workspace}/workflow-lease"),
+            Call::new(
+                Method::DELETE,
+                format!("/v1/workspaces/{workspace}/workflow-lease"),
+                &leased,
+            ),
             Scope::Workspace(workspace),
-            host,
-            Some(session),
-            Some(lease),
-            None,
         )
         .expect(200, "releaseWorkflowLease");
     }
 
     /// Renews the workflow lease TTL (owner host credential, unbound session, lease proof).
     /// The mutation epoch is unchanged by a renewal; it is returned for the caller to check.
-    pub fn renew_lease(
-        &self,
-        host: &Bearer,
-        session: &SessionRef,
-        workspace: Uuid,
-        lease: &Lease,
-    ) -> i64 {
+    pub fn renew_lease(&self, host: &Authority, workspace: Uuid, lease: &WorkflowAuthority) -> i64 {
+        let leased = leased(host, lease);
         let reply = self
             .mutate(
-                reqwest::Method::POST,
-                &format!("/v1/workspaces/{workspace}/workflow-lease/renew"),
+                Call::new(
+                    Method::POST,
+                    format!("/v1/workspaces/{workspace}/workflow-lease/renew"),
+                    &leased,
+                ),
                 Scope::Workspace(workspace),
-                host,
-                Some(session),
-                Some(lease),
-                None,
             )
             .expect(200, "renewWorkflowLease");
         let recovered = reply.recovered;
@@ -479,57 +467,30 @@ impl Api {
             .expect("mutation_epoch in renewWorkflowLease response")
     }
 
-    pub fn renew_session_raw(
-        &self,
-        actor: &Bearer,
-        session: &SessionRef,
-        workspace: Uuid,
-    ) -> Reply {
-        self.send_once(
-            reqwest::Method::POST,
-            &format!(
-                "/v1/workspaces/{workspace}/sessions/{}/renew",
-                session.session_id
-            ),
-            &[],
-            actor,
-            Some(session),
-            None,
-            Some(&Uuid::new_v4().to_string()),
-            None,
-        )
-        .expect("renewSession transport")
-    }
-
     pub fn rebind_session_raw(
         &self,
-        actor: &Bearer,
-        session: &SessionRef,
+        actor: &Authority,
         workspace: Uuid,
+        session: &SessionAuthority,
     ) -> Reply {
-        self.send_once(
-            reqwest::Method::POST,
-            &format!(
-                "/v1/workspaces/{workspace}/sessions/{}/rebind",
-                session.session_id
-            ),
-            &[],
-            actor,
-            Some(session),
-            None,
-            Some(&Uuid::new_v4().to_string()),
-            Some(&json!({"workflow_lease_token": null})),
+        self.raw(
+            Call::new(
+                Method::POST,
+                format!(
+                    "/v1/workspaces/{workspace}/sessions/{}/rebind",
+                    session.session_id.0
+                ),
+                actor,
+            )
+            .json(json!({"workflow_lease_token": null})),
         )
-        .expect("rebindSession transport")
     }
 }
 
-fn session_from(body: &Value) -> SessionRef {
-    SessionRef {
-        session_id: body["session_id"]
-            .as_str()
-            .and_then(|s| s.parse().ok())
-            .expect("session_id"),
-        session_epoch: body["session_epoch"].as_i64().expect("session_epoch"),
+/// `authority` plus the workflow lease proof.
+fn leased(authority: &Authority, lease: &WorkflowAuthority) -> Authority {
+    Authority {
+        workflow: Some(lease.clone()),
+        ..authority.clone()
     }
 }

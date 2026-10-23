@@ -29,20 +29,22 @@ CI image and the script runs crane inside Docker, whose VM has its own network
 path to the LAN.
 The Forgejo delivery workflow (`docs/ops/forgejo-delivery.md`) never runs
 Docker: it cross-compiles both binaries with cargo-zigbuild
-(`scripts/build-release-binaries.sh`), pulls the bases by digest, and
+(`scripts/build-release-binaries.sh`, which checks each ELF with
+`oci_export.py check-elf`), pulls the bases by digest, and
 `scripts/oci_export.py` appends one deterministic binary layer per platform
 onto the base manifests, producing OCI layouts and a v1 build receipt that the
 shared birbhomes publisher uploads. A base stage change requires re-running
 `publish-bases.sh` and committing the new digests and `stage_sha256` values.
 Three checks enforce this, each covering a different thing: the provenance
-test recomputes every base's `stage_sha256` from `docker/Dockerfile` and fails
-on drift (GitHub CI and the Forgejo `checks` job); the exporter, when given
-`--dockerfile docker/Dockerfile` (the Forgejo workflow does), recomputes the
-same hash and refuses a mismatch as `base_mismatch`; and the exporter always
-refuses a pulled base layout whose digests differ from `docker/bases.json`.
-Without `--dockerfile` the exporter only checks the pulled layout against the
-record. `publish-bases.sh` computed no hash for the first publication: the
-recorded values were computed afterwards from the unchanged Dockerfile stages.
+test recomputes every base's `stage_sha256` from `docker/Dockerfile`
+(`oci_export.py stage-sha256`, the only implementation of the hash) and fails
+on drift (GitHub CI and the Forgejo `checks` job); the exporter always
+recomputes the same hash from `--dockerfile` (default `docker/Dockerfile`) and
+refuses a mismatch as `base_mismatch`; and it refuses a pulled base layout whose
+digests differ from `docker/bases.json`. `publish-bases.sh` is orchestration
+only: it hashes, verifies the registry readback and records `docker/bases.json`
+through `oci_export.py` subcommands. The first publication recorded no hash:
+the recorded values were computed afterwards from the unchanged Dockerfile stages.
 The Docker targets and the exporter output are built from the same
 stages at different times (apt is unpinned), so their package sets can differ.
 

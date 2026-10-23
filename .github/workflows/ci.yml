@@ -95,13 +95,9 @@ jobs:
           echo "HELM_COMPAT=$helm_path" >> "$GITHUB_ENV"
       - name: Chart lint and render checks (Helm 3.13.0)
         run: |
-          zero=$(printf '0%.0s' $(seq 64))
-          "$HELM_COMPAT" lint charts/anchorfs \
-            --set image.service.repository=x --set "image.service.digest=sha256:$zero" \
-            --set image.mount.repository=x --set "image.mount.digest=sha256:$zero"
           PATH="$(dirname "$HELM_COMPAT"):$PATH" CHART_STRICT=0 bash scripts/check-chart.sh
       - name: Shell script syntax
-        run: for f in scripts/*.sh scripts/cluster/*.sh ci/*.sh; do bash -n "$f"; done
+        run: for f in scripts/*.sh scripts/ci/*.sh scripts/cluster/*.sh ci/*.sh; do bash -n "$f"; done
   image-amd64:
     runs-on: ubuntu-latest
     timeout-minutes: 60

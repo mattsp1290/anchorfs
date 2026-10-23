@@ -12,14 +12,15 @@ metadata:
     app.kubernetes.io/component: worker-template
 data:
   pod.yaml: |
-    # Placeholders (plain string substitution before apply):
+    # Placeholders (plain string substitution of scalars before apply):
     #   __NAME__ __NODE__ __WORKSPACE__ __SESSION_ID__ __SESSION_EPOCH__
     #   __CREDENTIAL_SECRET__  Secret holding key "bearer" (the worker's credential)
-    #   __WORKFLOW_SECRET__    Secret holding key "token"; volume is optional, so
-    #                          ordinary pods may pass the credential Secret name again
-    #   __WORKFLOW_EPOCH_ARGS__ replaces the final flow-sequence element list of the
-    #                          mount args: empty, or the quoted items
-    #                          "--workflow-epoch", "N", "--workflow-token-file", "/etc/anchorfs/workflow/token"
+    #
+    # A pod bound to a workflow lease is the same manifest plus three edits made on the
+    # parsed object (not by text splicing): append "--workflow-epoch", "<epoch>",
+    # "--workflow-token-file", "/etc/anchorfs/workflow/token" to the mount container args,
+    # add a Secret volume "workflow" (key "token", defaultMode 288) and mount it read-only
+    # at /etc/anchorfs/workflow in the mount container.
     #
     # Invariants:
     #  * The mountpoint is the root of a memory-backed emptyDir: mode 0777, not
@@ -70,11 +71,6 @@ data:
           secret:
             secretName: __CREDENTIAL_SECRET__
             defaultMode: 288
-        - name: workflow
-          secret:
-            secretName: __WORKFLOW_SECRET__
-            defaultMode: 288
-            optional: true
         - name: ca
           secret:
             secretName: {{ .Values.secrets.tls | quote }}
@@ -87,7 +83,7 @@ data:
       containers:
         - name: mount
           image: {{ $mountImage | quote }}
-          args: ["mount", {{ .Values.workerTemplate.workspacePath | quote }}, "--endpoint", "https://anchorfs:{{ .Values.service.port }}", "--workspace", "__WORKSPACE__", "--session-id", "__SESSION_ID__", "--session-epoch", "__SESSION_EPOCH__", "--credential-file", "/etc/anchorfs/credential/bearer", "--ca-bundle", "/etc/anchorfs/ca/ca.crt", "--log-format", "json", __WORKFLOW_EPOCH_ARGS__]
+          args: ["mount", {{ .Values.workerTemplate.workspacePath | quote }}, "--endpoint", "https://anchorfs:{{ .Values.service.port }}", "--workspace", "__WORKSPACE__", "--session-id", "__SESSION_ID__", "--session-epoch", "__SESSION_EPOCH__", "--credential-file", "/etc/anchorfs/credential/bearer", "--ca-bundle", "/etc/anchorfs/ca/ca.crt", "--log-format", "json"]
           securityContext:
             privileged: true
             runAsUser: 10001
@@ -98,7 +94,6 @@ data:
               mountPropagation: Bidirectional
             - {name: fuse, mountPath: {{ .Values.workerTemplate.fuseDevice | quote }}}
             - {name: credential, mountPath: /etc/anchorfs/credential, readOnly: true}
-            - {name: workflow, mountPath: /etc/anchorfs/workflow, readOnly: true}
             - {name: ca, mountPath: /etc/anchorfs/ca, readOnly: true}
         - name: worker
           image: {{ $mountImage | quote }}

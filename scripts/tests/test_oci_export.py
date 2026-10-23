@@ -27,6 +27,10 @@ BUILDER = "rust@sha256:" + "b" * 64
 TOOLCHAIN = "sha256:" + "c" * 64
 REVISION = "org.opencontainers.image.revision"
 MACHINE = {"amd64": 0x3E, "arm64": 0xB7}
+DOCKERFILE = (b"FROM rust:1 AS builder\nRUN true\n"
+              b"FROM debian AS service-base\nRUN a\n"
+              b"FROM service-base AS service\nCOPY x y\n"
+              b"FROM debian AS mount-base\nRUN b\n")
 CHART_YAML = (b"apiVersion: v2\nname: anchorfs\ndescription: Synthetic chart\ntype: application\n"
               b"version: 0.1.0\nappVersion: \"0.1.0\"\nkubeVersion: \">=1.32.0-0\"\n")
 
@@ -115,8 +119,13 @@ class Fixture:
         self.chart_tgz = self.root / "anchorfs-0.1.0.tgz"
         make_chart_tgz(self.chart_tgz, chart_yaml)
         self.bases_path = self.root / "bases.json"
+        self.dockerfile_path = self.root / "Dockerfile"
+        self.dockerfile_path.write_bytes(DOCKERFILE)
         bases = {"schema_version": 1, "registry": "10.0.0.106:30001",
                  "bases": {name: make_base(self.layouts / name, name) for name in ("service", "mount")}}
+        for item in bases["bases"].values():
+            item["stage_sha256"] = oci_export.dockerfile_stage_sha256(
+                self.dockerfile_path, item["dockerfile_target"])
         self.write_bases(bases)
         for arch in ("amd64", "arm64"):
             d = self.dist / ("linux-" + arch)
@@ -133,7 +142,7 @@ class Fixture:
                   "--toolchain-digest": TOOLCHAIN, "--bases": str(self.bases_path),
                   "--base-layouts": str(self.layouts), "--binaries": str(self.dist),
                   "--chart-package": str(self.chart_tgz), "--chart-dir": str(self.chart_dir),
-                  "--output": str(output)}
+                  "--dockerfile": str(self.dockerfile_path), "--output": str(output)}
         values.update(overrides)
         return [item for pair in values.items() for item in pair]
 
@@ -345,6 +354,7 @@ class ExportTests(unittest.TestCase):
         bases["bases"]["service"] = make_base(
             self.fx.layouts / "service", "service",
             layer_media="application/vnd.docker.image.rootfs.diff.tar.gzip")
+        bases["bases"]["service"]["stage_sha256"] = self.fx.bases["bases"]["service"]["stage_sha256"]
         self.fx.write_bases(bases)
         self.assertEqual(self.fx.run(self.out), (2, "oci_export: base_mismatch"))
 
@@ -408,41 +418,22 @@ class ExportTests(unittest.TestCase):
 
     # ---- base stage hash (drift detection) ----------------------------------
 
-    def dockerfile(self, extra=""):
-        path = self.tmp / "Dockerfile"
-        path.write_bytes((b"FROM rust:1 AS builder\nRUN true\n"
-                          b"FROM debian AS service-base\nRUN a\n" + extra.encode()
-                          + b"FROM service-base AS service\nCOPY x y\n"
-                          b"FROM debian AS mount-base\nRUN b\n"))
+    def changed_dockerfile(self, extra):
+        path = self.tmp / "Dockerfile.changed"
+        path.write_bytes(DOCKERFILE.replace(b"RUN a\n", b"RUN a\n" + extra))
         return path
 
-    def record_stage_hashes(self, dockerfile):
-        bases = json.loads(json.dumps(self.fx.bases))
-        for role in ("service", "mount"):
-            target = bases["bases"][role]["dockerfile_target"]
-            bases["bases"][role]["stage_sha256"] = oci_export.dockerfile_stage_sha256(dockerfile, target)
-        self.fx.write_bases(bases)
-
-    def test_stage_sha256_key_is_accepted_without_dockerfile(self):
-        self.record_stage_hashes(self.dockerfile())
-        self.export_ok()
-
-    def test_stage_hash_verified_against_dockerfile(self):
-        dockerfile = self.dockerfile()
-        self.record_stage_hashes(dockerfile)
-        code, err = self.fx.run(self.out, **{"--dockerfile": str(dockerfile)})
-        self.assertEqual((code, err), (0, ""))
-
     def test_stage_hash_mismatch_is_refused(self):
-        self.record_stage_hashes(self.dockerfile())
-        changed = self.dockerfile(extra="RUN added\n")
+        changed = self.changed_dockerfile(b"RUN added\n")
         self.assertEqual(self.fx.run(self.out, **{"--dockerfile": str(changed)}),
                          (2, "oci_export: base_mismatch"))
         self.assertFalse(self.out.exists())
 
-    def test_dockerfile_check_requires_recorded_hash(self):
-        self.assertEqual(self.fx.run(self.out, **{"--dockerfile": str(self.dockerfile())}),
-                         (2, "oci_export: base_mismatch"))
+    def test_missing_stage_hash_is_invalid_input(self):
+        bases = json.loads(json.dumps(self.fx.bases))
+        del bases["bases"]["mount"]["stage_sha256"]
+        self.fx.write_bases(bases)
+        self.assertEqual(self.fx.run(self.out), (2, "oci_export: invalid_input"))
 
     def test_malformed_stage_hash_is_invalid_input(self):
         bases = json.loads(json.dumps(self.fx.bases))
@@ -451,9 +442,148 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(self.fx.run(self.out), (2, "oci_export: invalid_input"))
 
     def test_stage_hash_matches_python_and_stops_at_next_from(self):
-        dockerfile = self.dockerfile()
         expected = "sha256:" + hashlib.sha256(b"FROM debian AS service-base\nRUN a\n").hexdigest()
-        self.assertEqual(oci_export.dockerfile_stage_sha256(dockerfile, "service-base"), expected)
+        self.assertEqual(oci_export.dockerfile_stage_sha256(self.fx.dockerfile_path, "service-base"), expected)
+
+    def test_default_dockerfile_is_the_repository_one(self):
+        self.assertEqual(oci_export.DEFAULT_DOCKERFILE, MODULE_PATH.parent.parent / "docker" / "Dockerfile")
+
+
+class SubcommandTests(unittest.TestCase):
+    """The delivery primitives the shell scripts and the workflow call."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name)
+        self.fx = Fixture(self.tmp / "in")
+
+    def call(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = oci_export.main(list(argv))
+        return code, out.getvalue(), err.getvalue().strip()
+
+    def test_stage_sha256_prints_digest(self):
+        expected = oci_export.dockerfile_stage_sha256(self.fx.dockerfile_path, "mount-base")
+        self.assertEqual(self.call("stage-sha256", str(self.fx.dockerfile_path), "mount-base"),
+                         (0, expected + "\n", ""))
+
+    def test_stage_sha256_unknown_stage_is_base_mismatch(self):
+        self.assertEqual(self.call("stage-sha256", str(self.fx.dockerfile_path), "nope"),
+                         (2, "", "oci_export: base_mismatch"))
+
+    def test_repository_stage_hashes_match_committed_bases(self):
+        root = MODULE_PATH.parent.parent
+        committed = json.loads((root / "docker" / "bases.json").read_text())
+        for item in committed["bases"].values():
+            self.assertEqual(oci_export.dockerfile_stage_sha256(root / "docker" / "Dockerfile",
+                                                                item["dockerfile_target"]),
+                             item["stage_sha256"])
+
+    def test_check_elf(self):
+        good = self.fx.dist / "linux-amd64" / "anchorfs-service"
+        self.assertEqual(self.call("check-elf", str(good), "amd64"), (0, "", ""))
+        self.assertEqual(self.call("check-elf", str(good), "arm64"), (2, "", "oci_export: elf_architecture"))
+        self.assertEqual(self.call("check-elf", str(good), "riscv"), (2, "", "oci_export: invalid_input"))
+        bad = self.tmp / "text"
+        bad.write_bytes(b"not an elf file at all, long enough")
+        self.assertEqual(self.call("check-elf", str(bad), "amd64"), (2, "", "oci_export: elf_architecture"))
+        big_endian = bytearray(elf("amd64"))
+        big_endian[5] = 2
+        bad.write_bytes(bytes(big_endian))
+        self.assertEqual(self.call("check-elf", str(bad), "amd64"), (2, "", "oci_export: elf_architecture"))
+
+    def test_bases_pull_refs_and_list(self):
+        item = self.fx.bases["bases"]
+        self.assertEqual(self.call("bases", "pull-refs", str(self.fx.bases_path)), (0, "".join(
+            f"{role} 10.0.0.106:30001/anchorfs/{role}-base@{item[role]['index_digest']}\n"
+            for role in ("service", "mount")), ""))
+        self.assertEqual(self.call("bases", "registry", str(self.fx.bases_path)), (0, "10.0.0.106:30001\n", ""))
+        self.assertEqual(self.call("bases", "list", str(self.fx.bases_path))[1].splitlines()[0],
+                         f"service anchorfs/service-base service-base {item['service']['index_digest']}")
+
+    def test_pull_refs_refuses_unpublished_but_list_reports_none(self):
+        bases = json.loads(json.dumps(self.fx.bases))
+        bases["bases"]["service"]["index_digest"] = None
+        bases["bases"]["service"]["platforms"] = {"linux/amd64": None, "linux/arm64": None}
+        self.fx.write_bases(bases)
+        self.assertEqual(self.call("bases", "pull-refs", str(self.fx.bases_path)),
+                         (2, "", "oci_export: invalid_input"))
+        self.assertIn("service anchorfs/service-base service-base none",
+                      self.call("bases", "list", str(self.fx.bases_path))[1])
+
+    def readback_index(self, mutate=None):
+        children = [{"mediaType": oci_export.OCI_MANIFEST, "digest": "sha256:" + c * 64, "size": 1,
+                     "platform": {"os": "linux", "architecture": arch}}
+                    for c, arch in (("1", "amd64"), ("2", "arm64"))]
+        index = {"schemaVersion": 2, "manifests": children}
+        if mutate:
+            mutate(index)
+        raw = canon(index)
+        path = self.tmp / "index.manifest.json"
+        path.write_bytes(raw)
+        return sha(raw), path
+
+    def test_verify_readback_index_and_platform(self):
+        digest, path = self.readback_index()
+        self.assertEqual(self.call("verify-readback", "index", digest, str(path)),
+                         (0, f"linux/amd64 sha256:{'1' * 64}\nlinux/arm64 sha256:{'2' * 64}\n", ""))
+        self.assertEqual(self.call("verify-readback", "platform", digest, str(path)), (0, "", ""))
+        self.assertEqual(self.call("verify-readback", "platform", sha(b"other"), str(path)),
+                         (2, "", "oci_export: readback_mismatch"))
+        self.assertEqual(self.call("verify-readback", "index", sha(b"other"), str(path)),
+                         (2, "", "oci_export: readback_mismatch"))
+        self.assertEqual(self.call("verify-readback", "index", "sha256:xyz", str(path)),
+                         (2, "", "oci_export: invalid_input"))
+
+    def test_verify_readback_refuses_wrong_platform_set(self):
+        digest, path = self.readback_index(lambda i: i["manifests"].pop())
+        self.assertEqual(self.call("verify-readback", "index", digest, str(path)),
+                         (2, "", "oci_export: readback_mismatch"))
+        digest, path = self.readback_index(lambda i: i["manifests"][1]["platform"].update(architecture="amd64"))
+        self.assertEqual(self.call("verify-readback", "index", digest, str(path)),
+                         (2, "", "oci_export: readback_mismatch"))
+
+    def test_layout_digest_requires_exactly_one_entry(self):
+        layout = self.fx.layouts / "service"
+        self.assertEqual(self.call("layout-digest", str(layout / "index.json")),
+                         (0, self.fx.bases["bases"]["service"]["index_digest"] + "\n", ""))
+        two = self.tmp / "two.json"
+        two.write_bytes(canon({"manifests": [{"digest": "sha256:" + "1" * 64}, {"digest": "sha256:" + "2" * 64}]}))
+        self.assertEqual(self.call("layout-digest", str(two)), (2, "", "oci_export: readback_mismatch"))
+
+    def test_bases_record_writes_readback_results(self):
+        digest, path = self.readback_index()
+        stage = "sha256:" + "9" * 64
+        new_sha = "b" * 40
+        code, out, err = self.call("bases", "record", str(self.fx.bases_path), "mount", digest, str(path),
+                                   stage, new_sha)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn(f"mount: old {self.fx.bases['bases']['mount']['index_digest']}", out)
+        self.assertIn(f"mount: new {digest}", out)
+        written = read_json(self.fx.bases_path)
+        mount = written["bases"]["mount"]
+        self.assertEqual(mount["index_digest"], digest)
+        self.assertEqual(mount["platforms"], {"linux/amd64": "sha256:" + "1" * 64,
+                                              "linux/arm64": "sha256:" + "2" * 64})
+        self.assertEqual((mount["stage_sha256"], mount["source_sha"]), (stage, new_sha))
+        self.assertRegex(mount["published_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(written["bases"]["service"], self.fx.bases["bases"]["service"])
+        self.assertTrue(self.fx.bases_path.read_text().endswith("}\n"))
+
+    def test_bases_record_refuses_unverified_readback_without_writing(self):
+        digest, path = self.readback_index()
+        before = self.fx.bases_path.read_bytes()
+        self.assertEqual(self.call("bases", "record", str(self.fx.bases_path), "mount", sha(b"x"), str(path),
+                                   "sha256:" + "9" * 64, "b" * 40), (2, "", "oci_export: readback_mismatch"))
+        self.assertEqual(self.call("bases", "record", str(self.fx.bases_path), "mount", digest, str(path),
+                                   "sha256:" + "9" * 64, "short"), (2, "", "oci_export: invalid_input"))
+        self.assertEqual(self.fx.bases_path.read_bytes(), before)
+
+    def test_unknown_subcommand_arity_is_invalid_input(self):
+        self.assertEqual(self.call("stage-sha256", "only-one"), (2, "", "oci_export: invalid_input"))
+        self.assertEqual(self.call("bases", "bogus"), (2, "", "oci_export: invalid_input"))
 
 
 if __name__ == "__main__":

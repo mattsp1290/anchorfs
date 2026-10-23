@@ -14,7 +14,7 @@ artifact is claimed.
 | 4b retention (G12) | the same three digests read back at T+0 and T+2 h on the running zot configuration | pending |
 | 5 chart install and Helm test | `scripts/cluster/install.sh` transcript, `helm test`, `probe` binary tests | probe binary tests, chart lint and `check-chart.sh` (Helm 4.3.0) passed locally; install and `helm test` pending |
 | 6 two-node proof | `cluster` test output and `cluster-evidence.json` | pending (test authored separately; never run) |
-| 7 records | provenance tests, `dependencies.md`, this map | provenance tests passed locally (16 after the standard review); standard code-review checkpoint complete 2026-10-23 (see the review record); GitHub CI `packaging` fix included; thermonuclear checkpoint pending |
+| 7 records | provenance tests, `dependencies.md`, this map | provenance tests passed locally (16 after the standard review); standard and thermonuclear code-review checkpoints complete 2026-10-23 (see the review record); GitHub CI green on the first checkpoint commit |
 | image packaging regression | `ci/image-smoke.sh` on the restructured Dockerfile | local linux/arm64 passed; GitHub `image-amd64` and `image-arm64` pending |
 
 See [review evidence](stage3b-delivery-and-cluster-review.md) for commands,

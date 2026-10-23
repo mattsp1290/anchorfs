@@ -1,10 +1,8 @@
 //! Worker pod lifecycle: template substitution from ConfigMap `anchorfs-worker-template`,
 //! readiness and FUSE-entry waits with G4 diagnostics, and the quiesced delete protocol.
-use crate::{
-    api::SessionRef,
-    kube::{Kubectl, LogCapture, MAX_WAIT, PodWatch, log_has_event},
-};
-use serde_json::Value;
+use crate::kube::{Kubectl, LogCapture, MAX_WAIT, PodWatch, log_has_event};
+use anchorfs_client::auth::SessionAuthority;
+use serde_json::{Value, json};
 use std::{
     thread,
     time::{Duration, Instant},
@@ -25,7 +23,7 @@ pub struct WorkerSpec<'a> {
     pub name: &'a str,
     pub node: &'a str,
     pub workspace: Uuid,
-    pub session: &'a SessionRef,
+    pub session: &'a SessionAuthority,
     pub credential_secret: &'a str,
     /// Workflow Secret name (key `token`) and the lease mutation epoch for a bound successor.
     pub workflow: Option<(&'a str, i64)>,
@@ -47,7 +45,6 @@ pub struct ContainerImage {
 pub struct PodFacts {
     pub node_name: String,
     pub uid: String,
-    pub image_ids: Vec<String>,
     pub containers: Vec<ContainerImage>,
 }
 
@@ -59,6 +56,7 @@ pub struct DeleteReport {
 pub struct Pods {
     pub kubectl: Kubectl,
     pub run: String,
+    /// `pod.yaml` of ConfigMap `anchorfs-worker-template`.
     template: String,
 }
 
@@ -72,39 +70,17 @@ pub fn blocked(node: &str, stage: &str) -> ! {
 }
 
 impl Pods {
-    /// Cheap and infallible; the ConfigMap is read by `load_template` inside the proof's
-    /// panic guard so a missing template is recorded as a failed phase in the evidence.
-    pub fn new(kubectl: &Kubectl, run: &str) -> Self {
+    pub fn new(kubectl: &Kubectl, run: &str, template: String) -> Self {
         Self {
             kubectl: kubectl.clone(),
             run: run.into(),
-            template: String::new(),
+            template,
         }
     }
 
-    /// Reads `pod.yaml` from ConfigMap `anchorfs-worker-template`.
-    pub fn load_template(&mut self) {
-        let config = self
-            .kubectl
-            .get_json(&["configmap", "anchorfs-worker-template"]);
-        self.template = config["data"]["pod.yaml"]
-            .as_str()
-            .expect("ConfigMap anchorfs-worker-template has no pod.yaml")
-            .to_owned();
-    }
-
-    /// Plain string substitution of every placeholder plus the run label.
-    pub fn render(&self, spec: &WorkerSpec<'_>) -> String {
-        let (workflow_secret, epoch_args) = match spec.workflow {
-            Some((secret, epoch)) => (
-                secret.to_owned(),
-                format!(
-                    "\"--workflow-epoch\", \"{epoch}\", \"--workflow-token-file\", \"/etc/anchorfs/workflow/token\""
-                ),
-            ),
-            None => (spec.credential_secret.to_owned(), String::new()),
-        };
-        assert!(!self.template.is_empty(), "worker template not loaded");
+    /// Substitutes the scalar placeholders, converts the manifest once to JSON with kubectl
+    /// and edits the parsed object (run label, optional workflow arguments and Secret volume).
+    pub fn render(&self, spec: &WorkerSpec<'_>) -> Value {
         let mut text = self.template.clone();
         for (placeholder, value) in [
             ("__NAME__", spec.name.to_owned()),
@@ -113,16 +89,15 @@ impl Pods {
             ("__SESSION_ID__", spec.session.session_id.to_string()),
             ("__SESSION_EPOCH__", spec.session.session_epoch.to_string()),
             ("__CREDENTIAL_SECRET__", spec.credential_secret.to_owned()),
-            ("__WORKFLOW_SECRET__", workflow_secret),
-            ("__WORKFLOW_EPOCH_ARGS__", epoch_args),
         ] {
             text = text.replace(placeholder, &value);
         }
-        assert!(
-            !has_placeholder(&text),
-            "worker template still contains a placeholder after substitution"
-        );
-        add_run_label(&text, &self.run)
+        let mut pod = self.kubectl.to_json(&text);
+        if let Some(left) = leftover_placeholder(&pod) {
+            panic!("worker template still contains a placeholder after substitution: {left}");
+        }
+        edit_pod(&mut pod, &self.run, spec.workflow);
+        pod
     }
 
     /// Applies the pod, waits for readiness of both containers and for the FUSE entry.
@@ -131,7 +106,7 @@ impl Pods {
             name: spec.name.into(),
             node: spec.node.into(),
         };
-        self.kubectl.apply(&self.render(spec));
+        self.kubectl.apply(&self.render(spec).to_string());
         let resource = format!("pod/{}", pod.name);
         if !self.kubectl.wait_condition(&resource, "Ready", MAX_WAIT) {
             self.diagnostics(&pod);
@@ -246,14 +221,6 @@ impl Pods {
             containers,
             node_name: status["spec"]["nodeName"].as_str().unwrap_or("").to_owned(),
             uid: status["metadata"]["uid"].as_str().unwrap_or("").to_owned(),
-            image_ids: status["status"]["containerStatuses"]
-                .as_array()
-                .map(|all| {
-                    all.iter()
-                        .filter_map(|c| c["imageID"].as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default(),
         }
     }
 
@@ -275,25 +242,10 @@ impl Pods {
         );
     }
 
-    /// Kills the known worker-side loop. The pattern `[t]ick` keeps the snippet from matching
-    /// its own command line.
-    pub fn kill_loops(&self, pod: &WorkerPod) {
-        self.kill_loops_in(&pod.name, Duration::from_secs(120));
-    }
-
-    fn kill_loops_in(&self, pod_name: &str, timeout: Duration) {
-        let marker = LOOP_MARKER.replace("-tick", "-[t]ick");
-        let script = format!(
-            "for p in /proc/[0-9]*; do pid=${{p#/proc/}}; [ \"$pid\" = \"$$\" ] && continue; \
-             if tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q '{marker}'; then kill $pid; fi; done; true"
-        );
-        let _ = self.kubectl.exec_sh(pod_name, "worker", &script, timeout);
-    }
-
     /// Step 1 of `delete_pod`: no worker-side process may hold a cwd or fd under /workspace,
     /// because the propagated mount copy would make the sidecar's non-lazy unmount fail.
     pub fn quiesce(&self, pod: &WorkerPod) {
-        self.kill_loops(pod);
+        kill_loops(&self.kubectl, &pod.name, Duration::from_secs(120));
         let script = format!(
             "ls -l /proc/[0-9]*/cwd /proc/[0-9]*/fd 2>/dev/null | grep {WORKSPACE_PATH}; true"
         );
@@ -355,12 +307,13 @@ impl Pods {
         let deadline = started + GRACE + Duration::from_secs(10);
         let mut seen = MountEvents::default();
         let mut removed_after = None;
-        while Instant::now() < deadline {
+        while Instant::now() < deadline && (seen.exit_code.is_none() || removed_after.is_none()) {
             seen = scan_mount_events(&watch.events());
-            if seen.deleted {
+            if seen.deleted && removed_after.is_none() {
                 removed_after = Some(started.elapsed());
             }
-            if seen.exit_code.is_some() || seen.deleted {
+            // A vanished pod will report nothing further.
+            if seen.deleted && seen.exit_code.is_none() {
                 break;
             }
             thread::sleep(Duration::from_millis(200));
@@ -382,13 +335,6 @@ impl Pods {
             "node {}: sidecar log lacks the \"mount shut down\" event:\n{log}",
             pod.node
         );
-        while removed_after.is_none() && Instant::now() < deadline {
-            if scan_mount_events(&watch.events()).deleted {
-                removed_after = Some(started.elapsed());
-                break;
-            }
-            thread::sleep(Duration::from_millis(200));
-        }
         match removed_after {
             Some(removed_after) => DeleteReport {
                 mount_exit_code: exit_code,
@@ -400,21 +346,32 @@ impl Pods {
             ),
         }
     }
+}
 
-    /// Best-effort teardown of every object carrying this run's label.
-    pub fn cleanup(&self) {
-        let selector = run_selector(&self.run);
-        // Quiesce first: a tick loop still appending under /workspace would make the sidecar's
-        // non-lazy unmount fail and leave a dead FUSE mount on the node after SIGKILL.
-        if let Some(list) = self.kubectl.try_get_json(&["pods", "-l", &selector]) {
-            for item in list["items"].as_array().into_iter().flatten() {
-                if let Some(name) = item["metadata"]["name"].as_str() {
-                    self.kill_loops_in(name, Duration::from_secs(20));
-                }
+/// Kills the known worker-side loop. The pattern `[t]ick` keeps the snippet from matching
+/// its own command line.
+pub fn kill_loops(kubectl: &Kubectl, pod_name: &str, timeout: Duration) {
+    let marker = LOOP_MARKER.replace("-tick", "-[t]ick");
+    let script = format!(
+        "for p in /proc/[0-9]*; do pid=${{p#/proc/}}; [ \"$pid\" = \"$$\" ] && continue; \
+         if tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q '{marker}'; then kill $pid; fi; done; true"
+    );
+    let _ = kubectl.exec_sh(pod_name, "worker", &script, timeout);
+}
+
+/// Best-effort teardown of every object carrying this run's label.
+pub fn cleanup_run(kubectl: &Kubectl, run: &str) {
+    let selector = run_selector(run);
+    // Quiesce first: a tick loop still appending under /workspace would make the sidecar's
+    // non-lazy unmount fail and leave a dead FUSE mount on the node after SIGKILL.
+    if let Some(list) = kubectl.try_get_json(&["pods", "-l", &selector]) {
+        for item in list["items"].as_array().into_iter().flatten() {
+            if let Some(name) = item["metadata"]["name"].as_str() {
+                kill_loops(kubectl, name, Duration::from_secs(20));
             }
         }
-        self.kubectl.delete_by_label("pod,secret", &selector);
     }
+    kubectl.delete_by_label("pod,secret", &selector);
 }
 
 /// What a pod watch stream has shown about the `mount` container.
@@ -446,41 +403,47 @@ fn scan_mount_events(events: &[Value]) -> MountEvents {
     seen
 }
 
-fn has_placeholder(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    let mut start = 0;
-    while let Some(offset) = text[start..].find("__") {
-        let at = start + offset + 2;
-        let word: usize = bytes[at.min(bytes.len())..]
-            .iter()
-            .take_while(|b| b.is_ascii_uppercase() || **b == b'_')
-            .count();
-        if word >= 2 && text[at..at + word].contains(|c: char| c.is_ascii_uppercase()) {
-            // `__NAME__` style: uppercase letters then a closing `__`.
-            if text[at..at + word].ends_with("__") {
-                return true;
-            }
-        }
-        start = at;
+/// First string in the manifest that still holds an unsubstituted `__PLACEHOLDER__` marker.
+fn leftover_placeholder(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if text.contains("__") => Some(text.clone()),
+        Value::Array(all) => all.iter().find_map(leftover_placeholder),
+        Value::Object(map) => map.values().find_map(leftover_placeholder),
+        _ => None,
     }
-    false
 }
 
-fn add_run_label(manifest: &str, run: &str) -> String {
-    let marker = "anchorfs.proof/role: worker";
-    let mut out = String::with_capacity(manifest.len() + 64);
-    let mut added = false;
-    for line in manifest.lines() {
-        out.push_str(line);
-        out.push('\n');
-        if !added && line.trim_start().starts_with(marker) {
-            let indent = &line[..line.len() - line.trim_start().len()];
-            out.push_str(&format!("{indent}anchorfs.proof/run: \"{run}\"\n"));
-            added = true;
-        }
-    }
-    assert!(added, "worker template lacks the anchorfs.proof/role label");
-    out
+/// Adds the run label and, for a pod bound to a workflow lease, the workflow arguments and the
+/// Secret volume (key `token`) with its read-only mount on the `mount` container.
+fn edit_pod(pod: &mut Value, run: &str, workflow: Option<(&str, i64)>) {
+    pod["metadata"]["labels"]["anchorfs.proof/run"] = json!(run);
+    let Some((secret, epoch)) = workflow else {
+        return;
+    };
+    let mount = pod["spec"]["containers"]
+        .as_array_mut()
+        .and_then(|all| all.iter_mut().find(|c| c["name"] == "mount"))
+        .expect("worker template has a mount container");
+    mount["args"]
+        .as_array_mut()
+        .expect("mount container args")
+        .extend(
+            [
+                "--workflow-epoch",
+                &epoch.to_string(),
+                "--workflow-token-file",
+                "/etc/anchorfs/workflow/token",
+            ]
+            .map(Value::from),
+        );
+    mount["volumeMounts"]
+        .as_array_mut()
+        .expect("mount container volumeMounts")
+        .push(json!({"name": "workflow", "mountPath": "/etc/anchorfs/workflow", "readOnly": true}));
+    pod["spec"]["volumes"]
+        .as_array_mut()
+        .expect("pod volumes")
+        .push(json!({"name": "workflow", "secret": {"secretName": secret, "defaultMode": 288}}));
 }
 
 /// True when mountinfo has a `fuse`/`fuse.*` filesystem mounted at `path`.
@@ -505,13 +468,6 @@ fn fuse_entry_parser_requires_fuse_at_the_workspace() {
 }
 
 #[test]
-fn placeholder_scan_finds_only_template_tokens() {
-    assert!(has_placeholder("name: __NAME__"));
-    assert!(has_placeholder("x __WORKFLOW_EPOCH_ARGS__]"));
-    assert!(!has_placeholder("name: anchorfs-proof my_var __init"));
-}
-
-#[test]
 fn mount_events_report_terminated_state_and_deletion_in_order() {
     let running = serde_json::json!({"type": "ADDED", "object": {"status": {"containerStatuses": [
         {"name": "mount", "state": {"running": {}}}]}}});
@@ -532,107 +488,65 @@ fn mount_events_report_terminated_state_and_deletion_in_order() {
     assert!(vanished.exit_code.is_none() && vanished.deleted);
 }
 
-/// Fixture with the two template lines whose substitution the cluster run depends on: the
-/// mount `args` flow sequence ending in `__WORKFLOW_EPOCH_ARGS__` (a trailing comma in the
-/// ordinary variant, which libyaml-derived parsers such as kubectl's accept) and the label
-/// the run label is attached to.
-#[cfg(test)]
-const FIXTURE_TEMPLATE: &str = "apiVersion: v1
-kind: Pod
-metadata:
-  name: __NAME__
-  labels:
-    anchorfs.proof/role: worker
-spec:
-  nodeName: __NODE__
-  volumes:
-    - name: credential
-      secret:
-        secretName: __CREDENTIAL_SECRET__
-    - name: workflow
-      secret:
-        secretName: __WORKFLOW_SECRET__
-        optional: true
-  containers:
-    - name: mount
-      args: [\"mount\", \"/workspace\", \"--workspace\", \"__WORKSPACE__\", \"--session-id\", \"__SESSION_ID__\", \"--session-epoch\", \"__SESSION_EPOCH__\", \"--log-format\", \"json\", __WORKFLOW_EPOCH_ARGS__]
-";
-
-/// The `args: [...]` flow sequence of a rendered manifest as JSON, tolerating the single
-/// trailing comma YAML flow sequences allow.
-#[cfg(test)]
-fn rendered_args(manifest: &str) -> Vec<String> {
-    let line = manifest
-        .lines()
-        .find_map(|l| l.trim_start().strip_prefix("args: "))
-        .expect("args line");
-    let inner = line
-        .trim()
-        .strip_prefix('[')
-        .and_then(|l| l.strip_suffix(']'))
-        .expect("flow sequence brackets");
-    let inner = inner.trim_end();
-    let inner = inner.strip_suffix(',').unwrap_or(inner);
-    let parsed: Vec<String> =
-        serde_json::from_str(&format!("[{inner}]")).expect("args parse as a flow sequence");
-    parsed
-}
-
-#[cfg(test)]
-fn fixture_pods() -> Pods {
-    let mut pods = Pods::new(&Kubectl::new("kubectl", "/nonexistent", "ns"), "run-1");
-    pods.template = FIXTURE_TEMPLATE.to_owned();
-    pods
-}
-
 #[test]
-fn substituted_worker_template_parses_for_ordinary_and_bound_pods() {
-    let pods = fixture_pods();
-    let session = SessionRef {
-        session_id: Uuid::nil(),
-        session_epoch: 3,
-    };
-    let ordinary = pods.render(&WorkerSpec {
-        name: "pod-a",
-        node: "node-1",
-        workspace: Uuid::nil(),
-        session: &session,
-        credential_secret: "cred-1",
-        workflow: None,
+fn pod_edits_label_ordinary_pods_and_extend_bound_ones() {
+    let pod = json!({
+        "metadata": {"labels": {"anchorfs.proof/role": "worker"}},
+        "spec": {
+            "volumes": [{"name": "credential", "secret": {"secretName": "cred-1"}}],
+            "containers": [
+                {"name": "mount", "args": ["mount", "--log-format", "json"], "volumeMounts": []},
+                {"name": "worker"}
+            ]
+        }
     });
-    let args = rendered_args(&ordinary);
-    assert_eq!(args.first().map(String::as_str), Some("mount"));
-    assert_eq!(args.last().map(String::as_str), Some("json"));
-    assert!(!args.iter().any(|a| a.starts_with("--workflow")));
-    assert!(ordinary.contains("secretName: cred-1"));
-    assert!(ordinary.contains("anchorfs.proof/run: \"run-1\""));
-    assert!(!has_placeholder(&ordinary));
-
-    let bound = pods.render(&WorkerSpec {
-        name: "pod-d",
-        node: "node-2",
-        workspace: Uuid::nil(),
-        session: &session,
-        credential_secret: "cred-2",
-        workflow: Some(("wf-secret", 7)),
-    });
-    let args = rendered_args(&bound);
-    let tail: Vec<&str> = args
-        .iter()
-        .rev()
-        .take(4)
-        .rev()
-        .map(String::as_str)
-        .collect();
+    let mut ordinary = pod.clone();
+    edit_pod(&mut ordinary, "run-1", None);
     assert_eq!(
-        tail,
-        [
+        ordinary["metadata"]["labels"]["anchorfs.proof/run"],
+        "run-1"
+    );
+    assert_eq!(
+        ordinary["metadata"]["labels"]["anchorfs.proof/role"],
+        "worker"
+    );
+    assert_eq!(
+        ordinary["spec"]["containers"][0]["args"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(
+        ordinary["spec"]["volumes"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    let mut bound = pod;
+    edit_pod(&mut bound, "run-1", Some(("wf-secret", 7)));
+    assert_eq!(
+        bound["spec"]["containers"][0]["args"],
+        json!([
+            "mount",
+            "--log-format",
+            "json",
             "--workflow-epoch",
             "7",
             "--workflow-token-file",
             "/etc/anchorfs/workflow/token"
-        ]
+        ])
     );
-    assert!(bound.contains("secretName: wf-secret"));
-    assert!(bound.contains("secretName: cred-2"));
+    assert_eq!(
+        bound["spec"]["volumes"][1]["secret"]["secretName"],
+        "wf-secret"
+    );
+    assert_eq!(
+        bound["spec"]["volumes"][0]["secret"]["secretName"],
+        "cred-1"
+    );
+    assert_eq!(
+        bound["spec"]["containers"][0]["volumeMounts"][0]["name"],
+        "workflow"
+    );
+    assert_eq!(leftover_placeholder(&bound), None);
+    assert!(leftover_placeholder(&json!({"a": ["x __NAME__"]})).is_some());
 }

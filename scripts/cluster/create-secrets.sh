@@ -12,10 +12,7 @@
 # volume).
 set -euo pipefail
 
-: "${KUBECONFIG:?set KUBECONFIG, e.g. /etc/rancher/k3s/k3s.yaml}"
-KUBECTL="${KUBECTL:-k3s kubectl}"
-NS=anchorfs
-k() { $KUBECTL "$@"; }
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 rotate=0
 case "${1:-}" in

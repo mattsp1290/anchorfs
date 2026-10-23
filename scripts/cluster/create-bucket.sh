@@ -18,13 +18,10 @@
 # pods are deleted first.
 set -euo pipefail
 
-: "${KUBECONFIG:?set KUBECONFIG, e.g. /etc/rancher/k3s/k3s.yaml}"
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 : "${MINIO_IMAGE_DIGEST:?set MINIO_IMAGE_DIGEST=sha256:<64 hex> of bitnamilegacy/minio}"
-KUBECTL="${KUBECTL:-k3s kubectl}"
-NS=anchorfs
 BUCKET="${BUCKET:-anchorfs}"
 MINIO_IMAGE_REPO="${MINIO_IMAGE_REPO:-bitnamilegacy/minio}"
-k() { $KUBECTL "$@"; }
 
 [[ "$MINIO_IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "MINIO_IMAGE_DIGEST must be sha256:<64 hex>" >&2; exit 2; }
 

@@ -10,10 +10,18 @@ mod api;
 mod cases;
 #[path = "cluster/evidence.rs"]
 mod evidence;
+#[path = "cluster/fencing.rs"]
+mod fencing;
+#[path = "cluster/harness.rs"]
+mod harness;
+#[path = "cluster/journey.rs"]
+mod journey;
 #[path = "cluster/kube.rs"]
 mod kube;
 #[path = "cluster/pods.rs"]
 mod pods;
+#[path = "cluster/preflight.rs"]
+mod preflight;
 
 #[test]
 #[ignore = "owner-run against a live cluster; see docs/ops/cluster-proof.md"]

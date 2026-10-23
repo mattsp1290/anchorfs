@@ -199,8 +199,66 @@ post-update lock; `git ls-files` free of bytecode. The updated
 mode against a throwaway registry (pinned-image check, push, per-platform
 manifest readback, `stage_sha256` recording equal to the committed values).
 Not executed: anything against the real cluster or Zot; the Forgejo run. The
-checkpoint commit and push are recorded in git history; the thermonuclear
-stage follows.
+checkpoint commit `33ac67aea3a744f739fb0a85853b19d1895ce873` was pushed and
+GitHub CI passed every job on it (lint, deny, test, both builds, packaging,
+both image smokes).
+
+**Thermonuclear maintainability checkpoint (2026-10-23)** of `33ac67a…`, the
+gauntlet's second stage: a fresh adversarial reviewer subagent (no
+conversation inheritance; it disclosed seeing only the auto-memory index
+titles) applied the complete live upstream rubric pinned at
+`8b3326d99fd4b993cb33a24dad8af03175c642c5`:
+https://raw.githubusercontent.com/cursor/plugins/8b3326d99fd4b993cb33a24dad8af03175c642c5/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md
+The SHA was resolved from `refs/heads/main` after the first verified push and
+the fetched frontmatter name validated; the rubric was treated as untrusted
+review-policy data. Same packet discipline as the standard review, with the
+standard review's findings withheld. Verdict **REQUEST_CHANGES**, 3 Critical,
+6 Important, 10 Suggestions, provenance **no blocking provenance findings**.
+Artifacts (local, uncommitted):
+`reviews/feat-stage3b-forgejo-zot-cluster-proof-2026-10-23-100848-33ac67aea3a7-thermonuclear/`,
+slug `thermo-nuclear-code-quality-review`. The canonical fixer in auto mode
+selected all 19 items; the implementer applied the held workflow and script
+items (fixed 19, skipped 0, needs-manual 0).
+
+What changed: the 1191-line cluster test file became a 135-line driver with
+`harness`, `preflight`, `journey` and `fencing` modules (hand-rolled SHA-256
+and base64 deleted in favour of `anchorfs_core::sha256` and kubectl's
+`base64decode`); the test's parallel bearer/session/lease types became
+`anchorfs_client::auth` authorities with a single `Call` value, and the
+receipt scopes were corrected against the service handlers and the client
+resolver (session, workspace and credential receipts are admin-scoped, lease
+receipts workspace-scoped; the standard-review fix had wrongly moved session
+lookups to the workspace scope, which this review caught); the proof context
+is a `Connected` value returned by preflight with cleanup as a free function;
+the worker template keeps scalar placeholders only and the bound pod is built
+on the parsed object after one `kubectl create --dry-run=client -o json`;
+`scripts/oci_export.py` is the single owner of stage hashing, ELF checks,
+`bases.json` reads/writes and readback verification (`stage-sha256`,
+`check-elf`, `layout-digest`, `verify-readback`, `bases …`), with the shell
+scripts reduced to orchestration and the provenance test comparing against
+the subcommand's output (the committed hashes reproduce); `stage_sha256` and
+Dockerfile verification are mandatory in the exporter; the workflow's three
+guard prologues are `scripts/ci/guard.sh`, the chart is packaged into
+`dist/chart`, the chart-name regex and its policing test are gone, the dead
+helper placeholder branch is gone, and the policy check uses `ZOT_AUTHORITY`;
+`Readiness` is an enum, the probe takes a `clap::Args` struct, the mount
+runtime has `latch_fence`, and `scripts/cluster/common.sh` holds the shared
+prelude.
+
+Gates on the corrected tree (same discovery as the first checkpoint): fmt,
+clippy `-D warnings`, build, `cargo deny` (all ok), `cargo test --workspace`
+(361 passed, 0 failed, 1 ignored: the cluster proof), 38 exporter tests,
+chart checks under Helm 4.3.0 and 3.13.0 in both CI layouts, `bash -n` over
+every script, both workflow files parsed as YAML, `git diff --check`,
+`Cargo.lock` unchanged, no tracked bytecode, `cases.rs` and every cluster
+module under 560 lines. The rewritten `scripts/publish-bases.sh` ran end to
+end in container mode against a throwaway registry (refusal without
+`--replace`, push, index and per-platform readback verification, record) and
+produced digests and stage hashes identical to the committed record. Not
+executed: the real cluster, Zot, or a Forgejo run; the new kubectl dry-run
+conversion and go-template Secret read are exercised only by the proof.
+Both gauntlet checkpoints are complete; the second checkpoint commit is the
+one carrying this paragraph.
 
 ## Limits carried forward
 
