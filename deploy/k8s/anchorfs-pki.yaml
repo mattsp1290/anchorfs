@@ -22,7 +22,8 @@ spec:
   isCA: true
   commonName: anchorfs-ca
   secretName: anchorfs-ca
-  duration: 2160h
+  duration: 8760h      # longer than the 2160h leaves so their validity is not truncated
+  renewBefore: 1440h   # 60 days, well ahead of leaf renewal windows
   privateKey:
     algorithm: ECDSA
     size: 256

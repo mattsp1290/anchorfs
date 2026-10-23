@@ -3,8 +3,13 @@
 //! leases, and the session negatives. Shapes follow `docs/api/openapi-v1.yaml`; the in-process
 //! helpers under `tests/common` are shape references only (they use axum `oneshot`).
 //! Debug output of secret-bearing types is redacted.
+use crate::kube::PortForward;
 use serde_json::{Value, json};
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::{Arc, Mutex, PoisonError},
+    time::Duration,
+};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -68,11 +73,20 @@ impl fmt::Debug for Lease {
 pub struct Reply {
     pub status: u16,
     pub body: Value,
+    /// True when the original response was lost and this reply was rebuilt from the committed
+    /// operation receipt (HTTP 200 from the lookup, whatever the original success status was).
+    pub recovered: bool,
 }
 impl Reply {
     pub fn expect(self, status: u16, what: &str) -> Self {
+        // A recovered receipt stands for the original success; only the lookup's 200 is seen.
+        let observed = if self.recovered && self.status == 200 && (200..300).contains(&status) {
+            status
+        } else {
+            self.status
+        };
         assert_eq!(
-            self.status, status,
+            observed, status,
             "{what}: expected HTTP {status}, got {} code={} message={}",
             self.status, self.body["code"], self.body["message"]
         );
@@ -91,6 +105,7 @@ pub struct Api {
     runtime: Arc<Runtime>,
     http: reqwest::Client,
     base: String,
+    forward: Option<Arc<Mutex<PortForward>>>,
 }
 impl Api {
     pub fn new(runtime: Arc<Runtime>, base: &str, ca_pem: &[u8]) -> Self {
@@ -105,6 +120,22 @@ impl Api {
             runtime,
             http: builder.build().expect("http client"),
             base: base.trim_end_matches('/').to_owned(),
+            forward: None,
+        }
+    }
+
+    /// Shares the port-forward so every request (including retries) can restart a dead one.
+    pub fn with_forward(mut self, forward: Arc<Mutex<PortForward>>) -> Self {
+        self.forward = Some(forward);
+        self
+    }
+
+    fn ensure_forward(&self) {
+        if let Some(forward) = &self.forward {
+            forward
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .ensure_alive();
         }
     }
 
@@ -120,6 +151,7 @@ impl Api {
         key: Option<&str>,
         body: Option<&Value>,
     ) -> Result<Reply, String> {
+        self.ensure_forward();
         let mut request = self
             .http
             .request(method, format!("{}{path}", self.base))
@@ -152,7 +184,11 @@ impl Api {
                 .await
                 .map_err(|e| e.without_url().to_string())?;
             let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-            Ok(Reply { status, body })
+            Ok(Reply {
+                status,
+                body,
+                recovered: false,
+            })
         })
     }
 
@@ -204,12 +240,14 @@ impl Api {
                     return Reply {
                         status: 200,
                         body: found.body["result"].clone(),
+                        recovered: true,
                     };
                 }
                 if found.status == 200 && found.body["state"] == "failed" {
                     return Reply {
                         status: 409,
                         body: found.body,
+                        recovered: true,
                     };
                 }
             }
@@ -322,7 +360,7 @@ impl Api {
             .mutate(
                 reqwest::Method::POST,
                 &format!("/v1/workspaces/{workspace}/sessions"),
-                Scope::Admin,
+                Scope::Workspace(workspace),
                 actor,
                 None,
                 None,
@@ -412,6 +450,33 @@ impl Api {
             None,
         )
         .expect(200, "releaseWorkflowLease");
+    }
+
+    /// Renews the workflow lease TTL (owner host credential, unbound session, lease proof).
+    /// The mutation epoch is unchanged by a renewal; it is returned for the caller to check.
+    pub fn renew_lease(
+        &self,
+        host: &Bearer,
+        session: &SessionRef,
+        workspace: Uuid,
+        lease: &Lease,
+    ) -> i64 {
+        let reply = self
+            .mutate(
+                reqwest::Method::POST,
+                &format!("/v1/workspaces/{workspace}/workflow-lease/renew"),
+                Scope::Workspace(workspace),
+                host,
+                Some(session),
+                Some(lease),
+                None,
+            )
+            .expect(200, "renewWorkflowLease");
+        let recovered = reply.recovered;
+        reply.body["mutation_epoch"]
+            .as_i64()
+            .or(recovered.then_some(lease.epoch))
+            .expect("mutation_epoch in renewWorkflowLease response")
     }
 
     pub fn renew_session_raw(

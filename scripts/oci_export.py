@@ -9,6 +9,10 @@ Never contacts a registry or a container daemon.
 
 Run with: python3 -I scripts/oci_export.py --help
 
+bases.json may carry a per-base `stage_sha256` (hash of the Dockerfile base stage at
+publication). It is validated when present; with the optional `--dockerfile` the
+exporter also recomputes it from that Dockerfile and refuses a mismatch (base_mismatch).
+
 Errors print one stable code on stderr (invalid_input, base_mismatch,
 elf_architecture, chart_invalid, output_exists) and exit 2. File contents are
 never printed. The receipt is written last, so a failed export has no receipt.
@@ -153,7 +157,9 @@ def load_bases(path):
     require(isinstance(bases, dict) and set(bases) == set(BINARIES), "invalid_input")
     for item in bases.values():
         check_keys(item, ["repository", "dockerfile_target", "index_digest", "platforms",
-                          "published_at", "source_sha"])
+                          "published_at", "source_sha"], optional=["stage_sha256"])
+        if "stage_sha256" in item:
+            match(item["stage_sha256"], DIGEST_RE)
         require(isinstance(item["platforms"], dict)
                 and set(item["platforms"]) == {"linux/amd64", "linux/arm64"}, "invalid_input")
         # The exporter refuses a base that has not been published yet.
@@ -161,6 +167,27 @@ def load_bases(path):
         for value in item["platforms"].values():
             match(value, DIGEST_RE)
     return doc
+
+
+def dockerfile_stage_sha256(dockerfile, target):
+    """SHA-256 of the exact bytes from `FROM ... AS <target>` up to the next `FROM` line.
+
+    Same algorithm as scripts/publish-bases.sh and the provenance test."""
+    lines = read_regular(dockerfile, MAX_JSON).splitlines(keepends=True)
+    suffix = b" AS " + target.encode("utf-8")
+    start = next((i for i, line in enumerate(lines)
+                  if line.startswith(b"FROM ") and line.rstrip(b"\r\n").endswith(suffix)), None)
+    require(start is not None, "base_mismatch")
+    end = next((j for j in range(start + 1, len(lines)) if lines[j].startswith(b"FROM ")), len(lines))
+    return "sha256:" + sha256_hex(b"".join(lines[start:end]))
+
+
+def verify_stage_hashes(bases, dockerfile):
+    """With --dockerfile, refuse a base whose recorded stage hash differs from the Dockerfile."""
+    for item in bases["bases"].values():
+        require("stage_sha256" in item, "base_mismatch")
+        require(dockerfile_stage_sha256(dockerfile, item["dockerfile_target"]) == item["stage_sha256"],
+                "base_mismatch")
 
 
 # -------------------------------------------------------------- base layouts
@@ -191,7 +218,15 @@ class BaseLayout:
         return path
 
     def platform(self, index_digest, platform_digests):
-        """Return {arch: (manifest_digest, config_obj, layer_descriptors)}."""
+        """Return {arch: (manifest_digest, config_obj, layer_descriptors)}.
+
+        Structurally malformed (but valid JSON) layouts are refused as base_mismatch."""
+        try:
+            return self._platform(index_digest, platform_digests)
+        except (KeyError, TypeError, AttributeError, ValueError):
+            raise ExportError("base_mismatch") from None
+
+    def _platform(self, index_digest, platform_digests):
         require((self.root / "oci-layout").is_file(), "base_mismatch")
         try:
             layout = decode_json(read_regular(self.root / "oci-layout"), "base_mismatch")
@@ -483,6 +518,8 @@ def export(args):
         check_no_symlinks(path)
 
     bases = load_bases(args.bases)
+    if args.dockerfile is not None:
+        verify_stage_hashes(bases, args.dockerfile)
 
     binaries = {}
     for role, name in BINARIES.items():
@@ -553,6 +590,8 @@ def parse_args(argv):
     for flag in ("--source-sha", "--run-id", "--builder-image", "--toolchain-digest", "--bases",
                  "--base-layouts", "--binaries", "--chart-package", "--chart-dir", "--output"):
         p.add_argument(flag, required=True)
+    p.add_argument("--dockerfile", default=None,
+                   help="optional: verify each base's recorded stage_sha256 against this Dockerfile")
     p.add_argument("--app-id", default="anchorfs")
     p.add_argument("--source-repository", default="mattsp1290/anchorfs")
     return p.parse_args(argv)
@@ -565,7 +604,7 @@ def main(argv=None):
     except ExportError as exc:
         print(f"oci_export: {exc.code}", file=sys.stderr)
         return 2
-    except OSError:
+    except (OSError, KeyError, TypeError, AttributeError, ValueError):
         print("oci_export: invalid_input", file=sys.stderr)
         return 2
     return 0

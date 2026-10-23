@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # uninstall.sh [--delete-data] [--delete-pki]: owner-run. Removes proof worker
-# pods and the helm release in namespace anchorfs only. --delete-data also
+# pods, run-labelled proof Secrets, the one-off test-probe and bucket pods, and
+# the helm release in namespace anchorfs only. --delete-data also
 # deletes the dev PVCs and the Secrets created by create-secrets.sh/install.sh;
 # --delete-pki also deletes the cert-manager objects, their Secrets and the
 # namespace labels. Without flags it states what it left behind. Never touches
@@ -24,7 +25,10 @@ done
 
 k get namespace "$NS" >/dev/null 2>&1 || { echo "namespace $NS does not exist; nothing to do"; exit 0; }
 
-k delete pod --namespace "$NS" -l anchorfs.proof/role=worker --ignore-not-found
+k delete pod --namespace "$NS" -l anchorfs.proof/role=worker --ignore-not-found --timeout=90s
+k delete secret --namespace "$NS" -l anchorfs.proof/run --ignore-not-found
+k delete pod --namespace "$NS" --ignore-not-found --timeout=90s \
+  anchorfs-test-probe anchorfs-create-bucket anchorfs-create-bucket-verify
 if $HELM status anchorfs --namespace "$NS" >/dev/null 2>&1; then
   $HELM uninstall anchorfs --namespace "$NS"
 else

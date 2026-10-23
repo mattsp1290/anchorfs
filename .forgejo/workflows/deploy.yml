@@ -14,6 +14,9 @@ name: Deliver main to Zot
 on:
   push:
     branches: [main]
+# `permissions:` and `concurrency:` are written for GitHub-compatible servers but
+# are NOT relied upon: whether this Forgejo honors them is unverified
+# (docs/ops/forgejo-delivery.md). Concurrent publishes are harmless (digest-only).
 permissions:
   contents: read
 concurrency:
@@ -119,6 +122,7 @@ jobs:
           EXPECTED_REVISION: ${{ github.sha }}
           EVENT_REF: ${{ github.ref }}
         run: |
+          case "$EXPECTED_REVISION" in ''|*[!0-9a-f]*) echo invalid_expected_revision >&2; exit 1 ;; esac
           test "${#EXPECTED_REVISION}" -eq 40 || { echo invalid_expected_revision >&2; exit 1; }
           test "$(git rev-parse --verify HEAD)" = "$EXPECTED_REVISION" || { echo checkout_revision_mismatch >&2; exit 1; }
           test "$EVENT_REF" = refs/heads/main || { echo untrusted_ref >&2; exit 1; }
@@ -141,11 +145,15 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           SOURCE_SHA: ${{ github.sha }}
         run: |
+          toolchain_digest="$(python3 -I scripts/ci/toolchain-digest.py)"
+          chart_version="$(python3 -I -c 'import re,sys; m=re.search(r"^version:\s*\"?([0-9A-Za-z.+-]+)\"?\s*$", open("charts/anchorfs/Chart.yaml").read(), re.M); sys.exit("no chart version") if m is None else print(m.group(1))')"
+          chart_tgz="dist/anchorfs-${chart_version}.tgz"
+          test -f "$chart_tgz" || { echo "missing packaged chart $chart_tgz" >&2; exit 1; }
           python3 -I scripts/oci_export.py \
             --source-sha "$SOURCE_SHA" --run-id "$RUN_ID" \
-            --builder-image "$CI_IMAGE" --toolchain-digest "$(python3 -I scripts/ci/toolchain-digest.py)" \
-            --bases docker/bases.json --base-layouts dist/bases \
-            --binaries dist --chart-package dist/anchorfs-0.1.0.tgz --chart-dir charts/anchorfs \
+            --builder-image "$CI_IMAGE" --toolchain-digest "$toolchain_digest" \
+            --bases docker/bases.json --dockerfile docker/Dockerfile --base-layouts dist/bases \
+            --binaries dist --chart-package "$chart_tgz" --chart-dir charts/anchorfs \
             --output export/oci
           # The exporter refuses an output directory inside --binaries or --base-layouts.
           tar -C export -cf dist/oci.tar oci
@@ -186,6 +194,7 @@ jobs:
           EXPECTED_REVISION: ${{ github.sha }}
           EVENT_REF: ${{ github.ref }}
         run: |
+          case "$EXPECTED_REVISION" in ''|*[!0-9a-f]*) echo invalid_expected_revision >&2; exit 1 ;; esac
           test "${#EXPECTED_REVISION}" -eq 40 || { echo invalid_expected_revision >&2; exit 1; }
           test "$(git rev-parse --verify HEAD)" = "$EXPECTED_REVISION" || { echo checkout_revision_mismatch >&2; exit 1; }
           test "$EVENT_REF" = refs/heads/main || { echo untrusted_ref >&2; exit 1; }
@@ -194,12 +203,18 @@ jobs:
           name: oci-layouts
           path: inputs
       - name: Verify artifact transfer and unpack layouts
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
         run: |
           cd inputs
           sha256sum -c oci.tar.sha256
           tar -xf oci.tar
           test -f oci/build.json
           (cd oci && sha256sum -c --quiet SHA256SUMS)
+          # oci.tar.sha256 travels with oci.tar, so it detects corruption, not substitution;
+          # refuse a receipt that does not name this run's commit and run id.
+          python3 -I -c 'import json,os,sys; r=json.load(open("oci/build.json")); sys.exit(0 if (r["source_sha"],r["run_id"])==(os.environ["EXPECTED_REVISION"],os.environ["EXPECTED_RUN_ID"]) else "receipt_identity_mismatch")'
       - name: Check out the shared publisher at its immutable commit (read-only mirror token)
         uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

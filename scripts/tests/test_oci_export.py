@@ -54,7 +54,7 @@ def put_blob(root, raw):
     return d
 
 
-def make_base(root, name):
+def make_base(root, name, layer_media=None):
     """Write a tiny OCI layout with a two-platform index; return the bases.json entry."""
     root.mkdir(parents=True)
     (root / "oci-layout").write_bytes(canon({"imageLayoutVersion": "1.0.0"}))
@@ -75,7 +75,7 @@ def make_base(root, name):
         config_digest = put_blob(root, config_raw)
         manifest = {"schemaVersion": 2, "mediaType": oci_export.OCI_MANIFEST,
                     "config": {"mediaType": oci_export.OCI_CONFIG, "digest": config_digest, "size": len(config_raw)},
-                    "layers": [{"mediaType": oci_export.OCI_LAYER, "digest": layer_digest,
+                    "layers": [{"mediaType": layer_media or oci_export.OCI_LAYER, "digest": layer_digest,
                                 "size": len(layer) + len(arch)}]}
         manifest_raw = canon(manifest)
         manifest_digest = put_blob(root, manifest_raw)
@@ -94,12 +94,14 @@ def make_base(root, name):
             "published_at": "2026-01-01T00:00:00Z", "source_sha": SHA}
 
 
-def make_chart_tgz(path, chart_yaml=CHART_YAML):
+def make_chart_tgz(path, chart_yaml=CHART_YAML, extra=()):
     with tarfile.open(path, "w:gz") as tar:
         for name, data in (("anchorfs/Chart.yaml", chart_yaml), ("anchorfs/values.yaml", b"a: b\n")):
             info = tarfile.TarInfo(name)
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
+        for info in extra:
+            tar.addfile(info)
 
 
 class Fixture:
@@ -333,6 +335,125 @@ class ExportTests(unittest.TestCase):
             code, err = self.fx.run(self.out)
         self.assertEqual((code, err), (2, "oci_export: invalid_input"))
         self.assertFalse((self.out / "build.json").exists())
+
+    # ---- refusal paths -------------------------------------------------------
+
+    def test_rejects_docker_media_type_in_base(self):
+        import shutil
+        shutil.rmtree(self.fx.layouts / "service")
+        bases = json.loads(json.dumps(self.fx.bases))
+        bases["bases"]["service"] = make_base(
+            self.fx.layouts / "service", "service",
+            layer_media="application/vnd.docker.image.rootfs.diff.tar.gzip")
+        self.fx.write_bases(bases)
+        self.assertEqual(self.fx.run(self.out), (2, "oci_export: base_mismatch"))
+
+    def test_rejects_packaged_chart_yaml_differing_from_source(self):
+        other = CHART_YAML.replace(b"version: 0.1.0", b"version: 0.2.0")
+        make_chart_tgz(self.fx.chart_tgz, other)
+        self.assertEqual(self.fx.run(self.out), (2, "oci_export: chart_invalid"))
+        self.assertFalse(self.out.exists())
+
+    def test_rejects_symlink_member_in_chart(self):
+        link = tarfile.TarInfo("anchorfs/link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/etc/passwd"
+        make_chart_tgz(self.fx.chart_tgz, extra=[link])
+        self.assertEqual(self.fx.run(self.out), (2, "oci_export: chart_invalid"))
+
+    def test_rejects_dotdot_member_in_chart(self):
+        info = tarfile.TarInfo("anchorfs/../evil")
+        info.size = 0
+        make_chart_tgz(self.fx.chart_tgz, extra=[info])
+        self.assertEqual(self.fx.run(self.out), (2, "oci_export: chart_invalid"))
+
+    def test_rejects_output_inside_binaries(self):
+        inside = self.fx.dist / "export"
+        self.assertEqual(self.fx.run(inside), (2, "oci_export: invalid_input"))
+        self.assertFalse(inside.exists())
+
+    def test_rejects_base_blob_whose_bytes_do_not_match_its_digest_name(self):
+        item = self.fx.bases["bases"]["mount"]
+        layout = self.fx.layouts / "mount"
+        manifest = read_json(blob(layout, item["platforms"]["linux/amd64"]))
+        victim = blob(layout, manifest["layers"][0]["digest"])
+        victim.write_bytes(b"x" * len(victim.read_bytes()))  # same size, wrong content
+        self.assertEqual(self.fx.run(self.out), (2, "oci_export: base_mismatch"))
+
+    def test_malformed_base_json_is_a_refusal_not_a_traceback(self):
+        # index.json whose top level is a list
+        (self.fx.layouts / "service" / "index.json").write_bytes(b"[]")
+        self.assertEqual(self.fx.run(self.out), (2, "oci_export: base_mismatch"))
+
+    def test_manifest_without_config_digest_is_a_refusal(self):
+        item = self.fx.bases["bases"]["service"]
+        layout = self.fx.layouts / "service"
+        bad = read_json(blob(layout, item["platforms"]["linux/amd64"]))
+        del bad["config"]["digest"]
+        raw = canon(bad)
+        digest = put_blob(layout, raw)
+        index = read_json(blob(layout, item["index_digest"]))
+        for child in index["manifests"]:
+            if child["platform"]["architecture"] == "amd64":
+                child["digest"], child["size"] = digest, len(raw)
+        index_raw = canon(index)
+        index_digest = put_blob(layout, index_raw)
+        (layout / "index.json").write_bytes(canon({"schemaVersion": 2, "manifests": [
+            {"mediaType": oci_export.OCI_INDEX, "digest": index_digest, "size": len(index_raw)}]}))
+        bases = json.loads(json.dumps(self.fx.bases))
+        bases["bases"]["service"]["index_digest"] = index_digest
+        bases["bases"]["service"]["platforms"]["linux/amd64"] = digest
+        self.fx.write_bases(bases)
+        self.assertEqual(self.fx.run(self.out), (2, "oci_export: base_mismatch"))
+
+    # ---- base stage hash (drift detection) ----------------------------------
+
+    def dockerfile(self, extra=""):
+        path = self.tmp / "Dockerfile"
+        path.write_bytes((b"FROM rust:1 AS builder\nRUN true\n"
+                          b"FROM debian AS service-base\nRUN a\n" + extra.encode()
+                          + b"FROM service-base AS service\nCOPY x y\n"
+                          b"FROM debian AS mount-base\nRUN b\n"))
+        return path
+
+    def record_stage_hashes(self, dockerfile):
+        bases = json.loads(json.dumps(self.fx.bases))
+        for role in ("service", "mount"):
+            target = bases["bases"][role]["dockerfile_target"]
+            bases["bases"][role]["stage_sha256"] = oci_export.dockerfile_stage_sha256(dockerfile, target)
+        self.fx.write_bases(bases)
+
+    def test_stage_sha256_key_is_accepted_without_dockerfile(self):
+        self.record_stage_hashes(self.dockerfile())
+        self.export_ok()
+
+    def test_stage_hash_verified_against_dockerfile(self):
+        dockerfile = self.dockerfile()
+        self.record_stage_hashes(dockerfile)
+        code, err = self.fx.run(self.out, **{"--dockerfile": str(dockerfile)})
+        self.assertEqual((code, err), (0, ""))
+
+    def test_stage_hash_mismatch_is_refused(self):
+        self.record_stage_hashes(self.dockerfile())
+        changed = self.dockerfile(extra="RUN added\n")
+        self.assertEqual(self.fx.run(self.out, **{"--dockerfile": str(changed)}),
+                         (2, "oci_export: base_mismatch"))
+        self.assertFalse(self.out.exists())
+
+    def test_dockerfile_check_requires_recorded_hash(self):
+        self.assertEqual(self.fx.run(self.out, **{"--dockerfile": str(self.dockerfile())}),
+                         (2, "oci_export: base_mismatch"))
+
+    def test_malformed_stage_hash_is_invalid_input(self):
+        bases = json.loads(json.dumps(self.fx.bases))
+        bases["bases"]["service"]["stage_sha256"] = "sha256:short"
+        self.fx.write_bases(bases)
+        self.assertEqual(self.fx.run(self.out), (2, "oci_export: invalid_input"))
+
+    def test_stage_hash_matches_python_and_stops_at_next_from(self):
+        dockerfile = self.dockerfile()
+        expected = "sha256:" + hashlib.sha256(b"FROM debian AS service-base\nRUN a\n").hexdigest()
+        self.assertEqual(oci_export.dockerfile_stage_sha256(dockerfile, "service-base"), expected)
 
 
 if __name__ == "__main__":

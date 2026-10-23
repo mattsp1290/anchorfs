@@ -19,6 +19,9 @@ namespaces. It is never run in CI.
 
 - Logged in on `infra-control` with `k3s kubectl`, `helm` 3.13.0 and the Rust
   toolchain; `KUBECONFIG=/etc/rancher/k3s/k3s.yaml`.
+- Host tools: `jq`, `curl`, `openssl` (for `create-secrets.sh`) and `sha256sum`
+  or `shasum`. `install.sh` exports `KUBECTL` so `create-bucket.sh` uses the
+  same kubectl client.
 - A `publication.json` receipt from a Forgejo run with the `anchorfs/service`,
   `anchorfs/mount` and `charts/anchorfs` digests.
 - Both arm64 worker nodes and the amd64 service node `Ready`. Defaults:
@@ -42,8 +45,15 @@ Then on the host, from `~/anchorfs-verify`:
 ```sh
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 scripts/cluster/prepare-namespace.sh
-scripts/cluster/create-secrets.sh
-scripts/cluster/install.sh <publication.json>    # also runs create-bucket.sh, helm test, bootstrap-admin
+scripts/cluster/create-secrets.sh    # fails on a partial Secret set; --rotate replaces all
+# install.sh checks the receipt's repositories against the registry host:port,
+# prints source_sha, run_id and artifact_set_digest (compare them with the
+# recorded main run, or set EXPECTED_SOURCE_SHA=<40 hex> to have it compare),
+# installs the chart from a temp file named by its layer digest, then runs
+# create-bucket.sh, helm test --logs and bootstrap-admin. If storing the
+# bootstrap Secret fails it saves the credential mode 600 under
+# ${XDG_RUNTIME_DIR:-$HOME}/anchorfs-bootstrap-admin.json and prints the path.
+scripts/cluster/install.sh <publication.json>
 ANCHORFS_CLUSTER_KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
 ANCHORFS_CLUSTER_EVIDENCE=$HOME/cluster-evidence.json \
   cargo test -p anchorfs-conformance --test cluster --locked -- \
@@ -85,8 +95,10 @@ Afterwards:
 scripts/cluster/uninstall.sh [--delete-data] [--delete-pki]
 ```
 
-The test itself keeps the release and the workspace; `uninstall.sh` states what
-it leaves behind.
+The test itself keeps the release and the workspace. `uninstall.sh` removes the
+proof worker pods and run-labelled Secrets, the kept `anchorfs-test-probe` pod
+(the chart keeps it after a pass so `helm test --logs` can read it) and the
+one-off bucket pods, and states what it leaves behind.
 
 ## Recovery: stale FUSE mounts
 

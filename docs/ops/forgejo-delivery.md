@@ -22,7 +22,7 @@ GitHub mattsp1290/anchorfs main ──Ferry (exact mirror)──▶ Forgejo matt
 
 ## Trust boundary
 
-Ferry mirrors every GitHub branch. Any workflow file on any mirrored branch
+Ferry mirrors every GitHub branch (`refs/heads/*`) and tag (`refs/tags/*`). Any workflow file on any mirrored branch
 executes on the same runner with this repository's Forgejo Actions secrets, and
 Zot accepts anonymous writes from every reachable client. Therefore:
 
@@ -31,15 +31,28 @@ Zot accepts anonymous writes from every reachable client. Therefore:
   No other secret is approved.
 - Only the digests listed in `publication.json` of a recorded `refs/heads/main`
   run are trusted. A digest present in Zot is not evidence by itself.
+- Ferry does not mirror pull request refs (its README at commit `fafa1ab` lists
+  them as not mirrored), so fork pull requests never reach the Forgejo runner;
+  only branches pushed by GitHub collaborators of `mattsp1290/anchorfs` do.
 - "Only main publishes" is a property of `.forgejo/workflows/deploy.yml`
   (trigger plus per-job `if:` and ref checks) and of the birbhomes policy
   (`branch: main`), not a security boundary. Anyone who can push a branch to
   the GitHub repository can run arbitrary workflow code on the runner.
 
+## Workflow keys not relied upon
+
+The workflow declares `permissions: contents: read` and a `concurrency:` group.
+Whether this Forgejo server and runner honor either key is unverified, so
+neither is a control: the automatic token scope may be the server default, and
+two quick main pushes may run `publish` concurrently (harmless, because writes
+are digest-only and untagged). Confirm support during the first real run and
+record the result here before treating either key as effective.
+
 ## Jobs
 
 All three jobs run in the digest-pinned CI container on the exact runner label
-and start by verifying `git rev-parse HEAD == github.sha` (40 hex) and
+and start by verifying `git rev-parse HEAD == github.sha` (40 lowercase hex, same
+guard in all three jobs) and
 `github.ref == refs/heads/main`.
 
 1. `checks` — `cargo fmt --check`, `clippy -D warnings`, `cargo build --locked`,
@@ -58,7 +71,8 @@ and start by verifying `git rev-parse HEAD == github.sha` (40 hex) and
    birbhomes mirror at the immutable helper commit
    `40ff258cc56aa67ba22d8661dd0d11babe2d4065` with the read-only token
    (`persist-credentials: false`), verifies the pin and the policy identity,
-   and runs `python3 -I birbhomes/scripts/oci-publish.py` with
+   refuses a downloaded `build.json` whose `source_sha` or `run_id` differs from
+   this run's `github.sha`/`github.run_id`, and runs `python3 -I birbhomes/scripts/oci-publish.py` with
    `deploy/contracts/apps/anchorfs.json`. The publisher validates the whole
    OCI closure, uploads digest-addressed manifests only (no tags) and reads
    every blob back before writing the receipt. Uploads `publication.json`.
@@ -106,13 +120,26 @@ failed readback stops any install and reopens the birbhomes request.
 `BIRBHOMES_HELPER_COMMIT` (workflow `env` and the `ref:` of the birbhomes
 checkout step) must be a 40-character commit present on the birbhomes Forgejo
 mirror and recorded in `docs/provenance/dependencies.md`. Change both places
-together; the provenance test checks the format.
+together; the provenance test checks the format and that the two are equal.
 
 ## What a failed run leaves behind
 
 A failed `publish` can leave unreferenced blobs or manifests in Zot but never a
-success receipt; rerunning the same source publishes identical digests (safe).
+success receipt. Rerunning is safe: it publishes a new, independently trusted
+`publication.json`. Digests are not expected to match an earlier run (the chart
+archive embeds packaging time and binary reproducibility is not established),
+so never compare a rerun's digests with an earlier receipt as a tamper check.
 A failed `build-export` leaves nothing outside the runner's job directory.
+
+## Merging and `source_sha` in `docker/bases.json`
+
+Merge pull requests that change `docker/bases.json` with a true merge commit
+(not squash or rebase). The `source_sha` values recorded there (currently
+`a430d02ab19c33061ffd558867133c68fb3ab8d4`, a feature-branch commit) stay
+reachable from `main` only if the original commits are preserved. If a
+squash or rebase happens anyway, re-record `source_sha` as the `main` commit
+whose Dockerfile base stages are byte-identical (the `stage_sha256` check proves
+that) and note the substitution in the Stage 3b review record.
 
 ## Identities
 
@@ -121,5 +148,6 @@ A failed `build-export` leaves nothing outside the runner's job directory.
 - Actions: `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2),
   `code.forgejo.org/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5` (v3.2.1),
   `code.forgejo.org/actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59` (v3.1.0, same artifact-API generation as the upload action proven on this runner).
-- Chart: `charts/anchorfs` version `0.1.0`.
+- Chart: `charts/anchorfs` version `0.1.0`. The workflow derives the archive
+  name `anchorfs-<version>.tgz` from `Chart.yaml`.
 - Hub request: `birbhomes-r-80he` (platform side), `anchorfs-r-mx8o` (application side).

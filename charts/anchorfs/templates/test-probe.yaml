@@ -1,6 +1,9 @@
 {{- if .Values.test.enabled }}
 # Helm test hook: probes the service's /readyz over verified TLS. The URL is the
-# origin only (Endpoint::parse rejects paths; the client appends /readyz).
+# origin only (Endpoint::parse rejects paths; the client appends /readyz). The pod
+# is kept after success (no hook-succeeded): Helm 3.13 `test --logs` fails with
+# "unable to get pod logs" once the pod is deleted. before-hook-creation clears
+# it on the next run and scripts/cluster/uninstall.sh deletes it.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -10,7 +13,7 @@ metadata:
     app.kubernetes.io/component: test
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false

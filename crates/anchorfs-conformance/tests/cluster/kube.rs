@@ -1,7 +1,7 @@
 //! Thin `kubectl` wrappers over `std::process::Command`: bounded runtime, captured output,
 //! port-forward child killed on drop, and Secret creation from an owner-only temp file.
 //! Bearer and lease values never appear in argv, error text or logs.
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
@@ -198,8 +198,12 @@ impl Kubectl {
             Duration::from_secs(60),
         );
     }
-    /// Creates (or replaces) a generic Secret with one key. The value travels through a 0600
-    /// temp file that is removed afterwards, never through argv.
+    /// Creates (or replaces) a generic Secret with one key and its labels in one atomic apply.
+    /// The value travels through a 0600 temp file that is removed afterwards, never through
+    /// argv. The manifest is rendered client-side (`--dry-run=client`), labelled in memory and
+    /// applied from stdin, so a Secret holding a bearer or lease token never exists unlabelled
+    /// (label-based teardown always finds it). Neither the rendered manifest nor kubectl's
+    /// stdout is ever printed.
     pub fn create_secret(&self, name: &str, key: &str, value: &str, labels: &[(&str, &str)]) {
         let file = SecretFile::create(value);
         let from_file = format!("--from-file={key}={}", file.path());
@@ -208,21 +212,32 @@ impl Kubectl {
             Duration::from_secs(30),
         );
         let output = self.run(
-            &["create", "secret", "generic", name, &from_file],
+            &[
+                "create",
+                "secret",
+                "generic",
+                name,
+                &from_file,
+                "--dry-run=client",
+                "-o",
+                "json",
+            ],
             Duration::from_secs(30),
         );
         assert!(
             output.success(),
-            "creating secret {name} failed: {}",
+            "rendering secret {name} failed: {}",
             output.stderr.trim()
         );
-        for (label_key, label_value) in labels {
-            let label = format!("{label_key}={label_value}");
-            let _ = self.run(
-                &["label", "secret", name, &label, "--overwrite"],
-                Duration::from_secs(30),
-            );
-        }
+        let mut secret: Value =
+            serde_json::from_str(&output.stdout).expect("kubectl rendered the secret as JSON");
+        let label_map: serde_json::Map<String, Value> = labels
+            .iter()
+            .map(|(label_key, label_value)| ((*label_key).to_owned(), json!(label_value)))
+            .collect();
+        secret["metadata"]["labels"] = Value::Object(label_map);
+        let manifest = serde_json::to_string(&secret).expect("secret manifest serializes");
+        self.apply(&manifest);
     }
     /// Reads one key of a Secret as bytes. The result is returned to the caller only.
     pub fn secret_value(&self, name: &str, key: &str) -> Vec<u8> {
@@ -405,7 +420,9 @@ pub struct LogCapture {
 }
 impl LogCapture {
     pub fn start(kubectl: &Kubectl, pod: &str, container: &str) -> Self {
-        let mut command = kubectl.command(&["logs", "-f", pod, "-c", container]);
+        Self::from_command(kubectl.command(&["logs", "-f", pod, "-c", container]))
+    }
+    fn from_command(mut command: Command) -> Self {
         command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -465,6 +482,33 @@ impl LogCapture {
 impl Drop for LogCapture {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// `kubectl get pod <name> --watch --output-watch-events -o json`, started before a delete so
+/// that every status update (including the one carrying `state.terminated`) and the final
+/// `DELETED` event are observed even when the object vanishes between two polls.
+pub struct PodWatch(LogCapture);
+impl PodWatch {
+    pub fn start(kubectl: &Kubectl, pod: &str) -> Self {
+        Self(LogCapture::from_command(kubectl.command(&[
+            "get",
+            "pod",
+            pod,
+            "--watch",
+            "--output-watch-events",
+            "-o",
+            "json",
+        ])))
+    }
+    /// All complete watch events received so far (`{"type": ..., "object": {...}}`); a partial
+    /// trailing document is ignored until the rest arrives.
+    pub fn events(&self) -> Vec<Value> {
+        let text = self.0.text();
+        serde_json::Deserializer::from_str(&text)
+            .into_iter::<Value>()
+            .map_while(Result::ok)
+            .collect()
     }
 }
 

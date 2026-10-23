@@ -3,8 +3,13 @@
 # Stage 3b chart invariants (kinds, security contexts, worker template, failure
 # paths). Runs under `helm` and, when present, `helm-compat` (the Helm 3.13
 # binary). CHART_STRICT=1 makes a missing helm-compat a failure. Needs only
-# bash, awk, grep and helm; it never contacts a cluster.
+# bash, awk, grep and helm; it never contacts a cluster. Rendering passes
+# --kube-version explicitly on `template` (default: the apartment cluster's
+# k3s version) because Chart.yaml's kubeVersion constraint is checked against
+# Helm's built-in default otherwise, and Helm 3.13 defaults to v1.28. Helm
+# 3.13's `lint` has no such flag and does not evaluate the constraint.
 set -euo pipefail
+KUBE_VERSION="${CHART_KUBE_VERSION:-1.35.9}"
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 chart="$root/charts/anchorfs"
@@ -37,9 +42,10 @@ run_with() {
 
   if "$bin" lint "$chart" "${base_set[@]}" >"$out/lint.txt" 2>&1; then ok "lint passes"; else fail "lint failed"; cat "$out/lint.txt" >&2; fi
 
-  "$bin" template anchorfs "$chart" -n anchorfs "${base_set[@]}" >"$out/default.yaml"
-  "$bin" template anchorfs "$chart" -n anchorfs "${base_set[@]}" "${dev_set[@]}" >"$out/dev.yaml"
-  "$bin" template anchorfs "$chart" -n anchorfs "${base_set[@]}" --set 'networkPolicy.extraIngressCidrs={10.0.0.106/32}' >"$out/cidr.yaml"
+  local kv=(--kube-version "$KUBE_VERSION")
+  "$bin" template anchorfs "$chart" -n anchorfs "${kv[@]}" "${base_set[@]}" >"$out/default.yaml"
+  "$bin" template anchorfs "$chart" -n anchorfs "${kv[@]}" "${base_set[@]}" "${dev_set[@]}" >"$out/dev.yaml"
+  "$bin" template anchorfs "$chart" -n anchorfs "${kv[@]}" "${base_set[@]}" --set 'networkPolicy.extraIngressCidrs={10.0.0.106/32}' >"$out/cidr.yaml"
 
   local f="$out/default.yaml"
   # Split into one file per document, named by kind and metadata.name.
@@ -115,10 +121,10 @@ run_with() {
   expect_count "$out/cidr.yaml" 'cidr: "10.0.0.106/32"' 1 "extraIngressCidrs renders an ipBlock"
 
   # Failure paths.
-  if "$bin" template anchorfs "$chart" --set image.service.repository=x --set image.mount.repository=x --set "image.mount.digest=$d2" >"$out/e1.txt" 2>&1; then
+  if "$bin" template anchorfs "$chart" "${kv[@]}" --set image.service.repository=x --set image.mount.repository=x --set "image.mount.digest=$d2" >"$out/e1.txt" 2>&1; then
     fail "empty service digest rendered"
   elif grep -q 'image.service.digest' "$out/e1.txt"; then ok "empty digest fails naming image.service.digest"; else fail "empty digest error does not name image.service.digest"; fi
-  if "$bin" template anchorfs "$chart" --set image.service.repository=x --set image.service.digest=latest --set image.mount.repository=x --set "image.mount.digest=$d2" >"$out/e2.txt" 2>&1; then
+  if "$bin" template anchorfs "$chart" "${kv[@]}" --set image.service.repository=x --set image.service.digest=latest --set image.mount.repository=x --set "image.mount.digest=$d2" >"$out/e2.txt" 2>&1; then
     fail "non-sha256 digest rendered"
   elif grep -q 'sha256' "$out/e2.txt"; then ok "non-sha256 digest rejected"; else fail "non-sha256 digest error unclear"; fi
 }

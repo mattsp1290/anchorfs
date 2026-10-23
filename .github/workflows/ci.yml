@@ -84,11 +84,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
       - run: python3 --version
       - name: Exporter unit tests
         run: python3 -I -m unittest discover -s scripts/tests -v
       - name: Install pinned Helm 3.13.0 (checksum verified)
-        run: echo "HELM_COMPAT=$(bash ci/install-helm.sh "$RUNNER_TEMP/helm-3.13.0")" >> "$GITHUB_ENV"
+        run: |
+          helm_path="$(bash ci/install-helm.sh "$RUNNER_TEMP/helm-3.13.0")"
+          echo "HELM_COMPAT=$helm_path" >> "$GITHUB_ENV"
       - name: Chart lint and render checks (Helm 3.13.0)
         run: |
           zero=$(printf '0%.0s' $(seq 64))

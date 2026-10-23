@@ -2,8 +2,9 @@
 //! readiness and FUSE-entry waits with G4 diagnostics, and the quiesced delete protocol.
 use crate::{
     api::SessionRef,
-    kube::{Kubectl, LogCapture, MAX_WAIT, log_has_event},
+    kube::{Kubectl, LogCapture, MAX_WAIT, PodWatch, log_has_event},
 };
+use serde_json::Value;
 use std::{
     thread,
     time::{Duration, Instant},
@@ -14,6 +15,8 @@ pub const WORKSPACE_PATH: &str = "/workspace";
 /// The template's `terminationGracePeriodSeconds`.
 pub const GRACE: Duration = Duration::from_secs(30);
 const FUSE_WAIT: Duration = Duration::from_secs(120);
+/// How long `delete_pod` waits for its watch and log follower to attach before deleting.
+const ATTACH_WAIT: Duration = Duration::from_secs(15);
 /// Marker carried in the command line of the worker-side loop the test starts. The kill snippet
 /// matches it as `anchorfs-proof-[t]ick`, which does not match the snippet's own command line.
 pub const LOOP_MARKER: &str = "anchorfs-proof-tick";
@@ -34,10 +37,18 @@ pub struct WorkerPod {
     pub node: String,
 }
 
+/// One container's spec image reference and the image ID the runtime reports for it.
+pub struct ContainerImage {
+    pub name: String,
+    pub image: String,
+    pub image_id: String,
+}
+
 pub struct PodFacts {
     pub node_name: String,
     pub uid: String,
     pub image_ids: Vec<String>,
+    pub containers: Vec<ContainerImage>,
 }
 
 pub struct DeleteReport {
@@ -61,17 +72,25 @@ pub fn blocked(node: &str, stage: &str) -> ! {
 }
 
 impl Pods {
+    /// Cheap and infallible; the ConfigMap is read by `load_template` inside the proof's
+    /// panic guard so a missing template is recorded as a failed phase in the evidence.
     pub fn new(kubectl: &Kubectl, run: &str) -> Self {
-        let config = kubectl.get_json(&["configmap", "anchorfs-worker-template"]);
-        let template = config["data"]["pod.yaml"]
-            .as_str()
-            .expect("ConfigMap anchorfs-worker-template has no pod.yaml")
-            .to_owned();
         Self {
             kubectl: kubectl.clone(),
             run: run.into(),
-            template,
+            template: String::new(),
         }
+    }
+
+    /// Reads `pod.yaml` from ConfigMap `anchorfs-worker-template`.
+    pub fn load_template(&mut self) {
+        let config = self
+            .kubectl
+            .get_json(&["configmap", "anchorfs-worker-template"]);
+        self.template = config["data"]["pod.yaml"]
+            .as_str()
+            .expect("ConfigMap anchorfs-worker-template has no pod.yaml")
+            .to_owned();
     }
 
     /// Plain string substitution of every placeholder plus the run label.
@@ -85,6 +104,7 @@ impl Pods {
             ),
             None => (spec.credential_secret.to_owned(), String::new()),
         };
+        assert!(!self.template.is_empty(), "worker template not loaded");
         let mut text = self.template.clone();
         for (placeholder, value) in [
             ("__NAME__", spec.name.to_owned()),
@@ -197,7 +217,33 @@ impl Pods {
 
     pub fn facts(&self, pod: &WorkerPod) -> PodFacts {
         let status = self.kubectl.get_json(&["pod", &pod.name]);
+        let statuses = status["status"]["containerStatuses"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let containers = status["spec"]["containers"]
+            .as_array()
+            .map(|all| {
+                all.iter()
+                    .map(|c| {
+                        let name = c["name"].as_str().unwrap_or("").to_owned();
+                        let image_id = statuses
+                            .iter()
+                            .find(|s| s["name"].as_str() == Some(name.as_str()))
+                            .and_then(|s| s["imageID"].as_str())
+                            .unwrap_or("")
+                            .to_owned();
+                        ContainerImage {
+                            image: c["image"].as_str().unwrap_or("").to_owned(),
+                            name,
+                            image_id,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         PodFacts {
+            containers,
             node_name: status["spec"]["nodeName"].as_str().unwrap_or("").to_owned(),
             uid: status["metadata"]["uid"].as_str().unwrap_or("").to_owned(),
             image_ids: status["status"]["containerStatuses"]
@@ -232,12 +278,16 @@ impl Pods {
     /// Kills the known worker-side loop. The pattern `[t]ick` keeps the snippet from matching
     /// its own command line.
     pub fn kill_loops(&self, pod: &WorkerPod) {
+        self.kill_loops_in(&pod.name, Duration::from_secs(120));
+    }
+
+    fn kill_loops_in(&self, pod_name: &str, timeout: Duration) {
         let marker = LOOP_MARKER.replace("-tick", "-[t]ick");
         let script = format!(
             "for p in /proc/[0-9]*; do pid=${{p#/proc/}}; [ \"$pid\" = \"$$\" ] && continue; \
              if tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q '{marker}'; then kill $pid; fi; done; true"
         );
-        let _ = self.exec(pod, &script);
+        let _ = self.kubectl.exec_sh(pod_name, "worker", &script, timeout);
     }
 
     /// Step 1 of `delete_pod`: no worker-side process may hold a cwd or fd under /workspace,
@@ -263,9 +313,35 @@ impl Pods {
 
     /// Quiesce, capture the sidecar log, delete without waiting, require a clean sidecar exit
     /// and the `mount shut down` event, then wait for the pod object to disappear.
+    ///
+    /// The worker traps SIGTERM and exits within about a second, so the window in which
+    /// `state.terminated` is visible to a poller can be shorter than one poll interval, and a
+    /// `kubectl logs -f` that connects after the delete can miss the pod entirely. Both
+    /// observers are therefore attached BEFORE the delete: a `kubectl get pod --watch
+    /// --output-watch-events` stream (every status update, including the one carrying the
+    /// sidecar's `terminated` state, arrives before the final `DELETED` event) and the log
+    /// follower, which is confirmed to have received bytes first. "blocked" keeps its meaning:
+    /// no terminated state for the sidecar before the pod is gone or the bound elapses, or the
+    /// object still present after the bound.
     pub fn delete_pod(&self, pod: &WorkerPod) -> DeleteReport {
         self.quiesce(pod);
         let capture = LogCapture::start(&self.kubectl, &pod.name, "mount");
+        let watch = PodWatch::start(&self.kubectl, &pod.name);
+        let attach_deadline = Instant::now() + ATTACH_WAIT;
+        while Instant::now() < attach_deadline
+            && (watch.events().is_empty() || capture.text().is_empty())
+        {
+            thread::sleep(Duration::from_millis(200));
+        }
+        if watch.events().is_empty() {
+            blocked(&pod.node, "pod watch did not attach before the delete");
+        }
+        if capture.text().is_empty() {
+            eprintln!(
+                "node {}: sidecar log capture received no bytes before the delete; the shutdown event check below decides",
+                pod.node
+            );
+        }
         let started = Instant::now();
         let deleted = self.kubectl.run(
             &["delete", "pod", &pod.name, "--wait=false"],
@@ -277,24 +353,19 @@ impl Pods {
             deleted.stderr.trim()
         );
         let deadline = started + GRACE + Duration::from_secs(10);
-        let mut exit_code = None;
+        let mut seen = MountEvents::default();
+        let mut removed_after = None;
         while Instant::now() < deadline {
-            match self.kubectl.try_get_json(&["pod", &pod.name]) {
-                None => break,
-                Some(status) => {
-                    let terminated = status["status"]["containerStatuses"]
-                        .as_array()
-                        .and_then(|all| all.iter().find(|c| c["name"] == "mount"))
-                        .map(|c| c["state"]["terminated"].clone());
-                    if let Some(state) = terminated.filter(|state| state.is_object()) {
-                        exit_code = state["exitCode"].as_i64();
-                        break;
-                    }
-                }
+            seen = scan_mount_events(&watch.events());
+            if seen.deleted {
+                removed_after = Some(started.elapsed());
             }
-            thread::sleep(Duration::from_millis(500));
+            if seen.exit_code.is_some() || seen.deleted {
+                break;
+            }
+            thread::sleep(Duration::from_millis(200));
         }
-        let Some(exit_code) = exit_code else {
+        let Some(exit_code) = seen.exit_code else {
             blocked(
                 &pod.node,
                 "mount container never reported terminated state (see docs/ops/cluster-proof.md recovery)",
@@ -311,26 +382,68 @@ impl Pods {
             "node {}: sidecar log lacks the \"mount shut down\" event:\n{log}",
             pod.node
         );
-        while Instant::now() < deadline {
-            if self.kubectl.try_get_json(&["pod", &pod.name]).is_none() {
-                return DeleteReport {
-                    mount_exit_code: exit_code,
-                    removed_after: started.elapsed(),
-                };
+        while removed_after.is_none() && Instant::now() < deadline {
+            if scan_mount_events(&watch.events()).deleted {
+                removed_after = Some(started.elapsed());
+                break;
             }
-            thread::sleep(Duration::from_millis(500));
+            thread::sleep(Duration::from_millis(200));
         }
-        blocked(
-            &pod.node,
-            "pod stuck Terminating (see docs/ops/cluster-proof.md recovery)",
-        );
+        match removed_after {
+            Some(removed_after) => DeleteReport {
+                mount_exit_code: exit_code,
+                removed_after,
+            },
+            None => blocked(
+                &pod.node,
+                "pod stuck Terminating (see docs/ops/cluster-proof.md recovery)",
+            ),
+        }
     }
 
     /// Best-effort teardown of every object carrying this run's label.
     pub fn cleanup(&self) {
         let selector = run_selector(&self.run);
+        // Quiesce first: a tick loop still appending under /workspace would make the sidecar's
+        // non-lazy unmount fail and leave a dead FUSE mount on the node after SIGKILL.
+        if let Some(list) = self.kubectl.try_get_json(&["pods", "-l", &selector]) {
+            for item in list["items"].as_array().into_iter().flatten() {
+                if let Some(name) = item["metadata"]["name"].as_str() {
+                    self.kill_loops_in(name, Duration::from_secs(20));
+                }
+            }
+        }
         self.kubectl.delete_by_label("pod,secret", &selector);
     }
+}
+
+/// What a pod watch stream has shown about the `mount` container.
+#[derive(Default)]
+struct MountEvents {
+    /// Exit code of the sidecar's `state.terminated`, from the first event that carried one.
+    exit_code: Option<i64>,
+    /// A `DELETED` event was received.
+    deleted: bool,
+}
+
+fn scan_mount_events(events: &[Value]) -> MountEvents {
+    let mut seen = MountEvents::default();
+    for event in events {
+        if event["type"] == "DELETED" {
+            seen.deleted = true;
+        }
+        if seen.exit_code.is_some() {
+            continue;
+        }
+        let terminated = event["object"]["status"]["containerStatuses"]
+            .as_array()
+            .and_then(|all| all.iter().find(|c| c["name"] == "mount"))
+            .map(|c| &c["state"]["terminated"]);
+        if let Some(state) = terminated.filter(|state| state.is_object()) {
+            seen.exit_code = state["exitCode"].as_i64();
+        }
+    }
+    seen
 }
 
 fn has_placeholder(text: &str) -> bool {
@@ -396,4 +509,130 @@ fn placeholder_scan_finds_only_template_tokens() {
     assert!(has_placeholder("name: __NAME__"));
     assert!(has_placeholder("x __WORKFLOW_EPOCH_ARGS__]"));
     assert!(!has_placeholder("name: anchorfs-proof my_var __init"));
+}
+
+#[test]
+fn mount_events_report_terminated_state_and_deletion_in_order() {
+    let running = serde_json::json!({"type": "ADDED", "object": {"status": {"containerStatuses": [
+        {"name": "mount", "state": {"running": {}}}]}}});
+    let terminated = serde_json::json!({"type": "MODIFIED", "object": {"status": {"containerStatuses": [
+        {"name": "worker", "state": {"terminated": {"exitCode": 9}}},
+        {"name": "mount", "state": {"terminated": {"exitCode": 0}}}]}}});
+    let gone = serde_json::json!({"type": "DELETED", "object": {}});
+    let early = scan_mount_events(std::slice::from_ref(&running));
+    assert!(early.exit_code.is_none() && !early.deleted);
+    let seen = scan_mount_events(&[running, terminated, gone.clone()]);
+    assert_eq!(
+        seen.exit_code,
+        Some(0),
+        "the worker's exit code must not count"
+    );
+    assert!(seen.deleted);
+    let vanished = scan_mount_events(&[gone]);
+    assert!(vanished.exit_code.is_none() && vanished.deleted);
+}
+
+/// Fixture with the two template lines whose substitution the cluster run depends on: the
+/// mount `args` flow sequence ending in `__WORKFLOW_EPOCH_ARGS__` (a trailing comma in the
+/// ordinary variant, which libyaml-derived parsers such as kubectl's accept) and the label
+/// the run label is attached to.
+#[cfg(test)]
+const FIXTURE_TEMPLATE: &str = "apiVersion: v1
+kind: Pod
+metadata:
+  name: __NAME__
+  labels:
+    anchorfs.proof/role: worker
+spec:
+  nodeName: __NODE__
+  volumes:
+    - name: credential
+      secret:
+        secretName: __CREDENTIAL_SECRET__
+    - name: workflow
+      secret:
+        secretName: __WORKFLOW_SECRET__
+        optional: true
+  containers:
+    - name: mount
+      args: [\"mount\", \"/workspace\", \"--workspace\", \"__WORKSPACE__\", \"--session-id\", \"__SESSION_ID__\", \"--session-epoch\", \"__SESSION_EPOCH__\", \"--log-format\", \"json\", __WORKFLOW_EPOCH_ARGS__]
+";
+
+/// The `args: [...]` flow sequence of a rendered manifest as JSON, tolerating the single
+/// trailing comma YAML flow sequences allow.
+#[cfg(test)]
+fn rendered_args(manifest: &str) -> Vec<String> {
+    let line = manifest
+        .lines()
+        .find_map(|l| l.trim_start().strip_prefix("args: "))
+        .expect("args line");
+    let inner = line
+        .trim()
+        .strip_prefix('[')
+        .and_then(|l| l.strip_suffix(']'))
+        .expect("flow sequence brackets");
+    let inner = inner.trim_end();
+    let inner = inner.strip_suffix(',').unwrap_or(inner);
+    let parsed: Vec<String> =
+        serde_json::from_str(&format!("[{inner}]")).expect("args parse as a flow sequence");
+    parsed
+}
+
+#[cfg(test)]
+fn fixture_pods() -> Pods {
+    let mut pods = Pods::new(&Kubectl::new("kubectl", "/nonexistent", "ns"), "run-1");
+    pods.template = FIXTURE_TEMPLATE.to_owned();
+    pods
+}
+
+#[test]
+fn substituted_worker_template_parses_for_ordinary_and_bound_pods() {
+    let pods = fixture_pods();
+    let session = SessionRef {
+        session_id: Uuid::nil(),
+        session_epoch: 3,
+    };
+    let ordinary = pods.render(&WorkerSpec {
+        name: "pod-a",
+        node: "node-1",
+        workspace: Uuid::nil(),
+        session: &session,
+        credential_secret: "cred-1",
+        workflow: None,
+    });
+    let args = rendered_args(&ordinary);
+    assert_eq!(args.first().map(String::as_str), Some("mount"));
+    assert_eq!(args.last().map(String::as_str), Some("json"));
+    assert!(!args.iter().any(|a| a.starts_with("--workflow")));
+    assert!(ordinary.contains("secretName: cred-1"));
+    assert!(ordinary.contains("anchorfs.proof/run: \"run-1\""));
+    assert!(!has_placeholder(&ordinary));
+
+    let bound = pods.render(&WorkerSpec {
+        name: "pod-d",
+        node: "node-2",
+        workspace: Uuid::nil(),
+        session: &session,
+        credential_secret: "cred-2",
+        workflow: Some(("wf-secret", 7)),
+    });
+    let args = rendered_args(&bound);
+    let tail: Vec<&str> = args
+        .iter()
+        .rev()
+        .take(4)
+        .rev()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        tail,
+        [
+            "--workflow-epoch",
+            "7",
+            "--workflow-token-file",
+            "/etc/anchorfs/workflow/token"
+        ]
+    );
+    assert!(bound.contains("secretName: wf-secret"));
+    assert!(bound.contains("secretName: cred-2"));
 }

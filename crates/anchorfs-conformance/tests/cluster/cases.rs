@@ -5,23 +5,24 @@ use crate::{
     api::{Api, Bearer, Lease, SessionRef},
     evidence::Evidence,
     kube::{Kubectl, PortForward, log_has_event},
-    pods::{DeleteReport, Pods, WORKSPACE_PATH, WorkerPod, WorkerSpec},
+    pods::{ContainerImage, DeleteReport, Pods, WORKSPACE_PATH, WorkerPod, WorkerSpec},
 };
 use anchorfs_client::{
     Client,
     auth::{Authority, Bearer as ClientBearer, SessionAuthority},
     endpoint::Endpoint,
+    error::ClientError,
     readiness::{Readiness, readiness},
     retry::IdempotencyKey,
     wire::OpenHandle,
 };
-use anchorfs_core::SessionId;
+use anchorfs_core::{ErrorCode, SessionId};
 use bytes::Bytes;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
     thread,
     time::{Duration, Instant},
 };
@@ -80,7 +81,7 @@ struct Proof {
     phase: &'static str,
     evidence: Evidence,
     pods: Pods,
-    forward: Option<PortForward>,
+    forward: Option<Arc<Mutex<PortForward>>>,
     ca: Vec<u8>,
     api: Option<Api>,
     node_arch: Vec<(String, String)>,
@@ -99,6 +100,8 @@ pub fn run(cfg: Config) {
             .expect("tokio runtime"),
     );
     let evidence = Evidence::new(&cfg.evidence, &run, &kubectl.version_line());
+    // The worker template is read inside the panic guard (phase 0) so that a missing
+    // ConfigMap is recorded as a failed phase in the evidence.
     let pods = Pods::new(&kubectl, &run);
     let mut proof = Proof {
         cfg,
@@ -180,9 +183,38 @@ impl Proof {
             .map(|(_, arch)| arch.clone())
             .unwrap_or_default()
     }
+    fn forward_port(&self) -> u16 {
+        self.forward
+            .as_ref()
+            .expect("port-forward")
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .local_port
+    }
+    /// Restarts the port-forward if its child exited; shared with `Api` for its retries.
+    fn ensure_forward(&self) {
+        if let Some(forward) = &self.forward {
+            forward
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .ensure_alive();
+        }
+    }
+    fn forward_stderr(&self) -> String {
+        self.forward
+            .as_ref()
+            .map(|f| {
+                f.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .stderr_text()
+            })
+            .unwrap_or_default()
+    }
+    /// The forward binds IPv4 loopback only and the service certificate carries the IP SAN
+    /// `127.0.0.1`, so the endpoint uses the literal address (no `::1` attempt).
     fn endpoint(&self) -> Endpoint {
-        let port = self.forward.as_ref().expect("port-forward").local_port;
-        Endpoint::parse(&format!("https://localhost:{port}"), false).expect("endpoint")
+        let port = self.forward_port();
+        Endpoint::parse(&format!("https://127.0.0.1:{port}"), false).expect("endpoint")
     }
     fn client_for(&self, auth: &Authority3, bearer: &Bearer, session: &SessionRef) -> Client {
         let authority = Authority {
@@ -199,9 +231,7 @@ impl Proof {
         self.client_for(auth, &auth.host, &auth.host_session)
     }
     fn readiness(&mut self) -> Readiness {
-        if let Some(forward) = self.forward.as_mut() {
-            forward.ensure_alive();
-        }
+        self.ensure_forward();
         let endpoint = self.endpoint();
         self.runtime
             .block_on(readiness(
@@ -210,7 +240,28 @@ impl Proof {
                 Duration::from_secs(10),
             ))
             .unwrap_or_else(|error| {
-                panic!("blocked: port-forward refused under NetworkPolicy ({error})")
+                let class = match &error {
+                    ClientError::Api(_) => "api",
+                    ClientError::Ambiguous(_) => "ambiguous",
+                    ClientError::Transport(_) => "transport",
+                    ClientError::Deadline => "deadline",
+                    _ => "other",
+                };
+                let stderr = self.forward_stderr();
+                let lower = stderr.to_lowercase();
+                let network_policy = ["connection refused", "timed out", "i/o timeout"]
+                    .iter()
+                    .any(|needle| lower.contains(needle));
+                if network_policy {
+                    panic!(
+                        "blocked: port-forward refused under NetworkPolicy (error class {class}: {error}; forward stderr: {})",
+                        stderr.trim()
+                    );
+                }
+                panic!(
+                    "blocked: readiness probe failed (error class {class}: {error}); the port-forward itself reported no refusal (forward stderr: {})",
+                    stderr.trim()
+                );
             })
     }
     fn service_restart_count(&self) -> i64 {
@@ -300,6 +351,8 @@ impl Proof {
         out.split_whitespace().next().unwrap_or("").to_owned()
     }
     fn block_on<T>(&self, future: impl std::future::Future<Output = T>) -> T {
+        // Every typed-client call goes through here: a dropped forward is restarted first.
+        self.ensure_forward();
         self.runtime.block_on(future)
     }
     fn write_file(&self, client: &Client, path: &str, bytes: &[u8]) {
@@ -396,6 +449,7 @@ impl Proof {
 
     fn preflight(&mut self) {
         self.enter("0-preflight");
+        self.pods.load_template();
         let nodes = self.kubectl.get_json(&["nodes"]);
         let items = nodes["items"].as_array().cloned().unwrap_or_default();
         let find = |name: &str| {
@@ -497,7 +551,7 @@ impl Proof {
             eprintln!("port-forward stderr: {}", forward.stderr_text());
             panic!("blocked: port-forward refused under NetworkPolicy");
         }
-        self.forward = Some(forward);
+        self.forward = Some(Arc::new(Mutex::new(forward)));
         let ready = self.readiness();
         assert_eq!(
             ready.status, 200,
@@ -509,14 +563,15 @@ impl Proof {
         assert_eq!(body.durability_profile, "durable");
         self.evidence
             .set("readyz", serde_json::to_value(&body).unwrap_or(Value::Null));
-        self.api = Some(Api::new(
-            Arc::clone(&self.runtime),
-            &format!(
-                "https://localhost:{}",
-                self.forward.as_ref().expect("forward").local_port
-            ),
-            &self.ca,
-        ));
+        let forward = Arc::clone(self.forward.as_ref().expect("forward"));
+        self.api = Some(
+            Api::new(
+                Arc::clone(&self.runtime),
+                &format!("https://127.0.0.1:{}", self.forward_port()),
+                &self.ca,
+            )
+            .with_forward(forward),
+        );
     }
 
     fn check_cert_manager(&mut self) {
@@ -669,11 +724,13 @@ impl Proof {
             ["harness.txt", "worker-a.bin"],
             "proof directory listing"
         );
-        for id in &facts_b.image_ids {
-            assert!(
-                id.contains("anchorfs/mount@sha256:"),
-                "image ID {id} does not reference anchorfs/mount@sha256:<digest>"
-            );
+        assert!(
+            facts_b.containers.len() >= 2,
+            "pod B reports {} containers, expected mount and worker",
+            facts_b.containers.len()
+        );
+        for container in &facts_b.containers {
+            assert_image_matches_spec(container);
         }
         let sidecar = self.kubectl.logs(&pod_b.name, "mount");
         self.evidence.phase(
@@ -755,11 +812,19 @@ impl Proof {
         // (b) revoke worker-3 first, then prove the mount latches with ESTALE.
         let api = self.api.as_ref().expect("api");
         api.revoke_credential(&auth.admin, auth.workers[2].credential_id);
+        // The revocation committed when the DELETE returned; the boundary is taken now, not
+        // after the mount latches, so a write accepted in between cannot be absorbed.
+        let (size_at_revocation, generation_at_revocation) = self.stat(client, fence_log);
         self.wait_for("the \"mount fenced\" event (unauthenticated)", || {
             self.mount_log_has(&pod_c, "mount fenced", Some("unauthenticated"))
                 .then_some(())
         });
-        let (size_at_revocation, generation_at_revocation) = self.stat(client, fence_log);
+        let at_fence = self.stat(client, fence_log);
+        assert_eq!(
+            at_fence,
+            (size_at_revocation, generation_at_revocation),
+            "bytes published between the revocation commit and the fence latch"
+        );
         let late = self
             .pods
             .exec(&pod_c, &format!("echo late >> {fence_path}"));
@@ -783,6 +848,7 @@ impl Proof {
             json!({
                 "size_at_revocation": size_at_revocation,
                 "generation_at_revocation": generation_at_revocation,
+                "size_at_fence": at_fence.0,
                 "late_write_exit_code": late.code,
                 "late_write_error_estale": late_text,
             }),
@@ -820,15 +886,39 @@ impl Proof {
         );
         let successor = self.read_file(client, "proof/successor.txt");
         assert_eq!(successor, b"successor\n", "successor.txt through the API");
-        // A second observation of the revoked mount after the lease exists; recorded, not
-        // asserted, as a distinct phenomenon from the revocation latch above.
+        // Two distinct observations while the lease is held. First, pod C is already fenced,
+        // so a write through its mount only re-checks the ESTALE latch (not lease-busy).
         let after_lease = self
             .pods
             .exec(&pod_c, &format!("echo again >> {fence_path}"));
         self.evidence.observe(
-            "ordinary_mount_write_after_lease",
+            "fenced_mount_write_after_lease",
             json!({"exit_code": after_lease.code, "stderr": after_lease.stderr.trim()}),
         );
+        // Second, the real lease-busy phenomenon: an ordinary (unbound) session mutating while
+        // the lease is held is refused with 409 workspace_busy (EBUSY at a mount).
+        let busy = self.block_on(client.create_directory(
+            "proof/busy-probe",
+            0o755,
+            &IdempotencyKey::new(),
+        ));
+        match busy {
+            Err(ClientError::Api(failure)) => {
+                assert_eq!(
+                    (failure.status, failure.code.kind()),
+                    (409, Some(ErrorCode::WorkspaceBusy)),
+                    "ordinary-session mutation under an active lease: {failure:?}"
+                );
+                self.evidence.observe(
+                    "ordinary_session_mutation_while_leased",
+                    json!({"status": failure.status, "code": failure.code.as_str()}),
+                );
+            }
+            Err(error) => panic!(
+                "ordinary-session mutation under an active lease failed unexpectedly: {error}"
+            ),
+            Ok(_) => panic!("ordinary-session mutation succeeded while the workflow lease is held"),
+        }
 
         // (d) negatives with the revoked worker-3 bearer; the host and worker-2 keep working.
         let revoked = &auth.workers[2];
@@ -890,7 +980,7 @@ impl Proof {
         assert_eq!(
             (final_size, final_generation),
             (size_at_revocation, generation_at_revocation),
-            "fence.log changed after revocation"
+            "fence.log changed after the revocation commit"
         );
         self.evidence.phase(
             "5-case5-6",
@@ -910,6 +1000,16 @@ impl Proof {
         lease: Lease,
     ) {
         self.enter("6-case7-ephemeral-root");
+        // Nothing else renews the 600 s lease that pod D's bound writes depend on, and phase 5
+        // may have spent several minutes in pod creation; renew before relying on it.
+        let api = self.api.as_ref().expect("api");
+        let renewed_epoch = api.renew_lease(&auth.host, &auth.host_session, auth.workspace, &lease);
+        assert_eq!(
+            renewed_epoch, lease.epoch,
+            "lease renewal must not change the mutation epoch"
+        );
+        self.evidence
+            .phase("6-case7", "lease_renewed", json!({"epoch": renewed_epoch}));
         self.exec_ok(&pod_d, "echo ephemeral > /tmp/outside.txt");
         self.exec_ok(
             &pod_d,
@@ -958,6 +1058,48 @@ impl Proof {
             json!("pods and per-run Secrets deleted; release and workspace kept"),
         );
     }
+}
+
+/// The runtime-reported image ID must carry the same `sha256:` digest as the digest-pinned
+/// reference the pod spec was rendered with (the published image), not merely some mount image.
+fn assert_image_matches_spec(container: &ContainerImage) {
+    let spec = digest_of(&container.image).unwrap_or_else(|| {
+        panic!(
+            "container {}: spec image {} is not pinned by a sha256 digest",
+            container.name, container.image
+        )
+    });
+    let reported = digest_of(&container.image_id).unwrap_or_else(|| {
+        panic!(
+            "container {}: image ID {:?} carries no sha256 digest",
+            container.name, container.image_id
+        )
+    });
+    assert_eq!(
+        reported, spec,
+        "container {}: image ID {} does not match the pod spec image {}",
+        container.name, container.image_id, container.image
+    );
+    if container.name == "mount" {
+        assert!(
+            container.image.contains("anchorfs/mount@sha256:"),
+            "mount container image {} does not reference anchorfs/mount@sha256:<digest>",
+            container.image
+        );
+    }
+}
+
+/// The `sha256:<hex>` suffix of an `<repo>@sha256:<hex>` reference.
+fn digest_of(reference: &str) -> Option<&str> {
+    let (_, digest) = reference.rsplit_once('@')?;
+    digest.strip_prefix("sha256:").map(|_| digest)
+}
+
+#[test]
+fn digest_of_reads_the_pinned_digest_only() {
+    assert_eq!(digest_of("r/anchorfs/mount@sha256:ab"), Some("sha256:ab"));
+    assert_eq!(digest_of("r/anchorfs/mount:latest"), None);
+    assert_eq!(digest_of("r/m@md5:ab"), None);
 }
 
 struct Digests {

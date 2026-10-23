@@ -6,11 +6,25 @@
 # Then creates the MinIO bucket, runs `helm test`, and bootstraps the
 # administrator once into Secret anchorfs-bootstrap-admin. Prints names and
 # digests only; the bootstrap credential goes straight into a Secret.
-# Receipt shape (birbhomes publisher): .artifacts.{service,mount,chart}.{repository,digest}.
+# Receipt shape (birbhomes publisher; docs/ops/forgejo-delivery.md):
+# .artifacts.{service,mount,chart}.{repository,digest}, .artifact_set_digest,
+# .source_sha, .run_id. Each repository must equal exactly
+# <registry host:port>/anchorfs/service, .../anchorfs/mount and
+# .../charts/anchorfs (host:port taken from REGISTRY_URL), so a receipt cannot
+# inject helm values or redirect pulls. The receipt's source_sha, run_id and
+# artifact_set_digest formats are checked and printed so the operator can
+# compare them with the recorded main run; set EXPECTED_SOURCE_SHA (40 hex) to
+# have the script compare source_sha itself. Host prerequisites: kubectl
+# (KUBECTL, exported for create-bucket.sh), helm 3.13+, jq, curl, and
+# sha256sum or shasum. The chart archive is a temporary file named by its layer
+# digest. If storing the bootstrap Secret fails after the credential was
+# minted, the credential file is saved with mode 600 under
+# ${XDG_RUNTIME_DIR:-$HOME} and only its path is printed.
 set -euo pipefail
 
 : "${KUBECONFIG:?set KUBECONFIG, e.g. /etc/rancher/k3s/k3s.yaml}"
 KUBECTL="${KUBECTL:-k3s kubectl}"
+export KUBECTL
 HELM="${HELM:-helm}"
 NS=anchorfs
 REGISTRY_URL="${REGISTRY_URL:-http://10.0.0.106:30001}"
@@ -37,7 +51,23 @@ chart_repo="$(field chart repository)";     chart_digest="$(field chart digest)"
 for d in "$service_digest" "$mount_digest" "$chart_digest" "$POSTGRES_IMAGE_DIGEST" "$MINIO_IMAGE_DIGEST"; do
   [[ "$d" =~ $digest_re ]] || { echo "malformed digest in inputs: $d" >&2; exit 2; }
 done
+
+registry_hostport="${REGISTRY_URL#*://}"; registry_hostport="${registry_hostport%%/*}"
+expect_repo() { [ "$1" = "$2" ] || { echo "unexpected repository for $3: $1 (expected $2)" >&2; exit 2; }; }
+expect_repo "$service_repo" "$registry_hostport/anchorfs/service" service
+expect_repo "$mount_repo"   "$registry_hostport/anchorfs/mount"   mount
+expect_repo "$chart_repo"   "$registry_hostport/charts/anchorfs"  chart
+source_sha="$(jq -er '.source_sha' "$receipt")"
+run_id="$(jq -er '.run_id' "$receipt")"
+set_digest="$(jq -er '.artifact_set_digest' "$receipt")"
+[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "malformed source_sha in receipt" >&2; exit 2; }
+[[ "$run_id" =~ ^[0-9]+$ ]] || { echo "malformed run_id in receipt" >&2; exit 2; }
+[[ "$set_digest" =~ $digest_re ]] || { echo "malformed artifact_set_digest in receipt" >&2; exit 2; }
+if [ -n "${EXPECTED_SOURCE_SHA:-}" ]; then
+  [ "$source_sha" = "$EXPECTED_SOURCE_SHA" ] || { echo "receipt source_sha $source_sha does not equal EXPECTED_SOURCE_SHA" >&2; exit 2; }
+fi
 chart_path="${chart_repo#*/}"   # strip host:port, keep e.g. charts/anchorfs
+echo "receipt  source_sha ${source_sha} run_id ${run_id} artifact_set ${set_digest}"
 
 echo "versions:"; k version | sed 's/^/  /'; $HELM version --short | sed 's/^/  helm /'
 echo "service  ${service_repo}@${service_digest}"
@@ -60,7 +90,7 @@ curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
 layer_digest="$(jq -r '.layers[0].digest' "$work/manifest.json")"
 layer_size="$(jq -r '.layers[0].size' "$work/manifest.json")"
 [[ "$layer_digest" =~ $digest_re ]] || { echo "malformed layer digest" >&2; exit 1; }
-tgz="$work/anchorfs-0.1.0.tgz"
+tgz="$work/chart-${layer_digest#sha256:}.tgz"
 curl -fsS -o "$tgz" "$REGISTRY_URL/v2/$chart_path/blobs/$layer_digest"
 [ "sha256:$(sha256_of "$tgz")" = "$layer_digest" ] || { echo "chart layer digest mismatch" >&2; exit 1; }
 [ "$(wc -c <"$tgz" | tr -d ' ')" = "$layer_size" ] || { echo "chart layer size mismatch" >&2; exit 1; }
@@ -101,5 +131,15 @@ elif [ "$rc" -ne 0 ]; then
   echo "bootstrap-admin failed with exit $rc" >&2
   exit "$rc"
 fi
-k create secret generic anchorfs-bootstrap-admin --namespace "$NS" --from-file=credential="$cred" >/dev/null
+stored=0
+for attempt in 1 2 3; do
+  if k create secret generic anchorfs-bootstrap-admin --namespace "$NS" --from-file=credential="$cred" >/dev/null; then stored=1; break; fi
+  sleep 3
+done
+if [ "$stored" -ne 1 ]; then
+  keep="${XDG_RUNTIME_DIR:-$HOME}/anchorfs-bootstrap-admin.json"
+  install -m 600 "$cred" "$keep"
+  echo "could not create Secret anchorfs-bootstrap-admin; the credential was saved (mode 600) at $keep. Create the Secret from it, then delete the file." >&2
+  exit 1
+fi
 echo "created Secret anchorfs-bootstrap-admin (credential not printed)"

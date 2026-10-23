@@ -8,7 +8,11 @@
 # Usage: [CRANE_IMAGE=<image>] scripts/publish-bases.sh [--replace]
 # Needs: git, docker buildx (multi-platform), crane, python3 (stdlib only), tar.
 # Refuses: dirty tree, non-LAN registry host, missing tools, already-recorded
-# bases without --replace. Prints digests only.
+# bases without --replace, a CRANE_IMAGE that is not pinned (see below). Prints
+# digests only. Also records `stage_sha256` per base: the SHA-256 of the exact
+# Dockerfile bytes of the base stage (its `FROM ... AS <target>` line up to, not
+# including, the next `FROM` line). A provenance test recomputes it, so editing a
+# base stage without re-running this script fails the test.
 #
 # CRANE_IMAGE: when set, every crane call runs inside `docker run --rm
 # --entrypoint crane "$CRANE_IMAGE"`; the OCI tarball buildx produced is
@@ -17,7 +21,9 @@
 # use the Docker VM's network instead of the host's. Use it on a macOS shell
 # that macOS does not grant Local Network access (the symptom is crane failing
 # with "no route to host" while curl succeeds); the pinned birbhomes CI image
-# carries crane. Unset, the host crane is used.
+# carries crane. Unset, the host crane is used. When set, CRANE_IMAGE must be
+# either a reference containing `@sha256:<64 hex>` or a Docker image ID (12 to
+# 64 hex characters, optionally prefixed `sha256:`); a mutable tag is refused.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -36,6 +42,10 @@ for tool in git docker python3 tar; do
   command -v "$tool" >/dev/null 2>&1 || die "missing tool: $tool"
 done
 [ -n "${CRANE_IMAGE:-}" ] || command -v crane >/dev/null 2>&1 || die "missing tool: crane (or set CRANE_IMAGE)"
+if [ -n "${CRANE_IMAGE:-}" ]; then
+  [[ $CRANE_IMAGE =~ @sha256:[0-9a-f]{64}($|[^0-9a-f]) || $CRANE_IMAGE =~ ^(sha256:)?[0-9a-f]{12,64}$ ]] \
+    || die "CRANE_IMAGE must be pinned: a reference with @sha256:<64 hex> or a Docker image ID"
+fi
 docker buildx version >/dev/null 2>&1 || die "docker buildx is required"
 
 [ -z "$(git status --porcelain --untracked-files=all)" ] || die "working tree is not clean; commit first"
@@ -93,6 +103,17 @@ print(b["repository"], b["dockerfile_target"], b["index_digest"] or "none")
 PY
 )
   ref="$registry/$repository"
+  stage_sha256=$(python3 -I - "$target" <<'PY'
+import hashlib, sys
+lines = open("docker/Dockerfile", "rb").read().splitlines(keepends=True)
+start = next((i for i, l in enumerate(lines)
+              if l.startswith(b"FROM ") and l.rstrip(b"\r\n").endswith(b" AS " + sys.argv[1].encode())), None)
+if start is None:
+    sys.exit("Dockerfile stage not found")
+end = next((j for j in range(start + 1, len(lines)) if lines[j].startswith(b"FROM ")), len(lines))
+print("sha256:" + hashlib.sha256(b"".join(lines[start:end])).hexdigest())
+PY
+)
   echo "building $target for linux/amd64,linux/arm64" >&2
   docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 --target "$target" \
     --provenance=false --sbom=false \
@@ -113,9 +134,22 @@ PY
   # would wrap it in a second index.
   push_layout "$base" "$ref" >/dev/null
   run_crane manifest --insecure "$ref@$expected" > "$work/$base.manifest.json"
-  python3 -I - "$base" "$expected" "$work/$base.manifest.json" "$results" "$old" <<'PY'
+  # Also fetch every platform manifest by digest and verify its SHA-256, so a
+  # partially pushed index cannot be recorded.
+  while read -r pdigest; do
+    run_crane manifest --insecure "$ref@$pdigest" > "$work/$base.platform.json"
+    python3 -I - "$pdigest" "$work/$base.platform.json" <<'PY'
+import hashlib, re, sys
+digest, path = sys.argv[1:]
+if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+    sys.exit("malformed platform digest in index")
+if "sha256:" + hashlib.sha256(open(path, "rb").read()).hexdigest() != digest:
+    sys.exit("platform manifest readback digest mismatch")
+PY
+  done < <(python3 -I -c 'import json,sys; [print(m["digest"]) for m in json.load(open(sys.argv[1]))["manifests"]]' "$work/$base.manifest.json")
+  python3 -I - "$base" "$expected" "$work/$base.manifest.json" "$results" "$old" "$stage_sha256" <<'PY'
 import hashlib, json, sys
-base, expected, path, results, old = sys.argv[1:]
+base, expected, path, results, old, stage_sha256 = sys.argv[1:]
 raw = open(path, "rb").read()
 if "sha256:" + hashlib.sha256(raw).hexdigest() != expected:
     sys.exit("readback digest mismatch")
@@ -127,7 +161,7 @@ for m in index["manifests"]:
 if sorted(platforms) != ["linux/amd64", "linux/arm64"] or len(index["manifests"]) != 2:
     sys.exit("readback index must list exactly linux/amd64 and linux/arm64")
 data = json.load(open(results))
-data[base] = {"index_digest": expected, "platforms": platforms}
+data[base] = {"index_digest": expected, "platforms": platforms, "stage_sha256": stage_sha256}
 json.dump(data, open(results, "w"))
 print(f"{base}: old {old}")
 print(f"{base}: new {expected}")
@@ -147,6 +181,7 @@ for name, r in results.items():
     b["platforms"] = r["platforms"]
     b["published_at"] = now
     b["source_sha"] = sys.argv[2]
+    b["stage_sha256"] = r["stage_sha256"]
 with open("docker/bases.json", "w") as f:
     json.dump(doc, f, indent=2)
     f.write("\n")

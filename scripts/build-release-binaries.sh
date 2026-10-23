@@ -54,7 +54,13 @@ place() {
     [ -f "$src" ] || die "missing build output: $src"
     check_elf "$src" "$machine"
     install -m 0755 "$src" "dist/linux-$arch/$package"
-    echo "dist/linux-$arch/$package $(shasum -a 256 "dist/linux-$arch/$package" | cut -d' ' -f1)" >&2
+    local sum
+    if command -v sha256sum >/dev/null 2>&1; then
+      sum=$(sha256sum "dist/linux-$arch/$package") || die "sha256sum failed for dist/linux-$arch/$package"
+    else
+      sum=$(shasum -a 256 "dist/linux-$arch/$package") || die "shasum failed for dist/linux-$arch/$package"
+    fi
+    echo "dist/linux-$arch/$package ${sum%% *}" >&2
   done
 }
 

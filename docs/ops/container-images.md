@@ -33,14 +33,25 @@ Docker: it cross-compiles both binaries with cargo-zigbuild
 `scripts/oci_export.py` appends one deterministic binary layer per platform
 onto the base manifests, producing OCI layouts and a v1 build receipt that the
 shared birbhomes publisher uploads. A base stage change requires re-running
-`publish-bases.sh` and committing the new digests; the exporter refuses a
-mismatch. The Docker targets and the exporter output are built from the same
+`publish-bases.sh` and committing the new digests and `stage_sha256` values.
+Three checks enforce this, each covering a different thing: the provenance
+test recomputes every base's `stage_sha256` from `docker/Dockerfile` and fails
+on drift (GitHub CI and the Forgejo `checks` job); the exporter, when given
+`--dockerfile docker/Dockerfile` (the Forgejo workflow does), recomputes the
+same hash and refuses a mismatch as `base_mismatch`; and the exporter always
+refuses a pulled base layout whose digests differ from `docker/bases.json`.
+Without `--dockerfile` the exporter only checks the pulled layout against the
+record. `publish-bases.sh` computed no hash for the first publication: the
+recorded values were computed afterwards from the unchanged Dockerfile stages.
+The Docker targets and the exporter output are built from the same
 stages at different times (apt is unpinned), so their package sets can differ.
 
 The deployed images therefore come from `publication.json` of a recorded
 Forgejo main run, pulled by cluster nodes as
-`10.0.0.106:30001/anchorfs/<role>@sha256:<digest>`. No image is published to
-any public registry; there is no signing or SBOM.
+`10.0.0.106:30001/anchorfs/<role>@sha256:<digest>`. At this revision only the
+two runtime bases are published (by the owner, 2026-10-23, `docker/bases.json`);
+no service, mount or chart artifact is published and nothing is deployed. No
+image is published to any public registry; there is no signing or SBOM.
 
 The service defaults to durable and `127.0.0.1:8080`, so the default container
 listener is unreachable from outside. For a reachable durable service:
@@ -64,8 +75,9 @@ policy, a writable mountpoint and mount propagation chosen for the
 consumer. The image runs as uid 10001; device and mountpoint permissions must
 allow that user. These runtime settings and containerized kernel mounting
 are not verified by packaging smoke. No cluster, Helm, Spaces or cross-node
-run is part of this milestone. Image publication and registry credentials
-require a later deployment decision.
+run is part of the Stage 3a packaging smoke. Registry publication is covered
+by the delivery path above; the Zot registry is anonymous and has no
+AnchorFS-held credentials.
 
 The chart in `charts/anchorfs` installs the service with these images (see
 `docs/ops/cluster-proof.md`); its Helm test runs `anchorfs-service probe --url
@@ -78,6 +90,8 @@ CA bundle or transport failure).
 separates kernel tests of the host binary from packaging smoke tests.
 
 The OCI licenses label describes AnchorFS code. Debian base/runtime packages
-carry their own licenses, recorded in dependencies.md. A later image publication
-review must consider those packages, including the fuse3 source-availability
-requirements; this milestone does not publish images.
+carry their own licenses, recorded in dependencies.md. Decision 2026-10-23: the
+bases and derived images are published only to the owner's internal LAN
+registry for the owner's own cluster, with no third-party distribution; Debian
+remains the source for the installed packages, including fuse3. Any public or
+third-party publication requires a separate license review before it happens.

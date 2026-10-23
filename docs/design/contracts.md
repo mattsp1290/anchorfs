@@ -619,7 +619,8 @@ Exit 1: not ready (status other than 200, printing the error `code` when
 present) or a requirement failed. Exit 2: invalid arguments (including a URL
 with a path, plaintext without `--allow-plaintext`, or `--timeout-ms 0`), an
 unreadable or invalid CA bundle, or a transport/TLS/timeout failure before any
-HTTP response. `Readiness` reports `status`, the parsed `ReadyzBody` on 200 and
+HTTP response, or a failure reading the response body after the status line
+has arrived (also exit 2, whatever the status). `Readiness` reports `status`, the parsed `ReadyzBody` on 200 and
 the parsed error document otherwise.
 
 The mount emits two lifecycle events and no others for these transitions:
