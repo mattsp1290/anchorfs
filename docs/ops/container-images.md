@@ -23,6 +23,10 @@ once as multi-platform images `anchorfs/service-base` and `anchorfs/mount-base`
 to the apartment Zot registry with `scripts/publish-bases.sh` (workstation on
 the apartment LAN only; the script writes the index and per-platform digests
 into `docker/bases.json`, which is committed and checked by a provenance test).
+On a macOS shell that lacks Local Network permission, crane fails with "no
+route to host" while curl succeeds; set `CRANE_IMAGE` to the pinned birbhomes
+CI image and the script runs crane inside Docker, whose VM has its own network
+path to the LAN.
 The Forgejo delivery workflow (`docs/ops/forgejo-delivery.md`) never runs
 Docker: it cross-compiles both binaries with cargo-zigbuild
 (`scripts/build-release-binaries.sh`), pulls the bases by digest, and

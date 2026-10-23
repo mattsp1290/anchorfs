@@ -5,10 +5,19 @@
 # per-platform manifest digests in docker/bases.json. Never run from CI.
 # The owner reviews the bases.json diff and commits it (a provenance record).
 #
-# Usage: scripts/publish-bases.sh [--replace]
+# Usage: [CRANE_IMAGE=<image>] scripts/publish-bases.sh [--replace]
 # Needs: git, docker buildx (multi-platform), crane, python3 (stdlib only), tar.
 # Refuses: dirty tree, non-LAN registry host, missing tools, already-recorded
 # bases without --replace. Prints digests only.
+#
+# CRANE_IMAGE: when set, every crane call runs inside `docker run --rm
+# --entrypoint crane "$CRANE_IMAGE"`; the OCI tarball buildx produced is
+# streamed to the push container over stdin (no bind mounts, so this works with
+# Docker Desktop, Colima and remote daemons alike). The push and readback then
+# use the Docker VM's network instead of the host's. Use it on a macOS shell
+# that macOS does not grant Local Network access (the symptom is crane failing
+# with "no route to host" while curl succeeds); the pinned birbhomes CI image
+# carries crane. Unset, the host crane is used.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -23,9 +32,10 @@ case "${1:-}" in
 esac
 [ "$#" -le 1 ] || die "usage: $0 [--replace]"
 
-for tool in git docker crane python3 tar; do
+for tool in git docker python3 tar; do
   command -v "$tool" >/dev/null 2>&1 || die "missing tool: $tool"
 done
+[ -n "${CRANE_IMAGE:-}" ] || command -v crane >/dev/null 2>&1 || die "missing tool: crane (or set CRANE_IMAGE)"
 docker buildx version >/dev/null 2>&1 || die "docker buildx is required"
 
 [ -z "$(git status --porcelain --untracked-files=all)" ] || die "working tree is not clean; commit first"
@@ -51,6 +61,29 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 results="$work/results.json"
 echo '{}' > "$results"
+
+# crane on the host, or inside CRANE_IMAGE (read-only commands: no mounts).
+run_crane() {
+  if [ -n "${CRANE_IMAGE:-}" ]; then
+    docker run --rm --entrypoint crane "$CRANE_IMAGE" "$@"
+  else
+    crane "$@"
+  fi
+}
+# push_layout <base> <ref>: pushes the buildx OCI layout; in container mode the
+# tarball is streamed over stdin and unpacked inside the container.
+push_layout() {
+  if [ -n "${CRANE_IMAGE:-}" ]; then
+    docker run --rm -i --entrypoint sh "$CRANE_IMAGE" -c \
+      'set -e; d=$(mktemp -d); tar -xf - -C "$d"; exec crane push --insecure "$d" "$1"' \
+      sh "$2" < "$work/$1.tar"
+  else
+    crane push --insecure "$work/$1" "$2"
+  fi
+}
+# Reachability first, before spending time on builds.
+run_crane catalog --insecure "$registry" >/dev/null \
+  || die "cannot reach registry $registry with crane${CRANE_IMAGE:+ (inside $CRANE_IMAGE)}; on macOS a shell without Local Network permission fails with 'no route to host' while curl works: grant the permission or set CRANE_IMAGE to the pinned CI image"
 
 for base in service mount; do
   read -r repository target old < <(python3 -I - "$base" <<'PY'
@@ -78,8 +111,8 @@ PY
 )
   # Without --index, crane pushes that single entry (the index) directly; --index
   # would wrap it in a second index.
-  crane push --insecure "$work/$base" "$ref" >/dev/null
-  crane manifest --insecure "$ref@$expected" > "$work/$base.manifest.json"
+  push_layout "$base" "$ref" >/dev/null
+  run_crane manifest --insecure "$ref@$expected" > "$work/$base.manifest.json"
   python3 -I - "$base" "$expected" "$work/$base.manifest.json" "$results" "$old" <<'PY'
 import hashlib, json, sys
 base, expected, path, results, old = sys.argv[1:]

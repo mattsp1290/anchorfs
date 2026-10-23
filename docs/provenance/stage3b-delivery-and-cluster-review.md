@@ -80,8 +80,12 @@ Final gate commands for the whole package (fmt, clippy, workspace tests,
   ready before the bucket does.
 - The macOS workstation blocks non-Apple binaries (crane, python) from reaching
   the LAN through Local Network privacy, so the G1 trial fetched the CI image
-  with `curl`. The same restriction means `scripts/publish-bases.sh` (crane)
-  needs the Local Network permission or must run from the Linux host.
+  with `curl`. The same restriction hit `scripts/publish-bases.sh` on the first
+  owner run (crane: "no route to host"), after a first failure because the
+  script omitted `-f docker/Dockerfile`. Both fixed: the script now takes
+  `CRANE_IMAGE` and runs crane inside Docker, whose VM reaches the LAN; the
+  full script was then exercised from a clean worktree against a throwaway
+  registry container (see the workstation gates below).
 - Helm lint and chart checks have run only under Helm 4.3.0 locally; the
   pinned 3.13.0 gate runs in the `packaging` job and is pending.
 - Not applicable so far: the G5 single-job fallback, the G2 fallback image and
@@ -101,6 +105,18 @@ PostgreSQL/MinIO suites); `git diff --check`; `python3 -I -m unittest discover
 3.13.0 path runs in the GitHub `packaging` job and on the runner). The Linux
 kernel mount tests, including the two new log-event assertions, have zero
 tests on macOS and run in hosted CI and on the Linux host.
+
+Base publication script (2026-10-23, after the owner's two failed runs): the
+complete `scripts/publish-bases.sh` ran unmodified with `CRANE_IMAGE` set to
+the locally loaded CI image, from a clean detached worktree whose
+`docker/bases.json` named a throwaway registry container
+(`crane registry serve` on the Docker bridge; Docker here is a Colima VM, so
+host paths are not mountable and the OCI tarball is streamed over stdin). It
+built both bases for both platforms, pushed each index, read it back by digest
+and wrote `docker/bases.json`; the index digests equalled those of the owner's
+own buildx run (`sha256:e97ee3a6…` service-base, `sha256:bb27e012…`
+mount-base), so the stages build reproducibly from cache. The worktree,
+registry container and layouts were removed afterwards; nothing reached Zot.
 
 ## Independent reviews and delivery
 
