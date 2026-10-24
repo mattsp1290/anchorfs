@@ -268,6 +268,17 @@ fn revocation_fences_mount() {
         stale(file.write_at(b"bad", 0).unwrap_err());
         let count = relay.count();
         stale(fs::metadata(&a.path).unwrap_err());
+        let fenced: Vec<_> = a
+            .log_events()
+            .into_iter()
+            .filter(|e| e["fields"]["message"] == "mount fenced")
+            .collect();
+        assert!(!fenced.is_empty(), "{fenced:?}");
+        assert_eq!(fenced[0]["level"], "WARN");
+        assert!(
+            ["unauthenticated", "fenced_mutation", "probe"]
+                .contains(&fenced[0]["fields"]["reason"].as_str().unwrap())
+        );
         assert_eq!(relay.count(), count);
         assert_eq!(f.count("write_at"), before);
         close_ok(file);

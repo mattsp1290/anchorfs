@@ -167,6 +167,8 @@ impl TempMount {
             f.config.handle_ttl.as_millis().to_string(),
             "--session-ttl-hint-ms".into(),
             f.config.client_session_ttl.as_millis().to_string(),
+            "--log-format".into(),
+            "json".into(),
         ];
         if f.endpoint.starts_with("https://") {
             if let Some(ca) = ca_bundle {
@@ -313,6 +315,16 @@ impl TempMount {
         }
         assert!(!mounted(&self.path));
         self.process.take();
+    }
+}
+impl TempMount {
+    /// Parsed JSON log events of a process mount (`--log-format json` on stderr).
+    pub fn log_events(&self) -> Vec<Value> {
+        std::fs::read_to_string(self.path.with_extension("log"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect()
     }
 }
 impl Drop for TempMount {

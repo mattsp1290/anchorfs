@@ -1,0 +1,114 @@
+{{- if .Values.devDependencies.enabled }}
+{{- $mn := .Values.devDependencies.minio }}
+{{- /*
+Disposable single-node MinIO serving TLS from the cert-manager Secret
+(devDependencies.minio.tlsSecret), projected as public.crt / private.key.
+
+TLS wiring source (gate G2, verified 2026-10-22 from the pinned image's own
+startup scripts, read in a local container): /opt/bitnami/scripts/minio-env.sh
+fixes MINIO_CERTS_DIR=/certs and defaults MINIO_SCHEME=http; run.sh starts
+`minio server --certs-dir /certs ...`, so MINIO_SCHEME=https plus public.crt and
+private.key under /certs is the documented upstream path. The image runs as
+uid 1001. Its setup.sh additionally starts a background server and probes
+https://127.0.0.1:9000 with curl WITHOUT trusting a private CA (libminio.sh
+is_minio_live), which would never succeed with the cert-manager CA; setting
+MINIO_SKIP_CLIENT=yes skips that client-side setup entirely (setup.sh line 30)
+and with it the MINIO_DEFAULT_BUCKETS feature. Bucket creation is therefore
+done by scripts/cluster/create-bucket.sh (no Job kind is allowed in the chart,
+and the backend has no create_bucket). The `mc` client ships in the image at
+/opt/bitnami/minio-client/bin (on PATH). Fallback image: upstream minio/minio
+pinned by digest with `--certs-dir /certs`.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: anchorfs-minio
+  labels:
+    {{- include "anchorfs.devLabels" (dict "ctx" . "component" "dev-minio") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "anchorfs.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dev-minio
+  ports:
+    - {name: s3, port: 9000, targetPort: s3}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: anchorfs-dev-minio
+  labels:
+    {{- include "anchorfs.devLabels" (dict "ctx" . "component" "dev-minio") | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: anchorfs-minio
+  selector:
+    matchLabels:
+      {{- include "anchorfs.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dev-minio
+  template:
+    metadata:
+      labels:
+        {{- include "anchorfs.devLabels" (dict "ctx" . "component" "dev-minio") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        {{- toYaml .Values.devDependencies.nodeSelector | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: minio
+          image: {{ include "anchorfs.image" (dict "img" $mn.image "path" "devDependencies.minio.image") | quote }}
+          ports:
+            - {name: s3, containerPort: 9000}
+          env:
+            - {name: MINIO_SCHEME, value: https}
+            - {name: MINIO_API_PORT_NUMBER, value: "9000"}
+            - {name: MINIO_CERTS_DIR, value: /certs}
+            # Skips the wrapper's loopback curl health probe (cannot trust the private CA)
+            # and its mc-based default-bucket setup; create-bucket.sh creates the bucket.
+            - {name: MINIO_SKIP_CLIENT, value: "yes"}
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mn.secret | quote }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $mn.secret | quote }}
+                  key: MINIO_ROOT_PASSWORD
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket: {port: s3}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: data, mountPath: /bitnami/minio/data}
+            - {name: certs, mountPath: /certs, readOnly: true}
+      volumes:
+        - name: certs
+          secret:
+            secretName: {{ $mn.tlsSecret | quote }}
+            defaultMode: 288  # decimal for octal 0440 (group is fsGroup 1001)
+            items:
+              - {key: tls.crt, path: public.crt}
+              - {key: tls.key, path: private.key}
+              - {key: ca.crt, path: CAs/ca.crt}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.devDependencies.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ $mn.storage | quote }}
+{{- end }}

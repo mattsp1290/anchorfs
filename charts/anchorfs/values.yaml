@@ -1,0 +1,48 @@
+# AnchorFS chart defaults. Image repository/digest pairs are required and have no
+# defaults: rendering fails naming the missing key. Secrets are referenced by
+# name only; the chart never renders a Secret (owner scripts create them).
+image:
+  service: {repository: "", digest: ""}   # required; digest must be sha256:<64 hex>
+  mount:   {repository: "", digest: ""}   # required when workerTemplate.enabled
+deploymentId: anchorfs-apartment           # ^[a-z0-9-]{1,64}$
+durabilityProfile: durable                 # durable | development
+listenAddr: "0.0.0.0:8080"
+service: {port: 8080}
+secrets:
+  env: anchorfs-service-env                # keys: ANCHORFS_DATABASE_URL, ANCHORFS_CURSOR_SIGNING_KEY, ANCHORFS_S3_ACCESS_KEY_ID, ANCHORFS_S3_SECRET_ACCESS_KEY
+  tls: anchorfs-tls                        # cert-manager: tls.crt, tls.key, ca.crt
+  ca: anchorfs-ca                          # CA Certificate secret: tls.crt is the CA certificate
+s3:
+  endpoint: https://anchorfs-minio:9000
+  region: local
+  bucket: anchorfs
+  addressing: path                         # path | virtual-host
+  checksumMode: sha256                     # sha256 | none
+  caBundleFromSecret: true                 # mounts secrets.ca tls.crt as ANCHORFS_S3_CA_BUNDLE_PATH
+dbMaxConnections: 8
+nodeSelector: {kubernetes.io/hostname: infra-control-master}
+resources:
+  requests: {cpu: 250m, memory: 256Mi}
+  limits: {cpu: "2", memory: 1Gi}
+terminationGracePeriodSeconds: 45          # service drain default 10 s (Timers::shutdown_drain) plus margin
+networkPolicy:
+  enabled: true
+  extraIngressCidrs: []                    # e.g. ["10.0.0.106/32"]
+workerTemplate: {enabled: true, workspacePath: /workspace, fuseDevice: /dev/fuse}
+test: {enabled: true}
+devDependencies:
+  enabled: false
+  nodeSelector: {kubernetes.io/hostname: infra-control-master}
+  storageClass: local-path
+  postgres:
+    image: {repository: postgres, digest: ""}
+    storage: 5Gi
+    secret: anchorfs-dev-postgres          # key: POSTGRES_PASSWORD
+    database: anchorfs
+    user: anchorfs
+  minio:
+    image: {repository: bitnamilegacy/minio, digest: ""}
+    storage: 10Gi
+    secret: anchorfs-dev-minio             # keys: MINIO_ROOT_USER, MINIO_ROOT_PASSWORD
+    tlsSecret: anchorfs-minio-tls
+    bucket: anchorfs                       # informational; scripts/cluster/create-bucket.sh creates it

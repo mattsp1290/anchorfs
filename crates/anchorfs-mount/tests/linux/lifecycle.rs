@@ -61,6 +61,11 @@ fn sigterm_with_open_files_keeps_serving() {
     assert!(helper.wait().unwrap().success());
     assert_eq!(f.read("f"), b"held");
     m.stop();
+    assert!(
+        m.log_events()
+            .iter()
+            .any(|e| e["level"] == "INFO" && e["fields"]["message"] == "mount shut down")
+    );
     assert_eq!(f.count("session_revoke"), 1);
     f.invariants();
 }

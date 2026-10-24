@@ -41,5 +41,19 @@ HTTPS acceptance, and native amd64/arm64 container build jobs. See
 [container operations](ops/container-images.md),
 [Stage 3a review evidence](provenance/stage3a-tls-and-images-review.md), and
 [Stage 3a acceptance](provenance/stage3a-tls-and-images-acceptance.md) for actual
-executed status and limitations. Images are not published and no cluster or
-cross-node deployment is claimed.
+executed status and limitations. Stage 3a itself published no image; Stage 3b
+later published the two runtime bases (below). No cluster or cross-node
+deployment is claimed.
+
+Stage 3b prepares the delivery path and cluster proof: a Forgejo workflow that
+publishes digest-addressed images and an OCI Helm chart to the internal Zot
+registry, and an owner-run two-node proof. See
+[Forgejo delivery](ops/forgejo-delivery.md), [cluster proof](ops/cluster-proof.md),
+[container operations](ops/container-images.md),
+[Stage 3b review evidence](provenance/stage3b-delivery-and-cluster-review.md) and
+[Stage 3b acceptance](provenance/stage3b-delivery-and-cluster-acceptance.md).
+Non-claims: no Flux promotion, no HA, no Spaces, no sandbox. No service, mount
+or chart artifact is published and nothing is deployed; the only AnchorFS
+content in the internal Zot registry is the two owner-published runtime bases
+(`anchorfs/service-base`, `anchorfs/mount-base`, see `docker/bases.json`). The
+Forgejo and cluster rows are pending.

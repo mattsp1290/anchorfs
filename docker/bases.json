@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "registry": "10.0.0.106:30001",
+  "bases": {
+    "service": {
+      "repository": "anchorfs/service-base",
+      "dockerfile_target": "service-base",
+      "index_digest": "sha256:e97ee3a6130a903808ced89b76d85eb77a3ce423d3cf335312800797374ffa84",
+      "platforms": {
+        "linux/amd64": "sha256:8d79686c267176c627c53f3fd0014afe9556d648e8d42c0c4337b6f70b087059",
+        "linux/arm64": "sha256:64f92739cfd938f1612bc09de853c759070c0a19a64f1e6650fccb5f76688ec1"
+      },
+      "published_at": "2026-10-23T00:58:08Z",
+      "source_sha": "a430d02ab19c33061ffd558867133c68fb3ab8d4",
+      "stage_sha256": "sha256:c2fd5e63af9ba314f66c033115f89a40b87fc7dcb01e6bc21ee5eb76d060e555"
+    },
+    "mount": {
+      "repository": "anchorfs/mount-base",
+      "dockerfile_target": "mount-base",
+      "index_digest": "sha256:bb27e0120f523422ea021d8bf18529eb4600e74b8c2b505fd993918102f5b71c",
+      "platforms": {
+        "linux/amd64": "sha256:ddcc21fee5ed2718e00a718f05e091ce431b270e11857719aae5df994efd41f6",
+        "linux/arm64": "sha256:24c1bbdac3ad6987c1a8934822eb44aa23e39a2efd70fa989f25a4d71f5597a0"
+      },
+      "published_at": "2026-10-23T00:58:08Z",
+      "source_sha": "a430d02ab19c33061ffd558867133c68fb3ab8d4",
+      "stage_sha256": "sha256:305401984bc533a957001b81318b1436c00e99bf4ea28edb70d47140668ada0f"
+    }
+  }
+}

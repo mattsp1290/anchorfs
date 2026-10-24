@@ -1,0 +1,28 @@
+{{- if .Values.networkPolicy.enabled }}
+# Ingress-only policy: the service port is reachable from pods in the release
+# namespace and from explicit CIDRs. Egress (PostgreSQL, S3) is left open.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: anchorfs
+  labels:
+    {{- include "anchorfs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "anchorfs.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: service
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}
+        {{- range .Values.networkPolicy.extraIngressCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ include "anchorfs.containerPort" $ }}
+{{- end }}

@@ -3,6 +3,8 @@ durable state independent of compute
 
 AnchorFS is an independent Rust storage project for persistent workspaces shared by agent harnesses and replaceable tool workers. The service implements authenticated workspace/session control, transactional namespace metadata, file-byte operations and read pins against PostgreSQL and a locally verified S3 backend adapter. The route suite verifies 38 implemented operations with no stubs. Stage 2a adds exclusive workflow leases, host-controlled session binding and lease status; see [Stage 2a evidence](docs/provenance/stage2a-workflow-leases-review.md). Stage 1c local acceptance, independent review and hosted Linux/macOS gates passed. Stage 2b adds the strict Linux FUSE mount and a partial native Rust client; local kernel acceptance, review checkpoints and all five hosted jobs passed; see [Stage 2b evidence](docs/provenance/stage2b-linux-mount-review.md). See [Linux host verification](docs/ops/linux-host-verification.md). See [Stage 1c evidence](docs/provenance/stage1c-byte-path-review.md).
 
+Stage 3b prepares a delivery path (Ferry mirror, Forgejo workflow, digest-only publication to the internal Zot registry, OCI Helm chart) and an owner-run two-node cluster proof; the repository-side work is in progress and the Forgejo and cluster evidence is pending, so no service, mount or chart artifact is published and nothing is deployed yet (only the two owner-published runtime bases, `anchorfs/service-base` and `anchorfs/mount-base`, are in the internal Zot registry; see `docker/bases.json`). See [Forgejo delivery](docs/ops/forgejo-delivery.md).
+
 Start with [the implementation documents](docs/README.md) and [cleanroom policy](docs/cleanroom.md).
 
 Repository-local workflows:

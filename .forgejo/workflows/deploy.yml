@@ -1,0 +1,214 @@
+# Deliver `main` to the internal Zot registry.
+#
+# Trusted-artifact boundary (docs/ops/forgejo-delivery.md): Ferry mirrors every
+# GitHub branch, any workflow file on any mirrored branch runs with this
+# repository's Actions secrets, and Zot is anonymous. Only the digests listed in
+# `publication.json` of a recorded `refs/heads/main` run are trusted. This file
+# triggers on `main` pushes only and every job re-checks the event and ref.
+#
+# Jobs: checks (container-free) -> build-export (cargo-zigbuild, OCI layouts,
+# v1 build receipt; no registry writes, no daemon) -> publish (shared birbhomes
+# publisher at an immutable commit; anonymous digest-only writes; readback).
+# Never: deploy, promote, kubeconfig, Docker socket, mutable tags, path filters.
+name: Deliver main to Zot
+on:
+  push:
+    branches: [main]
+# `permissions:` and `concurrency:` are written for GitHub-compatible servers but
+# are NOT relied upon: whether this Forgejo honors them is unverified
+# (docs/ops/forgejo-delivery.md). Concurrent publishes are harmless (digest-only).
+permissions:
+  contents: read
+concurrency:
+  group: anchorfs-main-delivery
+  cancel-in-progress: false
+env:
+  # Informational copy of the job container reference (used for --builder-image);
+  # jobs.<id>.container.image must be a literal and is repeated below.
+  CI_IMAGE: 10.0.0.106:30001/birbhomes/ci-rust-oci@sha256:4ac11af555a6be2b8ff7b74ae78b9c1a5060c841634d855111b0f6cc892fdbac
+  BIRBHOMES_HELPER_COMMIT: "40ff258cc56aa67ba22d8661dd0d11babe2d4065"
+  ZOT_AUTHORITY: 10.0.0.106:30001
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+jobs:
+  checks:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: birb-optin-lunus-macbook-pro-linux-arm64
+    timeout-minutes: 60
+    container:
+      image: 10.0.0.106:30001/birbhomes/ci-rust-oci@sha256:4ac11af555a6be2b8ff7b74ae78b9c1a5060c841634d855111b0f6cc892fdbac
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Guard (tools, host, revision, ref)
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+          EVENT_REF: ${{ github.ref }}
+        run: bash scripts/ci/guard.sh cargo rustc python3 git node helm helm-compat
+      - name: Format, lint and build
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo build --workspace --locked
+      - name: Container-free tests
+        run: |
+          cargo test -p anchorfs-core -p anchorfs-backend -p anchorfs-client --locked
+          cargo test -p anchorfs-service --lib --test openapi_snapshot --locked
+          cargo test -p anchorfs-conformance --test provenance --test chunking_props --locked
+          cargo test -p anchorfs-mount --test cli --locked
+      - name: Exporter unit tests
+        run: python3 -I -m unittest discover -s scripts/tests
+      - name: Chart lint and render checks (Helm 4.3.0 and 3.13.0)
+        run: CHART_STRICT=1 bash scripts/check-chart.sh
+      - name: Verify dependency lock unchanged
+        run: git diff --exit-code -- Cargo.lock
+      - name: Record checks phase
+        if: always()
+        run: |
+          mkdir -p phase
+          printf '{"job":"checks","revision":"%s","rustc":"%s","python":"%s"}\n' \
+            "$(git rev-parse HEAD)" "$(rustc --version)" "$(python3 --version)" > phase/checks.json
+      - uses: https://code.forgejo.org/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        if: always()
+        with:
+          name: checks-phase
+          path: phase/checks.json
+          if-no-files-found: warn
+
+  build-export:
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: birb-optin-lunus-macbook-pro-linux-arm64
+    timeout-minutes: 90
+    container:
+      image: 10.0.0.106:30001/birbhomes/ci-rust-oci@sha256:4ac11af555a6be2b8ff7b74ae78b9c1a5060c841634d855111b0f6cc892fdbac
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Guard (tools, host, revision, ref)
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+          EVENT_REF: ${{ github.ref }}
+        run: bash scripts/ci/guard.sh cargo rustc cargo-zigbuild zig crane helm-compat python3 git tar sha256sum
+      - name: Cross-build release binaries (both targets, glibc 2.36)
+        run: bash scripts/build-release-binaries.sh
+      - name: Pull digest-pinned runtime bases (anonymous read, no credential store)
+        run: |
+          mkdir -p dist/bases empty-home empty-auth
+          refs="$(python3 -I scripts/oci_export.py bases pull-refs docker/bases.json)" \
+            || { echo "docker/bases.json is not fully published; run scripts/publish-bases.sh first" >&2; exit 1; }
+          while read -r base ref; do
+            HOME="$PWD/empty-home" DOCKER_CONFIG="$PWD/empty-auth" \
+              crane pull --insecure --format=oci "$ref" "dist/bases/$base"
+          done <<<"$refs"
+      - name: Package chart with the promoter-compatible Helm
+        run: helm-compat package charts/anchorfs --destination dist/chart
+      - name: Export OCI layouts and the v1 build receipt
+        env:
+          RUN_ID: ${{ github.run_id }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          toolchain_digest="$(python3 -I scripts/ci/toolchain-digest.py)"
+          set -- dist/chart/*.tgz
+          [ "$#" -eq 1 ] && [ -f "$1" ] || { echo "expected exactly one packaged chart in dist/chart" >&2; exit 1; }
+          python3 -I scripts/oci_export.py \
+            --source-sha "$SOURCE_SHA" --run-id "$RUN_ID" \
+            --builder-image "$CI_IMAGE" --toolchain-digest "$toolchain_digest" \
+            --bases docker/bases.json --dockerfile docker/Dockerfile --base-layouts dist/bases \
+            --binaries dist --chart-package "$1" --chart-dir charts/anchorfs \
+            --output export/oci
+          # The exporter refuses an output directory inside --binaries or --base-layouts.
+          tar -C export -cf dist/oci.tar oci
+          (cd dist && sha256sum oci.tar > oci.tar.sha256)
+          cat export/oci/build.json
+      - uses: https://code.forgejo.org/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: oci-layouts
+          path: |
+            dist/oci.tar
+            dist/oci.tar.sha256
+          if-no-files-found: error
+      - uses: https://code.forgejo.org/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: export-evidence
+          path: export/oci/export-evidence.json
+          if-no-files-found: error
+
+  publish:
+    needs: build-export
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: birb-optin-lunus-macbook-pro-linux-arm64
+    timeout-minutes: 30
+    container:
+      image: 10.0.0.106:30001/birbhomes/ci-rust-oci@sha256:4ac11af555a6be2b8ff7b74ae78b9c1a5060c841634d855111b0f6cc892fdbac
+    steps:
+      - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Guard (tools, host, revision, ref)
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+          EVENT_REF: ${{ github.ref }}
+        run: bash scripts/ci/guard.sh python3 git tar sha256sum
+      - uses: https://code.forgejo.org/actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59 # v3.1.0
+        with:
+          name: oci-layouts
+          path: inputs
+      - name: Verify artifact transfer and unpack layouts
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+        run: |
+          cd inputs
+          sha256sum -c oci.tar.sha256
+          tar -xf oci.tar
+          test -f oci/build.json
+          (cd oci && sha256sum -c --quiet SHA256SUMS)
+          # oci.tar.sha256 travels with oci.tar, so it detects corruption, not substitution;
+          # refuse a receipt that does not name this run's commit and run id.
+          python3 -I -c 'import json,os,sys; r=json.load(open("oci/build.json")); sys.exit(0 if (r["source_sha"],r["run_id"])==(os.environ["EXPECTED_REVISION"],os.environ["EXPECTED_RUN_ID"]) else "receipt_identity_mismatch")'
+      - name: Check out the shared publisher at its immutable commit (read-only mirror token)
+        uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: mattsp1290/birbhomes
+          ref: 40ff258cc56aa67ba22d8661dd0d11babe2d4065
+          token: ${{ secrets.BIRBHOMES_SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: birbhomes
+      - name: Verify helper pin and policy identity
+        run: |
+          test "$(git -C birbhomes rev-parse --verify HEAD)" = "$BIRBHOMES_HELPER_COMMIT" || { echo helper_pin_mismatch >&2; exit 1; }
+          python3 -I - <<'PY'
+          import json, os
+          p = json.load(open("birbhomes/deploy/contracts/apps/anchorfs.json"))
+          assert p["app_id"] == "anchorfs" and p["source_repository"] == "mattsp1290/anchorfs", "policy identity"
+          assert p["registry"]["url"] == "http://" + os.environ["ZOT_AUTHORITY"] and p["registry"]["auth"] == "anonymous", "policy registry"
+          assert set(p["artifacts"]) == {"service", "mount", "chart"}, "policy roles"
+          print("policy ok")
+          PY
+      - name: Publish (anonymous, digest-only, readback) with the shared stdlib-only publisher
+        # Deviation from the contract's venv wording, recorded in docs/ops/forgejo-delivery.md:
+        # oci-publish.py imports only the standard library, so the image interpreter is used directly.
+        run: |
+          mkdir -p receipts
+          python3 -I birbhomes/scripts/oci-publish.py \
+            --policy birbhomes/deploy/contracts/apps/anchorfs.json \
+            --build-receipt inputs/oci/build.json \
+            --artifact-dir inputs/oci \
+            --output receipts/publication.json
+          python3 -I - <<'PY'
+          import json
+          r = json.load(open("receipts/publication.json"))
+          print("artifact_set_digest", r["artifact_set_digest"])
+          for role, item in r["artifacts"].items():
+              print(role, item["repository"] + "@" + item["digest"], item["platforms"])
+          PY
+      - uses: https://code.forgejo.org/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: publication
+          path: receipts/publication.json
+          if-no-files-found: error

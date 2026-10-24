@@ -321,3 +321,33 @@ async fn serve_tls_rejects_http2_prior_knowledge() {
     server.health().await;
     server.stop().await;
 }
+
+#[tokio::test]
+async fn probe_reports_ready_over_tls_and_rejects_wrong_ca() {
+    let server = TlsProcess::start(true).await;
+    let probe = |ca: &std::path::Path, extra: &[&str]| {
+        let output = command()
+            .args(["probe", "--url", &server.endpoint, "--ca-bundle"])
+            .arg(ca)
+            .args(extra)
+            .output()
+            .unwrap();
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let (code, stdout, stderr) = probe(&server._files.files.ca, &["--require-tls"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    let line: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(line["status"], 200);
+    assert_eq!(line["tls"], true);
+    assert_eq!(line["database"], "ok");
+    assert_eq!(line["backend"], "ok");
+    let (code, _, stderr) = probe(&server._files.files.other_ca, &["--require-tls"]);
+    assert_eq!(code, Some(2), "{stderr}");
+    let (code, _, stderr) = probe(&server._files.files.ca, &["--require-durable"]);
+    assert_eq!(code, Some(1), "{stderr}");
+    server.stop().await;
+}

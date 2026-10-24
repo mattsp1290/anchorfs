@@ -1,0 +1,81 @@
+{{- if .Values.devDependencies.enabled }}
+{{- $pg := .Values.devDependencies.postgres }}
+# Disposable PostgreSQL for the cluster proof (not a production database).
+# Durability settings are the image defaults (fsync, synchronous_commit and
+# full_page_writes on); the service's startup check enforces them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: anchorfs-dev-postgres
+  labels:
+    {{- include "anchorfs.devLabels" (dict "ctx" . "component" "dev-postgres") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "anchorfs.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: dev-postgres
+  ports:
+    - {name: postgres, port: 5432, targetPort: postgres}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: anchorfs-dev-postgres
+  labels:
+    {{- include "anchorfs.devLabels" (dict "ctx" . "component" "dev-postgres") | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: anchorfs-dev-postgres
+  selector:
+    matchLabels:
+      {{- include "anchorfs.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dev-postgres
+  template:
+    metadata:
+      labels:
+        {{- include "anchorfs.devLabels" (dict "ctx" . "component" "dev-postgres") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        {{- toYaml .Values.devDependencies.nodeSelector | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ include "anchorfs.image" (dict "img" $pg.image "path" "devDependencies.postgres.image") | quote }}
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - {name: POSTGRES_DB, value: {{ $pg.database | quote }}}
+            - {name: POSTGRES_USER, value: {{ $pg.user | quote }}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pg.secret | quote }}
+                  key: POSTGRES_PASSWORD
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.devDependencies.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ $pg.storage | quote }}
+{{- end }}

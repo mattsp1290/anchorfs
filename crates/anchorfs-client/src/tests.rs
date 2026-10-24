@@ -118,3 +118,49 @@ async fn invalid_wire_time_is_an_input_error_before_any_request() {
         .await;
     assert!(matches!(result, Err(error::ClientError::InvalidInput(_))));
 }
+
+#[test]
+fn readiness_bodies_deserialize() {
+    let ready: wire::ReadyzBody = serde_json::from_value(serde_json::json!({
+        "tls": true, "schema_version": 3, "object_format_version": 1, "api_version": "v1",
+        "durability_profile": "durable", "database": "ok", "backend": "ok",
+        "checksum_mode": "sha256", "durability_warnings": ["fsync=off"]
+    }))
+    .unwrap();
+    assert!(ready.tls);
+    assert_eq!(ready.durability_profile, "durable");
+    assert_eq!(
+        ready.durability_warnings.as_deref(),
+        Some(&["fsync=off".to_owned()][..])
+    );
+    let bare: wire::ReadyzBody = serde_json::from_value(serde_json::json!({
+        "tls": false, "schema_version": 3, "object_format_version": 1, "api_version": "v1",
+        "durability_profile": "development", "database": "ok", "backend": "ok",
+        "checksum_mode": "none"
+    }))
+    .unwrap();
+    assert!(bare.durability_warnings.is_none());
+    let error: wire::ApiErrorBody = serde_json::from_value(serde_json::json!({
+        "code": "dependency_unavailable", "message": "backend: down", "trace_id": "t-1"
+    }))
+    .unwrap();
+    assert_eq!(error.code, "dependency_unavailable");
+}
+
+#[tokio::test]
+async fn readiness_rejects_zero_timeout_and_bad_ca() {
+    let endpoint = Endpoint::parse("https://127.0.0.1:1", false).unwrap();
+    assert!(matches!(
+        readiness::readiness(&endpoint, None, std::time::Duration::ZERO).await,
+        Err(error::ClientError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        readiness::readiness(
+            &endpoint,
+            Some(b"not pem"),
+            std::time::Duration::from_secs(1)
+        )
+        .await,
+        Err(error::ClientError::InvalidInput(_))
+    ));
+}

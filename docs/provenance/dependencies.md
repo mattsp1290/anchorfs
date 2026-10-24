@@ -215,9 +215,11 @@ Docker library inputs, approved by Stage 3a D10 and owner decision 2026-10-22.
 | rust | 1.95.0-bookworm | sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 | linux/amd64, linux/arm64/v8 in index | Rust MIT OR Apache-2.0; Debian packages under respective licenses | builder | Stage 3a D10 |
 | debian | bookworm-slim | sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 | linux/amd64, linux/arm64/v8 in index | Debian packages under respective licenses | runtime | Stage 3a D10 |
 
-Base images are not mirrored or published by this repository. apt versions
-are unpinned. The mount runtime installs fuse3 (helper GPL-2.0; libfuse
-LGPL-2.1); Debian distributes these separately from the AnchorFS binary.
+Upstream base images are not mirrored by this repository; the runtime bases
+built from them are published by the owner to the internal Zot registry (Stage
+3b table below). apt versions are unpinned. The mount runtime installs fuse3 (helper GPL-2.0; libfuse
+LGPL-2.1); Debian distributes these separately from the AnchorFS binary. See the dated
+Stage 3b publication decision below.
 
 Stage 3a standard review feature check: `cargo tree --locked -e features -i
 aws-lc-rs -p anchorfs-service --target x86_64-unknown-linux-gnu` includes rcgen
@@ -227,3 +229,57 @@ aws-lc-rs features reference untrusted 0.7.1 in the registry manifest; neither
 is active here. `cargo tree --locked -i untrusted@0.7.1` (with and without dev
 edges on that target) reports nothing to print. The added lockfile edge is
 optional-resolution metadata, not an active release or test crypto feature.
+
+## Stage 3b delivery tools, actions and images (2026-10-22)
+
+Versions below were observed or read on 2026-10-22 unless a row says otherwise.
+Nothing here is vendored or copied into the repository; every item is consumed
+at a pin or installed by the owner. "CI image" is the owner-built job image
+listed below. Registry package changes: none (`Cargo.lock` gained one line,
+the workspace edge below).
+
+| Item | Pin | License / note |
+|---|---|---|
+| Rust crate edge | `anchorfs-service` -> `anchorfs-client` (new workspace edge used by the `probe` subcommand; no new registry package) | workspace crate |
+| cargo-zigbuild | 0.23.4 (CI image and workstation); `cargo info cargo-zigbuild@0.23.4` on 2026-10-22 | MIT |
+| zig | 0.16.0 (CI image), 0.17.0 (workstation) | MIT |
+| crane (go-containerregistry) | 0.22.1 (CI image and workstation); absent on the control host, where readback uses `curl` against the Distribution API | Apache-2.0 |
+| zot (platform-owned registry) | v2.1.3 as observed; retention behavior verified by readback, not configured here; not shipped | Apache-2.0 |
+| Helm | 3.13.0 official archives (`ci/install-helm.sh`): linux-amd64 SHA-256 `138676351483e61d12dfade70da6c03d471bbdcac84eaadeb5e1d06fa114a24f`, linux-arm64 SHA-256 `d12a0e73a7dbff7d89d13e0c6eb73f5095f72d70faea30531941d320678904d2`, read from get.helm.sh on 2026-10-22; control host also has 3.13.0; 4.3.0 in the CI image and on the workstation | Apache-2.0 |
+| kubectl | `k3s kubectl` (server v1.35.9) used by every script; the standalone v1.33.1 client on the control host is outside the supported skew and not used | Apache-2.0 |
+| cert-manager | v1.20.4 (cluster runs a mixed v1.19.2/v1.20.4 pod set) installed by the owner, not by this repository | Apache-2.0 |
+| Python | 3.12.15 in the CI image; `scripts/*.py` use the standard library only; PyYAML 6.0.3 ships in the image but is unused | PSF-2.0; MIT (PyYAML, unused) |
+| Forgejo action | `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2) | MIT |
+| Forgejo action | `code.forgejo.org/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5` (v3.2.1) | MIT |
+| Forgejo action | `code.forgejo.org/actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59` (v3.1.0) | MIT |
+| CI job image | `10.0.0.106:30001/birbhomes/ci-rust-oci@sha256:4ac11af555a6be2b8ff7b74ae78b9c1a5060c841634d855111b0f6cc892fdbac`, owner-built; in-image versions verified 2026-10-22: rustc 1.95.0, cargo-zigbuild 0.23.4, zig 0.16.0, Python 3.12.15 | owner-built; contents per the owner's repository lock |
+| Runtime bases | `anchorfs/service-base`, `anchorfs/mount-base`: published by the owner to `10.0.0.106:30001` on 2026-10-23 from commit `a430d02ab19c33061ffd558867133c68fb3ab8d4` with `scripts/publish-bases.sh` (recorded in `docker/bases.json`; the provenance test requires every published digest to be listed here). `service-base` index `sha256:e97ee3a6130a903808ced89b76d85eb77a3ce423d3cf335312800797374ffa84` (linux/amd64 `sha256:8d79686c267176c627c53f3fd0014afe9556d648e8d42c0c4337b6f70b087059`, linux/arm64 `sha256:64f92739cfd938f1612bc09de853c759070c0a19a64f1e6650fccb5f76688ec1`); `mount-base` index `sha256:bb27e0120f523422ea021d8bf18529eb4600e74b8c2b505fd993918102f5b71c` (linux/amd64 `sha256:ddcc21fee5ed2718e00a718f05e091ce431b270e11857719aae5df994efd41f6`, linux/arm64 `sha256:24c1bbdac3ad6987c1a8934822eb44aa23e39a2efd70fa989f25a4d71f5597a0`). Both indexes read back from Zot by digest with matching SHA-256 on 2026-10-23. Built from this repository's Dockerfile on the `debian:bookworm-slim` digest above | Debian packages under their licenses; fuse3 note as above |
+| Runtime base stage hashes | `docker/bases.json` records `stage_sha256` per base: `service-base` `sha256:c2fd5e63af9ba314f66c033115f89a40b87fc7dcb01e6bc21ee5eb76d060e555`, `mount-base` `sha256:305401984bc533a957001b81318b1436c00e99bf4ea28edb70d47140668ada0f` (SHA-256 of the Dockerfile stage text from its `FROM ... AS` line up to the next `FROM`). Computed on 2026-10-23 from the HEAD Dockerfile because the base stages have not changed since the bases were published from `a430d02` (`git log -- docker/Dockerfile` last touches commit 2ac6674); `publish-bases.sh` records the value on future publications and a provenance test recomputes it | owner-computed record |
+| Cluster image | `postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3` (already a recorded test image; also the chart's dev dependency) | PostgreSQL License |
+| Cluster image | `bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20` (already a recorded test image; also the chart's dev dependency) | AGPL-3.0 server used unmodified as a disposable service, not linked |
+| Shared publisher | owner repository `birbhomes` commit `40ff258cc56aa67ba22d8661dd0d11babe2d4065` (`scripts/oci-publish.py`, `scripts/gitops/*`), consumed at this pin in the workflow, never copied | owner's private repository |
+
+Stage 3b decision (2026-10-23), fuse3 and Debian package licenses: the runtime
+bases (which contain the GPL-2.0 `fusermount3` helper and LGPL-2.1 libfuse) and
+the derived application images are published only to the owner's internal LAN
+registry for the owner's own cluster. There is no third-party distribution, and
+Debian remains the source for the installed packages. The deferred license note
+from Stage 3a is therefore closed for this scope. Any public or third-party
+publication requires a separate license review before it happens.
+
+## Stage 3b advisory update (2026-10-23)
+
+At the Stage 3b standard-review checkpoint `cargo deny check advisories`
+reported RUSTSEC-2026-0385 (non-constant-time mask generation and `u128`
+comparisons in `ctutils`, fixed in 0.4.4) against an existing transitive
+dependency reached through `digest`/`hmac` and the AWS SDK. One existing
+package was updated with `cargo update -p ctutils --precise 0.4.4`:
+
+| Package | Old version | New version | Origin | License |
+|---|---|---|---|---|
+| ctutils | 0.4.3 | 0.4.4 | crates.io; RustCrypto utils repository (`cargo info ctutils@0.4.4`) | Apache-2.0 OR MIT |
+
+Cargo.lock changes only this version and its registry checksum. The license is
+already permitted by deny.toml. The post-update cargo-deny
+licenses/bans/advisories/sources gate and the full workspace test run are
+recorded in the Stage 3b review record.

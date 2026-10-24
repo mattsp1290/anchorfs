@@ -163,7 +163,10 @@ async fn finished(
 ) -> ExitCode {
     mount.shutdown().await;
     match result {
-        Ok(Ok(())) => ExitCode::SUCCESS,
+        Ok(Ok(())) => {
+            tracing::info!("mount shut down");
+            ExitCode::SUCCESS
+        }
         error => {
             tracing::error!(?error, "FUSE session ended with an error");
             ExitCode::from(5)
